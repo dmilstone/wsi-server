@@ -13,10 +13,13 @@ import wsi_server.model.DisplaySettings;
 import wsi_server.model.DisplayWindow;
 import wsi_server.model.LutType;
 import wsi_server.renderer.FluorescenceTileRenderer;
+import wsi_server.renderer.MultichannelTileRenderer;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Reads fluorescence tiles from the VSI file and converts them to PNG images.
@@ -33,14 +36,17 @@ public class BioFormatsTileService {
 
     private final IFormatReader reader;
     private final FluorescenceTileRenderer fluorescenceRenderer;
+    private final MultichannelTileRenderer multichannelRenderer;
     private final DisplayModel displayModel;
 
     public BioFormatsTileService(
             FluorescenceTileRenderer fluorescenceRenderer,
+            MultichannelTileRenderer multichannelRenderer,
             @Value("${wsi.slide-path}") String slidePath
     ) throws Exception {
 
         this.fluorescenceRenderer = fluorescenceRenderer;
+        this.multichannelRenderer = multichannelRenderer;
 
         reader = new ImageReader();
         reader.setFlattenedResolutions(false);
@@ -152,7 +158,8 @@ public class BioFormatsTileService {
 
         PixelMapper mapper = new LinearWindowPixelMapper(
                 channelSettings.getWindow(),
-                channelSettings.getLut()
+                channelSettings.getLut(),
+                channelSettings.getGamma()
         );
 
         BufferedImage image = fluorescenceRenderer.render(
@@ -163,6 +170,109 @@ public class BioFormatsTileService {
                 mapper
         );
 
+        return encodePng(image);
+    }
+
+    public synchronized byte[] getCompositeTile(
+            int viewerLevel,
+            int tileX,
+            int tileY
+    ) throws Exception {
+        reader.setSeries(FLUORESCENCE_SERIES);
+
+        int resolutionCount = reader.getResolutionCount();
+        validateViewerLevel(viewerLevel, resolutionCount);
+
+        int bioResolution = resolutionCount
+                - 1
+                - viewerLevel;
+
+        reader.setResolution(bioResolution);
+
+        int pixelX = tileX * TILE_SIZE;
+        int pixelY = tileY * TILE_SIZE;
+
+        int tileWidth = Math.min(
+                TILE_SIZE,
+                reader.getSizeX() - pixelX
+        );
+
+        int tileHeight = Math.min(
+                TILE_SIZE,
+                reader.getSizeY() - pixelY
+        );
+
+        if (tileWidth <= 0 || tileHeight <= 0) {
+            return new byte[0];
+        }
+
+        List<byte[]> channelPixels = new ArrayList<>();
+        List<PixelMapper> mappers = new ArrayList<>();
+        List<Double> opacities = new ArrayList<>();
+
+        for (int channel = 0;
+             channel < displayModel.getChannelCount();
+             channel++) {
+            ChannelDisplaySettings channelSettings =
+                    displayModel.getChannel(channel);
+
+            if (!channelSettings.isVisible()
+                    || channelSettings.getOpacity() <= 0.0) {
+                continue;
+            }
+
+            int planeIndex = reader.getIndex(0, channel, 0);
+
+            channelPixels.add(
+                    reader.openBytes(
+                            planeIndex,
+                            pixelX,
+                            pixelY,
+                            tileWidth,
+                            tileHeight
+                    )
+            );
+
+            mappers.add(
+                    new LinearWindowPixelMapper(
+                            channelSettings.getWindow(),
+                            channelSettings.getLut(),
+                            channelSettings.getGamma()
+                    )
+            );
+
+            opacities.add(channelSettings.getOpacity());
+        }
+
+        if (channelPixels.isEmpty()) {
+            return encodePng(
+                    new BufferedImage(
+                            tileWidth,
+                            tileHeight,
+                            BufferedImage.TYPE_INT_RGB
+                    )
+            );
+        }
+
+        DisplaySettings settings = DisplaySettings.forPixelData(
+                reader.isLittleEndian()
+        );
+
+        BufferedImage image = multichannelRenderer.render(
+                channelPixels,
+                tileWidth,
+                tileHeight,
+                settings,
+                mappers,
+                opacities
+        );
+
+        return encodePng(image);
+    }
+
+    private byte[] encodePng(
+            BufferedImage image
+    ) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         boolean written = ImageIO.write(
@@ -182,11 +292,11 @@ public class BioFormatsTileService {
 
     private void initializeDefaultLuts() {
         LutType[] defaults = {
+                LutType.BLUE,
                 LutType.GREEN,
+                LutType.RED,
                 LutType.MAGENTA,
                 LutType.CYAN,
-                LutType.RED,
-                LutType.YELLOW,
                 LutType.GRAY
         };
 

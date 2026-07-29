@@ -8,10 +8,11 @@ package wsi_server.model;
  */
 public enum LutType {
     GRAY(255, 255, 255),
+    BLUE(0, 0, 255),
     GREEN(0, 255, 0),
+    RED(255, 0, 0),
     MAGENTA(255, 0, 255),
     CYAN(0, 255, 255),
-    RED(255, 0, 0),
     YELLOW(255, 255, 0);
 
     private static final int LUT_SIZE = 256;

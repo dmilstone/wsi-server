@@ -71,6 +71,10 @@
     </label>
 
     <select id="channel">
+        <option value="composite">
+            Composite
+        </option>
+
         <option value="0">
             Channel 0
         </option>
@@ -96,7 +100,7 @@
 
     const TILE_SIZE = 512;
 
-    let selectedChannel = 0;
+    let selectedChannel = "composite";
 
     const tileSource = {
 
@@ -114,6 +118,16 @@
                 x,
                 y
         ) {
+
+            if (selectedChannel === "composite") {
+                return "/tile/composite/"
+                        + level
+                        + "/"
+                        + x
+                        + "/"
+                        + y
+                        + ".png";
+            }
 
             return "/tile/"
                     + level
@@ -163,9 +177,7 @@
             function () {
 
                 selectedChannel =
-                        Number(
-                                channelSelector.value
-                        );
+                        channelSelector.value;
 
                 /*
                  * Preserve the current viewport while reloading

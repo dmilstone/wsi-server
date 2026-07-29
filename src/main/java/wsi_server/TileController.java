@@ -25,14 +25,27 @@ public class TileController {
             @PathVariable int level,
             @PathVariable int x,
             @PathVariable int y,
-            @RequestParam(
-                    defaultValue = "0"
-            ) int channel
+            @RequestParam(defaultValue = "0") int channel
     ) throws Exception {
-
         return service.getTile(
                 level,
                 channel,
+                x,
+                y
+        );
+    }
+
+    @GetMapping(
+            value = "/tile/composite/{level}/{x}/{y}.png",
+            produces = MediaType.IMAGE_PNG_VALUE
+    )
+    public byte[] compositeTile(
+            @PathVariable int level,
+            @PathVariable int x,
+            @PathVariable int y
+    ) throws Exception {
+        return service.getCompositeTile(
+                level,
                 x,
                 y
         );
