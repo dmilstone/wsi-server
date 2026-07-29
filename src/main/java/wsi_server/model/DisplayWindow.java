@@ -1,31 +1,48 @@
 package wsi_server.model;
 
 /**
- * Fixed intensity window used to map raw fluorescence values
- * into the visible 0-255 display range.
+ * Defines the inclusive unsigned 16-bit intensity range that is mapped
+ * to the visible display range.
+ *
+ * The canonical accessors are minimum() and maximum(). The black() and
+ * white() aliases preserve compatibility with display mappers that use
+ * black/white-level terminology.
  */
 public record DisplayWindow(
-        int black,
-        int white
+        int minimum,
+        int maximum
 ) {
 
+    private static final int UINT16_MINIMUM = 0;
+    private static final int UINT16_MAXIMUM = 65535;
+
     public DisplayWindow {
-        if (black < 0 || black > 65535) {
+        if (minimum < UINT16_MINIMUM || minimum > UINT16_MAXIMUM) {
             throw new IllegalArgumentException(
-                    "Black level must be between 0 and 65535."
+                    "Minimum must be between 0 and 65535. Received: "
+                            + minimum
             );
         }
 
-        if (white < 0 || white > 65535) {
+        if (maximum < UINT16_MINIMUM || maximum > UINT16_MAXIMUM) {
             throw new IllegalArgumentException(
-                    "White level must be between 0 and 65535."
+                    "Maximum must be between 0 and 65535. Received: "
+                            + maximum
             );
         }
 
-        if (white <= black) {
+        if (maximum < minimum) {
             throw new IllegalArgumentException(
-                    "White level must be greater than black level."
+                    "Maximum must be greater than or equal to minimum."
             );
         }
+    }
+
+    public int black() {
+        return minimum;
+    }
+
+    public int white() {
+        return maximum;
     }
 }
