@@ -1,13 +1,17 @@
 package wsi_server.display;
 
 import wsi_server.model.DisplayWindow;
+import wsi_server.model.LutType;
+
+import java.util.Objects;
 
 /**
  * Maps unsigned 16-bit intensities through a fixed linear
- * black/white display window.
+ * black/white display window and then through a color LUT.
  *
- * Values at or below black become black. Values at or above
- * white become white. Values between them are scaled linearly.
+ * Values at or below black map to LUT intensity 0. Values at or
+ * above white map to LUT intensity 255. Values between them are
+ * scaled linearly.
  */
 public final class LinearWindowPixelMapper
         implements PixelMapper {
@@ -15,19 +19,43 @@ public final class LinearWindowPixelMapper
     private final int black;
     private final int white;
     private final int range;
+    private final LutType lut;
 
     public LinearWindowPixelMapper(
             DisplayWindow window
     ) {
         this(
+                window,
+                LutType.GRAY
+        );
+    }
+
+    public LinearWindowPixelMapper(
+            DisplayWindow window,
+            LutType lut
+    ) {
+        this(
                 window.black(),
-                window.white()
+                window.white(),
+                lut
         );
     }
 
     public LinearWindowPixelMapper(
             int black,
             int white
+    ) {
+        this(
+                black,
+                white,
+                LutType.GRAY
+        );
+    }
+
+    public LinearWindowPixelMapper(
+            int black,
+            int white,
+            LutType lut
     ) {
         if (black < 0 || black > 65535) {
             throw new IllegalArgumentException(
@@ -50,26 +78,28 @@ public final class LinearWindowPixelMapper
         this.black = black;
         this.white = white;
         this.range = white - black;
+        this.lut = Objects.requireNonNull(
+                lut,
+                "LUT cannot be null."
+        );
     }
 
     @Override
     public int map(
             int value16
     ) {
-        int gray;
+        int intensity;
 
         if (value16 <= black) {
-            gray = 0;
+            intensity = 0;
         } else if (value16 >= white) {
-            gray = 255;
+            intensity = 255;
         } else {
-            gray = (value16 - black)
+            intensity = (value16 - black)
                     * 255
                     / range;
         }
 
-        return (gray << 16)
-                | (gray << 8)
-                | gray;
+        return lut.color(intensity);
     }
 }

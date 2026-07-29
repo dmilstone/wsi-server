@@ -11,6 +11,7 @@ import wsi_server.model.ChannelDisplaySettings;
 import wsi_server.model.DisplayModel;
 import wsi_server.model.DisplaySettings;
 import wsi_server.model.DisplayWindow;
+import wsi_server.model.LutType;
 import wsi_server.renderer.FluorescenceTileRenderer;
 
 import javax.imageio.ImageIO;
@@ -52,6 +53,7 @@ public class BioFormatsTileService {
                 reader.getSizeC()
         );
 
+        initializeDefaultLuts();
         initializeSlideDisplayWindows();
 
         System.out.println(
@@ -149,7 +151,8 @@ public class BioFormatsTileService {
                 displayModel.getChannel(channel);
 
         PixelMapper mapper = new LinearWindowPixelMapper(
-                channelSettings.getWindow()
+                channelSettings.getWindow(),
+                channelSettings.getLut()
         );
 
         BufferedImage image = fluorescenceRenderer.render(
@@ -175,6 +178,32 @@ public class BioFormatsTileService {
         }
 
         return output.toByteArray();
+    }
+
+    private void initializeDefaultLuts() {
+        LutType[] defaults = {
+                LutType.GREEN,
+                LutType.MAGENTA,
+                LutType.CYAN,
+                LutType.RED,
+                LutType.YELLOW,
+                LutType.GRAY
+        };
+
+        for (int channel = 0;
+             channel < displayModel.getChannelCount();
+             channel++) {
+            LutType lut = defaults[channel % defaults.length];
+
+            displayModel.getChannel(channel).setLut(lut);
+
+            System.out.println(
+                    "Channel "
+                            + channel
+                            + " LUT: "
+                            + lut
+            );
+        }
     }
 
     private void initializeSlideDisplayWindows()
