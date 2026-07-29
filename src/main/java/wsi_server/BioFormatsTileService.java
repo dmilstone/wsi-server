@@ -5,7 +5,7 @@ import loci.formats.IFormatReader;
 import loci.formats.ImageReader;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import wsi_server.display.AutoContrastPixelMapper;
+import wsi_server.display.LinearWindowPixelMapper;
 import wsi_server.display.PixelMapper;
 import wsi_server.model.ChannelDisplaySettings;
 import wsi_server.model.DisplayModel;
@@ -26,6 +26,9 @@ public class BioFormatsTileService {
     private static final int FLUORESCENCE_SERIES = 2;
     private static final int TILE_SIZE = 512;
     private static final int BYTES_PER_PIXEL = 2;
+    private static final int HISTOGRAM_SIZE = 65536;
+    private static final double LOW_PERCENTILE = 0.01;
+    private static final double HIGH_PERCENTILE = 0.99;
 
     private final IFormatReader reader;
     private final FluorescenceTileRenderer fluorescenceRenderer;
@@ -36,18 +39,20 @@ public class BioFormatsTileService {
             @Value("${wsi.slide-path}") String slidePath
     ) throws Exception {
 
-        this.fluorescenceRenderer =
-                fluorescenceRenderer;
+        this.fluorescenceRenderer = fluorescenceRenderer;
 
         reader = new ImageReader();
-
         reader.setFlattenedResolutions(false);
         reader.setId(slidePath);
         reader.setSeries(FLUORESCENCE_SERIES);
 
+        validatePixelType();
+
         displayModel = new DisplayModel(
                 reader.getSizeC()
         );
+
+        initializeSlideDisplayWindows();
 
         System.out.println(
                 "Bio-Formats reader opened: "
@@ -84,14 +89,11 @@ public class BioFormatsTileService {
             int tileY
     ) throws Exception {
 
-        reader.setSeries(
-                FLUORESCENCE_SERIES
-        );
+        reader.setSeries(FLUORESCENCE_SERIES);
 
         validateChannel(channel);
 
-        int resolutionCount =
-                reader.getResolutionCount();
+        int resolutionCount = reader.getResolutionCount();
 
         validateViewerLevel(
                 viewerLevel,
@@ -102,96 +104,69 @@ public class BioFormatsTileService {
          * OpenSeadragon level 0 is the lowest resolution.
          * Bio-Formats resolution 0 is the highest resolution.
          */
-        int bioResolution =
-                resolutionCount
-                        - 1
-                        - viewerLevel;
+        int bioResolution = resolutionCount
+                - 1
+                - viewerLevel;
 
-        reader.setResolution(
-                bioResolution
+        reader.setResolution(bioResolution);
+
+        int pixelX = tileX * TILE_SIZE;
+        int pixelY = tileY * TILE_SIZE;
+
+        int tileWidth = Math.min(
+                TILE_SIZE,
+                reader.getSizeX() - pixelX
         );
 
-        int pixelX =
-                tileX * TILE_SIZE;
-
-        int pixelY =
-                tileY * TILE_SIZE;
-
-        int tileWidth =
-                Math.min(
-                        TILE_SIZE,
-                        reader.getSizeX() - pixelX
-                );
-
-        int tileHeight =
-                Math.min(
-                        TILE_SIZE,
-                        reader.getSizeY() - pixelY
-                );
+        int tileHeight = Math.min(
+                TILE_SIZE,
+                reader.getSizeY() - pixelY
+        );
 
         if (tileWidth <= 0 || tileHeight <= 0) {
             return new byte[0];
         }
 
-        int planeIndex =
-                reader.getIndex(
-                        0,
-                        channel,
-                        0
-                );
+        int planeIndex = reader.getIndex(
+                0,
+                channel,
+                0
+        );
 
-        byte[] pixels =
-                reader.openBytes(
-                        planeIndex,
-                        pixelX,
-                        pixelY,
-                        tileWidth,
-                        tileHeight
-                );
+        byte[] pixels = reader.openBytes(
+                planeIndex,
+                pixelX,
+                pixelY,
+                tileWidth,
+                tileHeight
+        );
 
-        DisplaySettings settings =
-                DisplaySettings.forPixelData(
-                        reader.isLittleEndian()
-                );
+        DisplaySettings settings = DisplaySettings.forPixelData(
+                reader.isLittleEndian()
+        );
 
         ChannelDisplaySettings channelSettings =
                 displayModel.getChannel(channel);
 
-        DisplayWindow displayWindow =
-                calculateTileDisplayWindow(
-                        pixels,
-                        tileWidth,
-                        tileHeight,
-                        settings.littleEndian()
-                );
-
-        channelSettings.setWindow(
-                displayWindow
+        PixelMapper mapper = new LinearWindowPixelMapper(
+                channelSettings.getWindow()
         );
 
-        PixelMapper mapper =
-                createAutoContrastMapper(
-                        channelSettings.getWindow()
-                );
+        BufferedImage image = fluorescenceRenderer.render(
+                pixels,
+                tileWidth,
+                tileHeight,
+                settings,
+                mapper
+        );
 
-        BufferedImage image =
-                fluorescenceRenderer.render(
-                        pixels,
-                        tileWidth,
-                        tileHeight,
-                        settings,
-                        mapper
-                );
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
 
-        ByteArrayOutputStream output =
-                new ByteArrayOutputStream();
-
-        boolean written =
-                ImageIO.write(
-                        image,
-                        "png",
-                        output
-                );
+        boolean written = ImageIO.write(
+                image,
+                "png",
+                output
+        );
 
         if (!written) {
             throw new IllegalStateException(
@@ -202,53 +177,205 @@ public class BioFormatsTileService {
         return output.toByteArray();
     }
 
-    private DisplayWindow calculateTileDisplayWindow(
-            byte[] pixels,
-            int width,
-            int height,
+    private void initializeSlideDisplayWindows()
+            throws Exception {
+
+        reader.setSeries(FLUORESCENCE_SERIES);
+
+        int lowestResolution = reader.getResolutionCount() - 1;
+        reader.setResolution(lowestResolution);
+
+        boolean littleEndian = reader.isLittleEndian();
+        int channelCount = reader.getSizeC();
+
+        System.out.println(
+                "Computing slide-wide display windows from Bio-Formats resolution "
+                        + lowestResolution
+                        + " ("
+                        + reader.getSizeX()
+                        + " x "
+                        + reader.getSizeY()
+                        + ")."
+        );
+
+        for (int channel = 0; channel < channelCount; channel++) {
+            DisplayWindow window = calculateChannelDisplayWindow(
+                    channel,
+                    littleEndian
+            );
+
+            displayModel.getChannel(channel).setWindow(window);
+
+            System.out.println(
+                    "Channel "
+                            + channel
+                            + " display window: "
+                            + window.black()
+                            + " - "
+                            + window.white()
+            );
+        }
+
+        reader.setResolution(0);
+    }
+
+    private DisplayWindow calculateChannelDisplayWindow(
+            int channel,
             boolean littleEndian
-    ) {
+    ) throws Exception {
 
-        int pixelCount =
-                width * height;
+        long[] histogram = new long[HISTOGRAM_SIZE];
+        long pixelCount = 0L;
 
-        int minimum =
-                65535;
+        int imageWidth = reader.getSizeX();
+        int imageHeight = reader.getSizeY();
+        int planeIndex = reader.getIndex(0, channel, 0);
 
-        int maximum =
-                0;
+        for (int y = 0; y < imageHeight; y += TILE_SIZE) {
+            int regionHeight = Math.min(
+                    TILE_SIZE,
+                    imageHeight - y
+            );
 
-        for (int i = 0; i < pixelCount; i++) {
+            for (int x = 0; x < imageWidth; x += TILE_SIZE) {
+                int regionWidth = Math.min(
+                        TILE_SIZE,
+                        imageWidth - x
+                );
 
-            int value16 =
-                    readUint16(
-                            pixels,
-                            i * BYTES_PER_PIXEL,
-                            littleEndian
-                    );
+                byte[] pixels = reader.openBytes(
+                        planeIndex,
+                        x,
+                        y,
+                        regionWidth,
+                        regionHeight
+                );
 
-            if (value16 < minimum) {
-                minimum = value16;
+                addToHistogram(
+                        pixels,
+                        regionWidth * regionHeight,
+                        littleEndian,
+                        histogram
+                );
+
+                pixelCount += (long) regionWidth * regionHeight;
             }
+        }
 
-            if (value16 > maximum) {
-                maximum = value16;
+        if (pixelCount == 0L) {
+            return new DisplayWindow(0, 65535);
+        }
+
+        int black = findPercentile(
+                histogram,
+                pixelCount,
+                LOW_PERCENTILE
+        );
+
+        int white = findPercentile(
+                histogram,
+                pixelCount,
+                HIGH_PERCENTILE
+        );
+
+        if (white <= black) {
+            int[] nonEmptyRange = findNonEmptyRange(histogram);
+            black = nonEmptyRange[0];
+            white = nonEmptyRange[1];
+        }
+
+        if (white <= black) {
+            if (black < 65535) {
+                white = black + 1;
+            } else {
+                black = 65534;
+                white = 65535;
             }
         }
 
         return new DisplayWindow(
-                minimum,
-                maximum
+                black,
+                white
         );
     }
 
-    private PixelMapper createAutoContrastMapper(
-            DisplayWindow displayWindow
+    private void addToHistogram(
+            byte[] pixels,
+            int pixelCount,
+            boolean littleEndian,
+            long[] histogram
     ) {
-        return new AutoContrastPixelMapper(
-                displayWindow.minimum(),
-                displayWindow.maximum()
+        int expectedBytes = pixelCount * BYTES_PER_PIXEL;
+
+        if (pixels.length < expectedBytes) {
+            throw new IllegalArgumentException(
+                    "Pixel buffer is smaller than expected. Expected at least "
+                            + expectedBytes
+                            + " bytes but received "
+                            + pixels.length
+                            + "."
+            );
+        }
+
+        for (int i = 0; i < pixelCount; i++) {
+            int value16 = readUint16(
+                    pixels,
+                    i * BYTES_PER_PIXEL,
+                    littleEndian
+            );
+
+            histogram[value16]++;
+        }
+    }
+
+    private int findPercentile(
+            long[] histogram,
+            long pixelCount,
+            double percentile
+    ) {
+        long target = Math.max(
+                1L,
+                (long) Math.ceil(pixelCount * percentile)
         );
+
+        long cumulative = 0L;
+
+        for (int value = 0; value < histogram.length; value++) {
+            cumulative += histogram[value];
+
+            if (cumulative >= target) {
+                return value;
+            }
+        }
+
+        return histogram.length - 1;
+    }
+
+    private int[] findNonEmptyRange(
+            long[] histogram
+    ) {
+        int minimum = 0;
+        int maximum = histogram.length - 1;
+
+        while (
+                minimum < histogram.length
+                        && histogram[minimum] == 0L
+        ) {
+            minimum++;
+        }
+
+        while (
+                maximum >= 0
+                        && histogram[maximum] == 0L
+        ) {
+            maximum--;
+        }
+
+        if (minimum >= histogram.length || maximum < 0) {
+            return new int[]{0, 65535};
+        }
+
+        return new int[]{minimum, maximum};
     }
 
     private int readUint16(
@@ -256,31 +383,32 @@ public class BioFormatsTileService {
             int offset,
             boolean littleEndian
     ) {
-
-        int first =
-                pixels[offset] & 0xff;
-
-        int second =
-                pixels[offset + 1] & 0xff;
+        int first = pixels[offset] & 0xff;
+        int second = pixels[offset + 1] & 0xff;
 
         if (littleEndian) {
-            return first
-                    | (second << 8);
+            return first | (second << 8);
         }
 
-        return (first << 8)
-                | second;
+        return (first << 8) | second;
+    }
+
+    private void validatePixelType() {
+        int pixelType = reader.getPixelType();
+
+        if (pixelType != FormatTools.UINT16) {
+            throw new IllegalStateException(
+                    "Fluorescence rendering currently requires UINT16 data. "
+                            + "Received: "
+                            + FormatTools.getPixelTypeString(pixelType)
+            );
+        }
     }
 
     private void validateChannel(
             int channel
     ) {
-
-        if (
-                channel < 0
-                        || channel >= reader.getSizeC()
-        ) {
-
+        if (channel < 0 || channel >= reader.getSizeC()) {
             throw new IllegalArgumentException(
                     "Channel must be between 0 and "
                             + (reader.getSizeC() - 1)
@@ -294,12 +422,7 @@ public class BioFormatsTileService {
             int viewerLevel,
             int resolutionCount
     ) {
-
-        if (
-                viewerLevel < 0
-                        || viewerLevel >= resolutionCount
-        ) {
-
+        if (viewerLevel < 0 || viewerLevel >= resolutionCount) {
             throw new IllegalArgumentException(
                     "Viewer level must be between 0 and "
                             + (resolutionCount - 1)

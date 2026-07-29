@@ -9,7 +9,7 @@ import wsi_server.model.DisplayWindow;
  * Values at or below black become black. Values at or above
  * white become white. Values between them are scaled linearly.
  */
-public class LinearWindowPixelMapper
+public final class LinearWindowPixelMapper
         implements PixelMapper {
 
     private final int black;
