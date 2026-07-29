@@ -1,99 +1,282 @@
 package wsi_server;
 
+import loci.formats.FormatTools;
 import loci.formats.IFormatReader;
 import loci.formats.ImageReader;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import wsi_server.display.AutoContrastPixelMapper;
+import wsi_server.display.PixelMapper;
+import wsi_server.model.DisplaySettings;
+import wsi_server.renderer.FluorescenceTileRenderer;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 
+/**
+ * Reads fluorescence tiles from the VSI file and converts them to PNG images.
+ */
 @Service
 public class BioFormatsTileService {
 
+    private static final int FLUORESCENCE_SERIES = 2;
+    private static final int TILE_SIZE = 512;
+    private static final int BYTES_PER_PIXEL = 2;
+
     private final IFormatReader reader;
-    private final TileRenderer renderer;
+    private final FluorescenceTileRenderer fluorescenceRenderer;
 
-    private final String vsiPath =
-            "/Users/dm026/wsi-slides/BS26-037673 B1-1_20260726_064536.vsi";
+    public BioFormatsTileService(
+            FluorescenceTileRenderer fluorescenceRenderer,
+            @Value("${wsi.slide-path}") String slidePath
+    ) throws Exception {
 
-    public BioFormatsTileService(RgbTileRenderer renderer) throws Exception {
-        this.renderer = renderer;
+        this.fluorescenceRenderer =
+                fluorescenceRenderer;
 
         reader = new ImageReader();
-        reader.setId(vsiPath);
 
-        System.out.println("Series count: " + reader.getSeriesCount());
+        reader.setFlattenedResolutions(false);
+        reader.setId(slidePath);
+        reader.setSeries(FLUORESCENCE_SERIES);
 
-        for (int series = 0; series < reader.getSeriesCount(); series++) {
-            reader.setSeries(series);
+        System.out.println(
+                "Bio-Formats reader opened: "
+                        + slidePath
+        );
 
-            System.out.println();
-            System.out.println("========== SERIES " + series + " ==========");
-            System.out.println("Size X: " + reader.getSizeX());
-            System.out.println("Size Y: " + reader.getSizeY());
-            System.out.println("Size Z: " + reader.getSizeZ());
-            System.out.println("Size C: " + reader.getSizeC());
-            System.out.println("Size T: " + reader.getSizeT());
-            System.out.println("Image count: " + reader.getImageCount());
-            System.out.println("RGB: " + reader.isRGB());
-            System.out.println("Interleaved: " + reader.isInterleaved());
-            System.out.println("Effective channels: " + reader.getEffectiveSizeC());
-            System.out.println(
-                    "Pixel type: "
-                            + loci.formats.FormatTools.getPixelTypeString(
-                            reader.getPixelType()
-                    )
-            );
-            System.out.println("Bits per pixel: " + reader.getBitsPerPixel());
-            System.out.println("Resolution count: " + reader.getResolutionCount());
-        }
+        System.out.println(
+                "Fluorescence series: "
+                        + FLUORESCENCE_SERIES
+        );
 
-        reader.setSeries(0);
+        System.out.println(
+                "Resolution count: "
+                        + reader.getResolutionCount()
+        );
+
+        System.out.println(
+                "Channels: "
+                        + reader.getSizeC()
+        );
+
+        System.out.println(
+                "Pixel type: "
+                        + FormatTools.getPixelTypeString(
+                        reader.getPixelType()
+                )
+        );
     }
 
     public synchronized byte[] getTile(
-            int series,
-            int x,
-            int y
+            int viewerLevel,
+            int channel,
+            int tileX,
+            int tileY
     ) throws Exception {
 
-        reader.setSeries(series);
-
-        int width = Math.min(
-                512,
-                reader.getSizeX() - x
+        reader.setSeries(
+                FLUORESCENCE_SERIES
         );
 
-        int height = Math.min(
-                512,
-                reader.getSizeY() - y
+        validateChannel(channel);
+
+        int resolutionCount =
+                reader.getResolutionCount();
+
+        validateViewerLevel(
+                viewerLevel,
+                resolutionCount
         );
 
-        if (width <= 0 || height <= 0) {
+        /*
+         * OpenSeadragon level 0 is the lowest resolution.
+         * Bio-Formats resolution 0 is the highest resolution.
+         */
+        int bioResolution =
+                resolutionCount
+                        - 1
+                        - viewerLevel;
+
+        reader.setResolution(
+                bioResolution
+        );
+
+        int pixelX =
+                tileX * TILE_SIZE;
+
+        int pixelY =
+                tileY * TILE_SIZE;
+
+        int tileWidth =
+                Math.min(
+                        TILE_SIZE,
+                        reader.getSizeX() - pixelX
+                );
+
+        int tileHeight =
+                Math.min(
+                        TILE_SIZE,
+                        reader.getSizeY() - pixelY
+                );
+
+        if (tileWidth <= 0 || tileHeight <= 0) {
             return new byte[0];
         }
 
-        byte[] pixels = reader.openBytes(
-                0,
-                x,
-                y,
-                width,
-                height
-        );
+        int planeIndex =
+                reader.getIndex(
+                        0,
+                        channel,
+                        0
+                );
+
+        byte[] pixels =
+                reader.openBytes(
+                        planeIndex,
+                        pixelX,
+                        pixelY,
+                        tileWidth,
+                        tileHeight
+                );
+
+        DisplaySettings settings =
+                DisplaySettings.forPixelData(
+                        reader.isLittleEndian()
+                );
+
+        PixelMapper mapper =
+                createAutoContrastMapper(
+                        pixels,
+                        tileWidth,
+                        tileHeight,
+                        settings.littleEndian()
+                );
 
         BufferedImage image =
-                renderer.render(pixels, width, height);
+                fluorescenceRenderer.render(
+                        pixels,
+                        tileWidth,
+                        tileHeight,
+                        settings,
+                        mapper
+                );
 
-        ByteArrayOutputStream out =
+        ByteArrayOutputStream output =
                 new ByteArrayOutputStream();
 
-        ImageIO.write(
-                image,
-                "jpg",
-                out
-        );
+        boolean written =
+                ImageIO.write(
+                        image,
+                        "png",
+                        output
+                );
 
-        return out.toByteArray();
+        if (!written) {
+            throw new IllegalStateException(
+                    "No PNG image writer is available."
+            );
+        }
+
+        return output.toByteArray();
+    }
+
+    private PixelMapper createAutoContrastMapper(
+            byte[] pixels,
+            int width,
+            int height,
+            boolean littleEndian
+    ) {
+
+        int pixelCount =
+                width * height;
+
+        int minimum =
+                65535;
+
+        int maximum =
+                0;
+
+        for (int i = 0; i < pixelCount; i++) {
+
+            int value16 =
+                    readUint16(
+                            pixels,
+                            i * BYTES_PER_PIXEL,
+                            littleEndian
+                    );
+
+            if (value16 < minimum) {
+                minimum = value16;
+            }
+
+            if (value16 > maximum) {
+                maximum = value16;
+            }
+        }
+
+        return new AutoContrastPixelMapper(
+                minimum,
+                maximum
+        );
+    }
+
+    private int readUint16(
+            byte[] pixels,
+            int offset,
+            boolean littleEndian
+    ) {
+
+        int first =
+                pixels[offset] & 0xff;
+
+        int second =
+                pixels[offset + 1] & 0xff;
+
+        if (littleEndian) {
+            return first
+                    | (second << 8);
+        }
+
+        return (first << 8)
+                | second;
+    }
+
+    private void validateChannel(
+            int channel
+    ) {
+
+        if (
+                channel < 0
+                        || channel >= reader.getSizeC()
+        ) {
+
+            throw new IllegalArgumentException(
+                    "Channel must be between 0 and "
+                            + (reader.getSizeC() - 1)
+                            + ". Received: "
+                            + channel
+            );
+        }
+    }
+
+    private void validateViewerLevel(
+            int viewerLevel,
+            int resolutionCount
+    ) {
+
+        if (
+                viewerLevel < 0
+                        || viewerLevel >= resolutionCount
+        ) {
+
+            throw new IllegalArgumentException(
+                    "Viewer level must be between 0 and "
+                            + (resolutionCount - 1)
+                            + ". Received: "
+                            + viewerLevel
+            );
+        }
     }
 }

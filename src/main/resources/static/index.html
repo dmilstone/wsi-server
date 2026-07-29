@@ -1,64 +1,119 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
 
-<title>VSI Viewer</title>
+    <meta charset="UTF-8">
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
+    <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0"
+    >
 
-<style>
+    <title>Fluorescence VSI Viewer</title>
 
-html, body {
-    margin: 0;
-    width: 100%;
-    height: 100%;
-}
+    <script
+            src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js">
+    </script>
 
-#viewer {
-    width: 100%;
-    height: 100%;
-}
+    <style>
 
-</style>
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: black;
+        }
+
+        #viewer {
+            width: 100%;
+            height: 100%;
+        }
+
+        #controls {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 1000;
+
+            padding: 10px 12px;
+
+            color: white;
+            background: rgba(0, 0, 0, 0.75);
+
+            border-radius: 6px;
+
+            font-family:
+                    Arial,
+                    sans-serif;
+
+            font-size: 14px;
+        }
+
+        #channel {
+            margin-left: 6px;
+        }
+
+    </style>
 
 </head>
-
 
 <body>
 
 <div id="viewer"></div>
 
+<div id="controls">
+
+    <label for="channel">
+        Channel
+    </label>
+
+    <select id="channel">
+        <option value="0">
+            Channel 0
+        </option>
+
+        <option value="1">
+            Channel 1
+        </option>
+    </select>
+
+</div>
 
 <script>
 
-var viewer = OpenSeadragon({
+    const FULL_WIDTH = 2795;
+    const FULL_HEIGHT = 2826;
 
-    id: "viewer",
+    /*
+     * Four Bio-Formats resolutions means OpenSeadragon
+     * levels 0, 1, 2 and 3.
+     */
+    const MIN_LEVEL = 0;
+    const MAX_LEVEL = 3;
 
-    prefixUrl:
-      "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
+    const TILE_SIZE = 512;
 
+    let selectedChannel = 0;
 
-    tileSources: {
+    const tileSource = {
 
-        width: 24354,
-        height: 14644,
-        tileSize: 512,
+        width: FULL_WIDTH,
+        height: FULL_HEIGHT,
 
-        minLevel: 0,
-        maxLevel: 6,
+        tileSize: TILE_SIZE,
+        tileOverlap: 0,
 
+        minLevel: MIN_LEVEL,
+        maxLevel: MAX_LEVEL,
 
-        getTileUrl: function(level, x, y) {
-
-            console.log(
-                "Requesting tile:",
+        getTileUrl: function (
                 level,
                 x,
                 y
-            );
-
+        ) {
 
             return "/tile/"
                     + level
@@ -66,12 +121,82 @@ var viewer = OpenSeadragon({
                     + x
                     + "/"
                     + y
-                    + ".jpg";
+                    + ".png?channel="
+                    + selectedChannel;
         }
-    }
+    };
 
-});
+    const viewer = OpenSeadragon({
 
+        id: "viewer",
+
+        prefixUrl:
+            "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
+
+        tileSources: tileSource,
+
+        showNavigator: true,
+
+        navigatorPosition:
+            "BOTTOM_RIGHT",
+
+        animationTime: 0.8,
+
+        blendTime: 0.1,
+
+        constrainDuringPan: true,
+
+        visibilityRatio: 0.5,
+
+        minZoomImageRatio: 0.8,
+
+        maxZoomPixelRatio: 2
+    });
+
+    const channelSelector =
+            document.getElementById(
+                    "channel"
+            );
+
+    channelSelector.addEventListener(
+            "change",
+            function () {
+
+                selectedChannel =
+                        Number(
+                                channelSelector.value
+                        );
+
+                /*
+                 * Preserve the current viewport while reloading
+                 * the tiles for the selected channel.
+                 */
+                const viewportBounds =
+                        viewer.viewport.getBounds();
+
+                const currentZoom =
+                        viewer.viewport.getZoom();
+
+                viewer.open(tileSource);
+
+                viewer.addOnceHandler(
+                        "open",
+                        function () {
+
+                            viewer.viewport.fitBounds(
+                                    viewportBounds,
+                                    true
+                            );
+
+                            viewer.viewport.zoomTo(
+                                    currentZoom,
+                                    null,
+                                    true
+                            );
+                        }
+                );
+            }
+    );
 
 </script>
 
