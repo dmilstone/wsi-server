@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>VSI Viewer</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
+
+<style>
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#viewer {
+    width: 100%;
+    height: 100%;
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+<div id="viewer"></div>
+
+
+<script>
+
+var viewer = OpenSeadragon({
+
+    id: "viewer",
+
+    prefixUrl:
+      "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
+
+
+    tileSources: {
+
+        width: 24354,
+        height: 14644,
+        tileSize: 512,
+
+        minLevel: 0,
+        maxLevel: 6,
+
+
+        getTileUrl: function(level, x, y) {
+
+            console.log(
+                "Requesting tile:",
+                level,
+                x,
+                y
+            );
+
+
+            return "/tile/"
+                    + level
+                    + "/"
+                    + x
+                    + "/"
+                    + y
+                    + ".jpg";
+        }
+    }
+
+});
+
+
+</script>
+
+</body>
+
+</html>
