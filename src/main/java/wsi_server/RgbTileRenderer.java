@@ -5,8 +5,9 @@ import org.springframework.stereotype.Component;
 import java.awt.image.BufferedImage;
 
 @Component
-public class RgbTileRenderer {
+public class RgbTileRenderer implements TileRenderer {
 
+    @Override
     public BufferedImage render(byte[] pixels, int width, int height) {
 
         BufferedImage image =

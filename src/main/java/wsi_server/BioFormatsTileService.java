@@ -12,7 +12,7 @@ import java.io.ByteArrayOutputStream;
 public class BioFormatsTileService {
 
     private final IFormatReader reader;
-    private final RgbTileRenderer renderer;
+    private final TileRenderer renderer;
 
     private final String vsiPath =
             "/Users/dm026/wsi-slides/BS26-037673 B1-1_20260726_064536.vsi";
