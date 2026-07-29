@@ -2,9 +2,7 @@ package wsi_server;
 
 import loci.formats.IFormatReader;
 import loci.formats.ImageReader;
-import org.springframework.stereotype.Component;
 
-@Component
 public class BioFormatsSlide {
 
     private final IFormatReader reader;

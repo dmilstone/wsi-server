@@ -23,7 +23,33 @@ public class BioFormatsTileService {
         reader = new ImageReader();
         reader.setId(vsiPath);
 
-        System.out.println("Bio-Formats reader opened");
+        System.out.println("Series count: " + reader.getSeriesCount());
+
+        for (int series = 0; series < reader.getSeriesCount(); series++) {
+            reader.setSeries(series);
+
+            System.out.println();
+            System.out.println("========== SERIES " + series + " ==========");
+            System.out.println("Size X: " + reader.getSizeX());
+            System.out.println("Size Y: " + reader.getSizeY());
+            System.out.println("Size Z: " + reader.getSizeZ());
+            System.out.println("Size C: " + reader.getSizeC());
+            System.out.println("Size T: " + reader.getSizeT());
+            System.out.println("Image count: " + reader.getImageCount());
+            System.out.println("RGB: " + reader.isRGB());
+            System.out.println("Interleaved: " + reader.isInterleaved());
+            System.out.println("Effective channels: " + reader.getEffectiveSizeC());
+            System.out.println(
+                    "Pixel type: "
+                            + loci.formats.FormatTools.getPixelTypeString(
+                            reader.getPixelType()
+                    )
+            );
+            System.out.println("Bits per pixel: " + reader.getBitsPerPixel());
+            System.out.println("Resolution count: " + reader.getResolutionCount());
+        }
+
+        reader.setSeries(0);
     }
 
     public synchronized byte[] getTile(
