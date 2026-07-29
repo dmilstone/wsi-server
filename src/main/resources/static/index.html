@@ -1,217 +1,369 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
-    <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1.0"
-    >
-
-    <title>Fluorescence VSI Viewer</title>
-
-    <script
-            src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js">
-    </script>
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fluorescence Sample Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
     <style>
-
-        html,
-        body {
-            margin: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: black;
-        }
-
-        #viewer {
-            width: 100%;
-            height: 100%;
-        }
-
-        #controls {
-            position: absolute;
-            top: 12px;
-            left: 12px;
-            z-index: 1000;
-
-            padding: 10px 12px;
-
-            color: white;
-            background: rgba(0, 0, 0, 0.75);
-
-            border-radius: 6px;
-
-            font-family:
-                    Arial,
-                    sans-serif;
-
-            font-size: 14px;
-        }
-
-        #channel {
-            margin-left: 6px;
-        }
-
+        :root { color-scheme: dark; font-family: Arial, sans-serif; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #080a0d; }
+        body { display: grid; grid-template-columns: 240px minmax(300px, 1fr) 330px; }
+        aside { background: #15191f; border-color: #303640; overflow: auto; }
+        #images-panel { border-right: 1px solid #303640; }
+        #channels-panel { border-left: 1px solid #303640; }
+        .panel-header { position: sticky; top: 0; z-index: 2; padding: 15px; background: #15191f; border-bottom: 1px solid #303640; }
+        h1, h2 { margin: 0; font-size: 16px; }
+        .muted { margin-top: 6px; color: #98a2b3; font-size: 12px; word-break: break-all; }
+        #image-list { padding: 8px; }
+        .folder-group { margin: 4px 0; }
+        .folder-group > summary { padding: 7px 5px; color: #b8c3d1; cursor: pointer; font-size: 12px; font-weight: bold; }
+        .folder-contents { padding-left: 10px; }
+        .image-path { display:block; margin-top:3px; color:#8793a3; font-size:10px; }
+        .image-button { width: 100%; margin: 3px 0; padding: 10px; text-align: left; color: #e9edf2; background: transparent; border: 1px solid transparent; border-radius: 5px; cursor: pointer; word-break: break-word; }
+        .image-button:hover { background: #20262e; }
+        .image-button.active { background: #26384e; border-color: #4b78a8; }
+        main { position: relative; min-width: 0; }
+        #viewer { width: 100%; height: 100%; background: black; }
+        #status { position: absolute; left: 12px; bottom: 12px; z-index: 10; padding: 7px 10px; background: rgba(0,0,0,.72); border-radius: 5px; color: white; font-size: 12px; pointer-events: none; }
+        #channels { padding: 10px; }
+        .channel-card { margin-bottom: 10px; padding: 11px; background: #1d222a; border: 1px solid #303640; border-radius: 7px; }
+        .channel-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; font-weight: bold; }
+        .field { display: grid; grid-template-columns: 62px 1fr 58px; align-items: center; gap: 7px; margin-top: 7px; font-size: 12px; }
+        select, input[type="number"] { width: 100%; min-width: 0; padding: 4px; background: #11151a; color: white; border: 1px solid #424a55; border-radius: 4px; }
+        input[type="range"] { width: 100%; min-width: 0; }
+        button.action { width: 100%; margin-top: 10px; padding: 8px; background: #2b5d91; color: white; border: 0; border-radius: 5px; cursor: pointer; }
+        button.action:disabled { opacity: .5; cursor: default; }
+        @media (max-width: 950px) { body { grid-template-columns: 180px 1fr 285px; } }
     </style>
-
 </head>
-
 <body>
-
-<div id="viewer"></div>
-
-<div id="controls">
-
-    <label for="channel">
-        Channel
-    </label>
-
-    <select id="channel">
-        <option value="composite">
-            Composite
-        </option>
-
-        <option value="0">
-            Channel 0
-        </option>
-
-        <option value="1">
-            Channel 1
-        </option>
-    </select>
-
-</div>
-
+<aside id="images-panel">
+    <div class="panel-header"><h1>Sample images</h1><div id="directory" class="muted"></div></div>
+    <div id="image-list"></div>
+</aside>
+<main>
+    <div id="viewer"></div>
+    <div id="status">Loading sample directory…</div>
+</main>
+<aside id="channels-panel">
+    <div class="panel-header">
+        <h2>Channels</h2>
+        <div id="selected-name" class="muted">No image selected</div>
+        <button id="reset" class="action" disabled>Reset automatic display</button>
+    </div>
+    <div id="channels"></div>
+</aside>
 <script>
+    const LUTS = ["BLUE", "GREEN", "RED", "MAGENTA", "CYAN", "GRAY", "YELLOW"];
+    let viewer;
+    let selectedImage;
+    let metadata;
+    let display;
+    let updateTimer;
+    let updateSequence = 0;
+    const STORAGE_PREFIX = "wsi.viewer.v1";
 
-    const FULL_WIDTH = 2795;
-    const FULL_HEIGHT = 2826;
+    const statusElement = document.getElementById("status");
+    const imageListElement = document.getElementById("image-list");
+    const channelsElement = document.getElementById("channels");
+    const resetButton = document.getElementById("reset");
 
-    /*
-     * Four Bio-Formats resolutions means OpenSeadragon
-     * levels 0, 1, 2 and 3.
-     */
-    const MIN_LEVEL = 0;
-    const MAX_LEVEL = 3;
+    async function request(url, options = {}) {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `${response.status} ${response.statusText}`);
+        }
+        return response.json();
+    }
 
-    const TILE_SIZE = 512;
+    async function initialize() {
+        try {
+            const result = await request("/api/images");
+            document.getElementById("directory").textContent = result.directory;
+            renderImageList(result.images);
+            const lastId = localStorage.getItem(`${STORAGE_PREFIX}.selectedImage`);
+            const initial = result.images.find(image => image.id === lastId) || result.images[0];
+            if (initial) await selectImage(initial);
+        } catch (error) {
+            showError(error);
+        }
+    }
 
-    let selectedChannel = "composite";
+    function renderImageList(images) {
+        imageListElement.replaceChildren();
+        const groups = new Map();
+        for (const image of images) {
+            const folder = image.folder || "Images";
+            if (!groups.has(folder)) groups.set(folder, []);
+            groups.get(folder).push(image);
+        }
 
-    const tileSource = {
+        for (const [folder, folderImages] of groups) {
+            const details = document.createElement("details");
+            details.className = "folder-group";
+            details.open = localStorage.getItem(`${STORAGE_PREFIX}.folder.${folder}`) !== "closed";
+            const summary = document.createElement("summary");
+            summary.textContent = `${folder} (${folderImages.length})`;
+            details.append(summary);
+            const contents = document.createElement("div");
+            contents.className = "folder-contents";
+            for (const image of folderImages) {
+                const button = document.createElement("button");
+                button.className = "image-button";
+                button.dataset.imageId = image.id;
+                button.innerHTML = `${escapeHtml(image.name)}<span class="image-path">${escapeHtml(image.relativePath)}</span>`;
+                button.addEventListener("click", () => selectImage(image));
+                contents.append(button);
+            }
+            details.append(contents);
+            details.addEventListener("toggle", () => localStorage.setItem(
+                `${STORAGE_PREFIX}.folder.${folder}`, details.open ? "open" : "closed"
+            ));
+            imageListElement.append(details);
+        }
+    }
 
-        width: FULL_WIDTH,
-        height: FULL_HEIGHT,
+    async function selectImage(image) {
+        try {
+            statusElement.textContent = `Opening ${image.name}…`;
+            clearTimeout(updateTimer);
+            updateSequence++;
+            selectedImage = image;
+            document.querySelectorAll(".image-button").forEach(button =>
+                button.classList.toggle("active", button.dataset.imageId === image.id)
+            );
+            [metadata, display] = await Promise.all([
+                request(`/api/images/${encodeURIComponent(image.id)}`),
+                request(`/api/images/${encodeURIComponent(image.id)}/display`)
+            ]);
+            const saved = loadLocalDisplay(image.id);
+            if (saved && compatibleDisplay(saved, display)) {
+                display = await request(`/api/images/${encodeURIComponent(image.id)}/display`, {
+                    method: "PUT",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({channels: saved.channels})
+                });
+            }
+            localStorage.setItem(`${STORAGE_PREFIX}.selectedImage`, image.id);
+            document.getElementById("selected-name").textContent = image.name;
+            resetButton.disabled = false;
+            renderChannels();
+            openViewer();
+            statusElement.textContent = `${metadata.width} × ${metadata.height} · ${metadata.channels} channels`;
+        } catch (error) {
+            showError(error);
+        }
+    }
 
-        tileSize: TILE_SIZE,
-        tileOverlap: 0,
+    function tileSource() {
+        const imageId = encodeURIComponent(selectedImage.id);
+        return {
+            width: metadata.width,
+            height: metadata.height,
+            tileSize: metadata.tileSize,
+            tileOverlap: 0,
+            minLevel: 0,
+            maxLevel: metadata.resolutionCount - 1,
+            getTileUrl(level, x, y) {
+                return `/tile/${imageId}/composite/${level}/${x}/${y}.png?revision=${display.revision}`;
+            }
+        };
+    }
 
-        minLevel: MIN_LEVEL,
-        maxLevel: MAX_LEVEL,
+    function openViewer(preserveViewport = false) {
+        let bounds;
+        let zoom;
+        if (preserveViewport && viewer && viewer.viewport) {
+            bounds = viewer.viewport.getBounds();
+            zoom = viewer.viewport.getZoom();
+        }
 
-        getTileUrl: function (
-                level,
-                x,
-                y
-        ) {
+        if (!viewer) {
+            viewer = OpenSeadragon({
+                id: "viewer",
+                prefixUrl: "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
+                showNavigator: true,
+                navigatorPosition: "BOTTOM_RIGHT",
+                animationTime: 0.5,
+                blendTime: 0.1,
+                constrainDuringPan: true,
+                visibilityRatio: 0.5,
+                minZoomImageRatio: 0.8,
+                maxZoomPixelRatio: 2
+            });
+        }
 
-            if (selectedChannel === "composite") {
-                return "/tile/composite/"
-                        + level
-                        + "/"
-                        + x
-                        + "/"
-                        + y
-                        + ".png";
+        viewer.open(tileSource());
+        if (bounds && zoom) {
+            viewer.addOnceHandler("open", () => {
+                viewer.viewport.fitBounds(bounds, true);
+                viewer.viewport.zoomTo(zoom, null, true);
+            });
+        }
+    }
+
+    function renderChannels() {
+        channelsElement.replaceChildren();
+        for (const channel of display.channels) {
+            const card = document.createElement("section");
+            card.className = "channel-card";
+            card.innerHTML = `
+                <div class="channel-heading">
+                    <label><input data-field="visible" type="checkbox" ${channel.visible ? "checked" : ""}> ${escapeHtml(channel.name)}</label>
+                    <span>${channel.lut}</span>
+                </div>
+                <div class="field"><label>LUT</label><select data-field="lut">${LUTS.map(lut => `<option ${lut === channel.lut ? "selected" : ""}>${lut}</option>`).join("")}</select><span></span></div>
+                ${rangeField("Black", "black", channel.black, 0, 65534, 1)}
+                ${rangeField("White", "white", channel.white, 1, 65535, 1)}
+                ${rangeField("Gamma", "gamma", channel.gamma, 0.1, 4, 0.05)}
+                ${rangeField("Opacity", "opacity", channel.opacity, 0, 1, 0.05)}
+            `;
+
+            card.querySelectorAll("input, select").forEach(control => {
+                control.addEventListener("input", () => {
+                    const field = control.dataset.field;
+                    let value = control.type === "checkbox" ? control.checked
+                            : (field === "lut" ? control.value : Number(control.value));
+                    channel[field] = value;
+                    if (field !== "visible" && field !== "lut") {
+                        card.querySelector(`[data-value="${field}"]`).value = value;
+                    }
+                    normalizeWindow(channel, field, card);
+                    scheduleDisplayUpdate();
+                });
+            });
+            channelsElement.append(card);
+        }
+    }
+
+    function rangeField(label, field, value, min, max, step) {
+        return `<div class="field"><label>${label}</label><input data-field="${field}" type="range" min="${min}" max="${max}" step="${step}" value="${value}"><input data-field="${field}" data-value="${field}" type="number" min="${min}" max="${max}" step="${step}" value="${value}"></div>`;
+    }
+
+    function normalizeWindow(channel, changedField, card) {
+        if (channel.white <= channel.black) {
+            if (changedField === "black") channel.white = Math.min(65535, channel.black + 1);
+            else if (changedField === "white") channel.black = Math.max(0, channel.white - 1);
+            for (const field of ["black", "white"]) {
+                card.querySelectorAll(`[data-field="${field}"]`).forEach(input => input.value = channel[field]);
+            }
+        }
+    }
+
+    function scheduleDisplayUpdate() {
+        clearTimeout(updateTimer);
+        updateTimer = setTimeout(updateDisplay, 180);
+    }
+
+    async function updateDisplay() {
+        const imageId = selectedImage.id;
+        const sequence = ++updateSequence;
+        const payload = {
+            channels: display.channels.map(channel => ({...channel}))
+        };
+
+        try {
+            const response = await request(`/api/images/${encodeURIComponent(imageId)}/display`, {
+                method: "PUT",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(payload)
+            });
+
+            // Ignore a response for an image that is no longer selected, or an
+            // older response that arrived after a newer display update.
+            if (!selectedImage || selectedImage.id !== imageId || sequence !== updateSequence) {
+                return;
             }
 
-            return "/tile/"
-                    + level
-                    + "/"
-                    + x
-                    + "/"
-                    + y
-                    + ".png?channel="
-                    + selectedChannel;
+            // Keep the existing channel objects alive. The control event handlers
+            // close over these objects, so replacing display wholesale would leave
+            // every existing control editing stale state after the first update.
+            display.revision = response.revision;
+            for (const serverChannel of response.channels) {
+                const localChannel = display.channels.find(
+                    channel => channel.index === serverChannel.index
+                );
+                if (localChannel) Object.assign(localChannel, serverChannel);
+            }
+
+            syncChannelControls();
+            saveLocalDisplay(imageId, display);
+            openViewer(true);
+        } catch (error) {
+            if (sequence === updateSequence) showError(error);
         }
-    };
+    }
 
-    const viewer = OpenSeadragon({
-
-        id: "viewer",
-
-        prefixUrl:
-            "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
-
-        tileSources: tileSource,
-
-        showNavigator: true,
-
-        navigatorPosition:
-            "BOTTOM_RIGHT",
-
-        animationTime: 0.8,
-
-        blendTime: 0.1,
-
-        constrainDuringPan: true,
-
-        visibilityRatio: 0.5,
-
-        minZoomImageRatio: 0.8,
-
-        maxZoomPixelRatio: 2
-    });
-
-    const channelSelector =
-            document.getElementById(
-                    "channel"
-            );
-
-    channelSelector.addEventListener(
-            "change",
-            function () {
-
-                selectedChannel =
-                        channelSelector.value;
-
-                /*
-                 * Preserve the current viewport while reloading
-                 * the tiles for the selected channel.
-                 */
-                const viewportBounds =
-                        viewer.viewport.getBounds();
-
-                const currentZoom =
-                        viewer.viewport.getZoom();
-
-                viewer.open(tileSource);
-
-                viewer.addOnceHandler(
-                        "open",
-                        function () {
-
-                            viewer.viewport.fitBounds(
-                                    viewportBounds,
-                                    true
-                            );
-
-                            viewer.viewport.zoomTo(
-                                    currentZoom,
-                                    null,
-                                    true
-                            );
-                        }
+    function syncChannelControls() {
+        const cards = channelsElement.querySelectorAll(".channel-card");
+        display.channels.forEach((channel, index) => {
+            const card = cards[index];
+            if (!card) return;
+            card.querySelector('[data-field="visible"]').checked = channel.visible;
+            card.querySelector('[data-field="lut"]').value = channel.lut;
+            card.querySelector(".channel-heading span").textContent = channel.lut;
+            for (const field of ["black", "white", "gamma", "opacity"]) {
+                card.querySelectorAll(`[data-field="${field}"]`).forEach(
+                    input => input.value = channel[field]
                 );
             }
-    );
+        });
+    }
 
+    resetButton.addEventListener("click", async () => {
+        try {
+            display = await request(`/api/images/${encodeURIComponent(selectedImage.id)}/display/reset`, {method: "POST"});
+            saveLocalDisplay(selectedImage.id, display);
+            renderChannels();
+            openViewer(true);
+        } catch (error) {
+            showError(error);
+        }
+    });
+
+    function preferenceKey(imageId) {
+        return `${STORAGE_PREFIX}.display.${imageId}`;
+    }
+
+    function saveLocalDisplay(imageId, value) {
+        try {
+            localStorage.setItem(preferenceKey(imageId), JSON.stringify({channels: value.channels}));
+        } catch (error) {
+            console.warn("Could not save local display preferences", error);
+        }
+    }
+
+    function loadLocalDisplay(imageId) {
+        try {
+            const raw = localStorage.getItem(preferenceKey(imageId));
+            return raw ? JSON.parse(raw) : null;
+        } catch (error) {
+            console.warn("Could not load local display preferences", error);
+            return null;
+        }
+    }
+
+    function compatibleDisplay(saved, serverDisplay) {
+        return Array.isArray(saved.channels)
+            && saved.channels.length === serverDisplay.channels.length
+            && saved.channels.every((channel, index) => channel.index === serverDisplay.channels[index].index);
+    }
+
+    function escapeHtml(value) {
+        const element = document.createElement("span");
+        element.textContent = value;
+        return element.innerHTML;
+    }
+
+    function showError(error) {
+        console.error(error);
+        statusElement.textContent = `Error: ${error.message}`;
+    }
+
+    initialize();
 </script>
-
 </body>
-
 </html>
