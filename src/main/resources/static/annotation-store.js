@@ -6,6 +6,28 @@
  */
 class AnnotationStore {
 
+    static collectionCache = new Map();
+
+    static prefetchImage(imageId) {
+        const normalizedImageId = imageId || null;
+        if (!normalizedImageId) return Promise.resolve(null);
+
+        if (!this.collectionCache.has(normalizedImageId)) {
+            const request = fetch(`/api/images/${encodeURIComponent(normalizedImageId)}/annotations`, {
+                headers: { "Accept": "application/json" }
+            }).then(async response => {
+                if (!response.ok) throw new Error(await AnnotationStore.responseError(response));
+                return response.json();
+            }).catch(error => {
+                this.collectionCache.delete(normalizedImageId);
+                throw error;
+            });
+            this.collectionCache.set(normalizedImageId, request);
+        }
+
+        return this.collectionCache.get(normalizedImageId);
+    }
+
     constructor({ saveDelayMs = 400, reconcileSavedCollection = null } = {}) {
         this.currentImageId = null;
         this.currentCollection = null;
@@ -71,11 +93,7 @@ class AnnotationStore {
 
         this.setSaveState("loading");
         try {
-            const response = await fetch(`/api/images/${encodeURIComponent(nextImageId)}/annotations`, {
-                headers: { "Accept": "application/json" }
-            });
-            if (!response.ok) throw new Error(await this.responseError(response));
-            const collection = await response.json();
+            const collection = await AnnotationStore.prefetchImage(nextImageId);
             if (generation !== this.loadGeneration || collection.imageId !== this.currentImageId) return;
             this.currentCollection = collection;
             this.setSaveState("idle");
@@ -141,6 +159,7 @@ class AnnotationStore {
                 });
                 if (!response.ok) throw new Error(await this.responseError(response));
                 const savedCollection = await response.json();
+                AnnotationStore.collectionCache.set(imageId, Promise.resolve(savedCollection));
 
                 if (generation === this.loadGeneration && imageId === this.currentImageId) {
                     this.savedVersion = Math.max(this.savedVersion, versionBeingSaved);
@@ -195,7 +214,7 @@ class AnnotationStore {
         }
     }
 
-    async responseError(response) {
+    static async responseError(response) {
         const text = await response.text();
         if (!text) return `${response.status} ${response.statusText}`;
         try {
@@ -205,5 +224,8 @@ class AnnotationStore {
             return text;
         }
     }
-}
 
+    async responseError(response) {
+        return AnnotationStore.responseError(response);
+    }
+}

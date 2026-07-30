@@ -649,6 +649,11 @@
             closeImageLightbox(false);
             prepareSlideOverviewForImageChange();
             selectedImage = image;
+            // Start annotation I/O alongside metadata/display loading. The store
+            // retains the result so the viewer-open handler does not issue another GET.
+            void AnnotationStore.prefetchImage(image.id).catch(error =>
+                console.warn(`Unable to prefetch annotations for image ${image.id}`, error)
+            );
             clearPixelReadout();
             document.querySelectorAll(".image-button").forEach(button =>
                 button.classList.toggle("active", button.dataset.imageId === image.id)
