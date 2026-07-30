@@ -1,6 +1,5 @@
 package wsi_server.renderer;
 
-import wsi_server.display.PixelMapper;
 import wsi_server.model.DisplaySettings;
 
 import java.awt.image.BufferedImage;
@@ -14,7 +13,6 @@ public interface TileRenderer {
             byte[] pixels,
             int width,
             int height,
-            DisplaySettings settings,
-            PixelMapper mapper
+            DisplaySettings settings
     );
 }

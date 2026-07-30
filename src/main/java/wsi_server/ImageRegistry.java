@@ -9,7 +9,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -67,9 +66,9 @@ public class ImageRegistry {
                     .filter(this::hasSupportedSuffix)
                     .forEach(paths::add);
         }
-        paths.sort(Comparator.comparing(
-                path -> normalizeRelative(rootDirectory.relativize(path)),
-                String.CASE_INSENSITIVE_ORDER
+        paths.sort((left, right) -> compareNatural(
+                normalizeRelative(rootDirectory.relativize(left)),
+                normalizeRelative(rootDirectory.relativize(right))
         ));
 
         Map<String, ImageEntry> result = new LinkedHashMap<>();
@@ -85,6 +84,65 @@ public class ImageRegistry {
             result.put(id, new ImageEntry(id, name, relativePath, folder, normalized));
         }
         return result;
+    }
+
+
+    /**
+     * Case-insensitive natural ordering for relative paths. Consecutive digit runs
+     * are compared numerically, so image9.vsi sorts before image10.vsi.
+     */
+    private static int compareNatural(String left, String right) {
+        int leftIndex = 0;
+        int rightIndex = 0;
+
+        while (leftIndex < left.length() && rightIndex < right.length()) {
+            char leftChar = left.charAt(leftIndex);
+            char rightChar = right.charAt(rightIndex);
+
+            if (Character.isDigit(leftChar) && Character.isDigit(rightChar)) {
+                int leftEnd = leftIndex;
+                int rightEnd = rightIndex;
+                while (leftEnd < left.length() && Character.isDigit(left.charAt(leftEnd))) leftEnd++;
+                while (rightEnd < right.length() && Character.isDigit(right.charAt(rightEnd))) rightEnd++;
+
+                int leftSignificant = leftIndex;
+                int rightSignificant = rightIndex;
+                while (leftSignificant < leftEnd - 1 && left.charAt(leftSignificant) == '0') leftSignificant++;
+                while (rightSignificant < rightEnd - 1 && right.charAt(rightSignificant) == '0') rightSignificant++;
+
+                int leftDigits = leftEnd - leftSignificant;
+                int rightDigits = rightEnd - rightSignificant;
+                if (leftDigits != rightDigits) return Integer.compare(leftDigits, rightDigits);
+
+                for (int i = 0; i < leftDigits; i++) {
+                    int comparison = Character.compare(
+                            left.charAt(leftSignificant + i),
+                            right.charAt(rightSignificant + i)
+                    );
+                    if (comparison != 0) return comparison;
+                }
+
+                int fullLengthComparison = Integer.compare(leftEnd - leftIndex, rightEnd - rightIndex);
+                if (fullLengthComparison != 0) return fullLengthComparison;
+
+                leftIndex = leftEnd;
+                rightIndex = rightEnd;
+                continue;
+            }
+
+            int comparison = Character.compare(
+                    Character.toLowerCase(leftChar),
+                    Character.toLowerCase(rightChar)
+            );
+            if (comparison != 0) return comparison;
+
+            leftIndex++;
+            rightIndex++;
+        }
+
+        int lengthComparison = Integer.compare(left.length(), right.length());
+        if (lengthComparison != 0) return lengthComparison;
+        return left.compareTo(right);
     }
 
     private String normalizeRelative(Path path) {

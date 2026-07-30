@@ -3,13 +3,23 @@ package wsi_server;
 import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpSession;
 import loci.formats.IFormatReader;
+import loci.formats.FormatTools;
+import loci.formats.ImageReader;
+import loci.formats.MetadataTools;
+import loci.formats.gui.BufferedImageReader;
+import loci.formats.meta.MetadataRetrieve;
+import ome.units.UNITS;
+import ome.units.quantity.Length;
 import org.springframework.stereotype.Service;
+import wsi_server.api.AssociatedImageSeriesDto;
 import wsi_server.api.ChannelDisplayDto;
 import wsi_server.api.DisplayResponse;
 import wsi_server.api.DisplayUpdateRequest;
 import wsi_server.api.ImageListResponse;
 import wsi_server.api.ImageMetadataResponse;
 import wsi_server.api.ImageSummary;
+import wsi_server.api.PixelBlockResponse;
+import wsi_server.api.PixelSampleResponse;
 import wsi_server.display.LinearWindowPixelMapper;
 import wsi_server.display.PixelMapper;
 import wsi_server.model.ChannelDisplaySettings;
@@ -21,6 +31,8 @@ import wsi_server.renderer.FluorescenceTileRenderer;
 import wsi_server.renderer.MultichannelTileRenderer;
 
 import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
@@ -37,6 +49,7 @@ public class BioFormatsTileService {
     private final FluorescenceTileRenderer fluorescenceRenderer;
     private final MultichannelTileRenderer multichannelRenderer;
     private final Map<String, ImageContext> contexts = new ConcurrentHashMap<>();
+    private final Map<String, AssociatedImages> associatedImageCache = new ConcurrentHashMap<>();
 
     public BioFormatsTileService(ImageRegistry registry,
                                  FluorescenceTileRenderer fluorescenceRenderer,
@@ -59,16 +72,290 @@ public class BioFormatsTileService {
         synchronized (context) {
             IFormatReader reader = context.reader();
             reader.setResolution(0);
+            Double micronsPerPixelX = physicalSizeMicrons(reader, true);
+            Double micronsPerPixelY = physicalSizeMicrons(reader, false);
             return new ImageMetadataResponse(imageId, context.entry().relativePath(),
                     reader.getSizeX(), reader.getSizeY(), reader.getSizeC(),
-                    reader.getResolutionCount(), ImageContext.TILE_SIZE, state.revision());
+                    reader.getResolutionCount(), ImageContext.TILE_SIZE, state.revision(),
+                    micronsPerPixelX, micronsPerPixelY);
         }
+    }
+
+    private Double physicalSizeMicrons(IFormatReader reader, boolean horizontal) {
+        try {
+            if (!(reader.getMetadataStore() instanceof MetadataRetrieve metadata)) return null;
+            Length length = horizontal
+                    ? metadata.getPixelsPhysicalSizeX(reader.getSeries())
+                    : metadata.getPixelsPhysicalSizeY(reader.getSeries());
+            if (length == null) return null;
+            Number value = length.value(UNITS.MICROMETER);
+            if (value == null) return null;
+            double microns = value.doubleValue();
+            return Double.isFinite(microns) && microns > 0 ? microns : null;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    public List<AssociatedImageSeriesDto> getAssociatedImageSeries(String imageId) throws Exception {
+        ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
+        BufferedImageReader reader = createAssociatedImageReader();
+        try {
+            reader.setId(entry.path().toString());
+            MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
+                    ? retrieve : null;
+            int label = chooseLabelSeries(reader);
+            int macro = chooseMacroSeries(reader);
+            List<AssociatedImageSeriesDto> result = new ArrayList<>();
+            for (int series = 0; series < reader.getSeriesCount(); series++) {
+                reader.setSeries(series);
+                result.add(new AssociatedImageSeriesDto(
+                        series,
+                        seriesName(metadata, series),
+                        reader.getSizeX(),
+                        reader.getSizeY(),
+                        reader.getSizeC(),
+                        reader.getResolutionCount(),
+                        reader.isRGB(),
+                        reader.isThumbnailSeries(),
+                        series == label,
+                        series == macro));
+            }
+            return result;
+        } finally {
+            reader.close();
+        }
+    }
+
+    public byte[] getSlideLabel(String imageId) throws Exception {
+        AssociatedImages images = associatedImages(imageId);
+        if (images.label() == null) {
+            throw new IllegalStateException("This slide does not contain a readable label associated image.");
+        }
+        return images.label();
+    }
+
+    public byte[] getDisplayThumbnail(String imageId, HttpSession session) throws Exception {
+        AssociatedImages images = associatedImages(imageId);
+        if (images.macro() == null) {
+            throw new IllegalStateException("This slide does not contain a macro/overview associated image.");
+        }
+        return images.macro();
+    }
+
+    private AssociatedImages associatedImages(String imageId) throws Exception {
+        AssociatedImages cached = associatedImageCache.get(imageId);
+        if (cached != null) return cached;
+        synchronized (associatedImageCache) {
+            cached = associatedImageCache.get(imageId);
+            if (cached != null) return cached;
+            ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
+            BufferedImageReader reader = createAssociatedImageReader();
+            try {
+                reader.setId(entry.path().toString());
+                byte[] label = null;
+                byte[] macro = null;
+                try {
+                    int labelSeries = chooseLabelSeries(reader);
+                    reader.setSeries(labelSeries);
+                    label = encodePng(scaleToFit(reader.openImage(0), 1000, 420));
+                } catch (Exception ignored) { }
+                try {
+                    int macroSeries = chooseMacroSeries(reader);
+                    if (macroSeries >= 0) {
+                        reader.setSeries(macroSeries);
+                        macro = encodePng(scaleToFit(reader.openImage(0), 1200, 900));
+                    }
+                } catch (Exception ignored) { }
+                cached = new AssociatedImages(label, macro);
+                associatedImageCache.put(imageId, cached);
+                return cached;
+            } finally {
+                reader.close();
+            }
+        }
+    }
+
+    private record AssociatedImages(byte[] label, byte[] macro) { }
+
+    private BufferedImageReader createAssociatedImageReader() {
+        ImageReader baseReader = new ImageReader();
+        baseReader.setFlattenedResolutions(false);
+        baseReader.setMetadataStore(MetadataTools.createOMEXMLMetadata());
+        return new BufferedImageReader(baseReader);
+    }
+
+    private int chooseMacroSeries(BufferedImageReader reader) {
+        int upper = Math.min(ImageContext.FLUORESCENCE_SERIES, reader.getSeriesCount());
+        if (upper <= 0) return -1;
+
+        MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
+                ? retrieve : null;
+        int bestNamed = -1;
+        long bestNamedArea = -1;
+        int bestFallback = -1;
+        long bestFallbackArea = -1;
+
+        for (int series = 0; series < upper; series++) {
+            reader.setSeries(series);
+            long width = reader.getSizeX();
+            long height = reader.getSizeY();
+            if (width <= 0 || height <= 0) continue;
+            long area = width * height;
+            String name = seriesName(metadata, series).toLowerCase();
+
+            boolean label = name.contains("label") || name.contains("barcode");
+            boolean macro = name.contains("macro") || name.contains("overview")
+                    || name.contains("thumbnail") || name.contains("preview");
+
+            if (macro && !label && area > bestNamedArea) {
+                bestNamed = series;
+                bestNamedArea = area;
+            }
+            if (!label && area > bestFallbackArea) {
+                bestFallback = series;
+                bestFallbackArea = area;
+            }
+        }
+        return bestNamed >= 0 ? bestNamed : bestFallback;
+    }
+
+    private String seriesName(MetadataRetrieve metadata, int series) {
+        if (metadata == null) return "";
+        try {
+            String name = metadata.getImageName(series);
+            return name == null ? "" : name;
+        } catch (RuntimeException ignored) {
+            return "";
+        }
+    }
+
+    private int chooseLabelSeries(BufferedImageReader reader) {
+        int upper = Math.min(ImageContext.FLUORESCENCE_SERIES, reader.getSeriesCount());
+        if (upper <= 0) {
+            throw new IllegalStateException("This slide does not expose a label associated-image series.");
+        }
+
+        MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
+                ? retrieve : null;
+        int bestNamed = -1;
+        long bestNamedArea = -1;
+        int bestFallback = -1;
+        double bestFallbackScore = Double.NEGATIVE_INFINITY;
+
+        for (int series = 0; series < upper; series++) {
+            reader.setSeries(series);
+            long width = reader.getSizeX();
+            long height = reader.getSizeY();
+            if (width <= 0 || height <= 0) continue;
+
+            String name = seriesName(metadata, series).toLowerCase();
+            boolean namedLabel = name.contains("label") || name.contains("barcode")
+                    || name.contains("slide label");
+            long area = width * height;
+            if (namedLabel && area > bestNamedArea) {
+                bestNamed = series;
+                bestNamedArea = area;
+            }
+
+            double longSide = Math.max(width, height);
+            double shortSide = Math.min(width, height);
+            double aspect = longSide / Math.max(1.0, shortSide);
+            double score = aspect * 10.0 - Math.log1p(area);
+            if (score > bestFallbackScore) {
+                bestFallbackScore = score;
+                bestFallback = series;
+            }
+        }
+        if (bestNamed >= 0) return bestNamed;
+        if (bestFallback >= 0) return bestFallback;
+        throw new IllegalStateException("This slide does not expose a readable label associated-image series.");
+    }
+
+    private BufferedImage scaleToFit(BufferedImage source, int maxWidth, int maxHeight) {
+        if (source.getWidth() <= maxWidth && source.getHeight() <= maxHeight) return source;
+        double scale = Math.min(maxWidth / (double) source.getWidth(), maxHeight / (double) source.getHeight());
+        int width = Math.max(1, (int) Math.round(source.getWidth() * scale));
+        int height = Math.max(1, (int) Math.round(source.getHeight() * scale));
+        BufferedImage scaled = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = scaled.createGraphics();
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.drawImage(source, 0, 0, width, height, null);
+        } finally {
+            graphics.dispose();
+        }
+        return scaled;
     }
 
     public DisplayResponse getDisplay(String imageId, HttpSession session) throws Exception {
         ImageContext context = context(imageId);
         SessionDisplayState state = sessionState(session, imageId, context);
-        synchronized (state) { return toDisplayResponse(state); }
+        synchronized (state) { return toDisplayResponse(state, context); }
+    }
+
+    public PixelSampleResponse getPixelSample(String imageId, int x, int y) throws Exception {
+        ImageContext context = context(imageId);
+        synchronized (context) {
+            IFormatReader reader = context.reader();
+            reader.setResolution(0);
+            if (x < 0 || y < 0 || x >= reader.getSizeX() || y >= reader.getSizeY()) {
+                throw new IllegalArgumentException("Pixel coordinates are outside the image.");
+            }
+            if (context.isRgb()) {
+                int[] rgb = readRgbRegion(reader, x, y, 1, 1);
+                int value = rgb[0];
+                return new PixelSampleResponse(x, y, List.of(
+                        (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff));
+            }
+            boolean littleEndian = reader.isLittleEndian();
+            List<Integer> values = new ArrayList<>(reader.getSizeC());
+            for (int channel = 0; channel < reader.getSizeC(); channel++) {
+                byte[] pixel = reader.openBytes(reader.getIndex(0, channel, 0), x, y, 1, 1);
+                int first = pixel[0] & 0xff;
+                int second = pixel[1] & 0xff;
+                values.add(littleEndian ? first | (second << 8) : (first << 8) | second);
+            }
+            return new PixelSampleResponse(x, y, values);
+        }
+    }
+
+    public PixelBlockResponse getPixelBlock(String imageId, int x, int y, int requestedSize) throws Exception {
+        ImageContext context = context(imageId);
+        synchronized (context) {
+            IFormatReader reader = context.reader();
+            reader.setResolution(0);
+
+            int size = Math.max(8, Math.min(requestedSize, 128));
+            int blockX = Math.max(0, Math.min(x, reader.getSizeX() - 1));
+            int blockY = Math.max(0, Math.min(y, reader.getSizeY() - 1));
+            int width = Math.min(size, reader.getSizeX() - blockX);
+            int height = Math.min(size, reader.getSizeY() - blockY);
+            if (context.isRgb()) {
+                int[] rgb = readRgbRegion(reader, blockX, blockY, width, height);
+                List<Integer> values = new ArrayList<>(width * height * 3);
+                for (int channel = 0; channel < 3; channel++) {
+                    int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
+                    for (int value : rgb) values.add((value >> shift) & 0xff);
+                }
+                return new PixelBlockResponse(blockX, blockY, width, height, 3, values);
+            }
+            int channels = reader.getSizeC();
+            boolean littleEndian = reader.isLittleEndian();
+
+            List<Integer> values = new ArrayList<>(width * height * channels);
+            for (int channel = 0; channel < channels; channel++) {
+                byte[] pixels = reader.openBytes(
+                        reader.getIndex(0, channel, 0), blockX, blockY, width, height);
+                for (int offset = 0; offset < pixels.length; offset += 2) {
+                    int first = pixels[offset] & 0xff;
+                    int second = pixels[offset + 1] & 0xff;
+                    values.add(littleEndian ? first | (second << 8) : (first << 8) | second);
+                }
+            }
+            return new PixelBlockResponse(blockX, blockY, width, height, channels, values);
+        }
     }
 
     public DisplayResponse resetDisplay(String imageId, HttpSession session) throws Exception {
@@ -76,7 +363,19 @@ public class BioFormatsTileService {
         SessionDisplayState state = sessionState(session, imageId, context);
         synchronized (state) {
             state.reset(context.newDefaultDisplayModel());
-            return toDisplayResponse(state);
+            return toDisplayResponse(state, context);
+        }
+    }
+
+    public DisplayResponse recomputeAutomaticDisplay(String imageId, HttpSession session) throws Exception {
+        ImageContext context = context(imageId);
+        synchronized (context) {
+            context.recomputeAutomaticWindows();
+        }
+        SessionDisplayState state = sessionState(session, imageId, context);
+        synchronized (state) {
+            state.reset(context.newDefaultDisplayModel());
+            return toDisplayResponse(state, context);
         }
     }
 
@@ -105,7 +404,7 @@ public class BioFormatsTileService {
                 settings.setOpacity(dto.opacity());
             }
             state.incrementRevision();
-            return toDisplayResponse(state);
+            return toDisplayResponse(state, context);
         }
     }
 
@@ -146,6 +445,12 @@ public class BioFormatsTileService {
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
+            if (context.isRgb()) {
+                int[] rgb = readRgbRegion(reader, region.x(), region.y(), region.width(), region.height());
+                BufferedImage image = new BufferedImage(region.width(), region.height(), BufferedImage.TYPE_INT_RGB);
+                image.setRGB(0, 0, region.width(), region.height(), rgb, 0, region.width());
+                return encodePng(image);
+            }
             List<byte[]> channelPixels = new ArrayList<>();
             List<PixelMapper> mappers = new ArrayList<>();
             List<Double> opacities = new ArrayList<>();
@@ -163,6 +468,48 @@ public class BioFormatsTileService {
                     DisplaySettings.forPixelData(reader.isLittleEndian()), mappers, opacities);
             return encodePng(image);
         }
+    }
+
+
+    private int[] readRgbRegion(IFormatReader reader, int x, int y, int width, int height) throws Exception {
+        int pixelCount = width * height;
+        int[] rgb = new int[pixelCount];
+        int bytesPerSample = FormatTools.getBytesPerPixel(reader.getPixelType());
+        if (bytesPerSample != 1) {
+            throw new IllegalStateException("RGB rendering currently requires 8-bit samples.");
+        }
+        if (reader.isRGB()) {
+            int samples = Math.max(3, reader.getRGBChannelCount());
+            byte[] bytes = reader.openBytes(reader.getIndex(0, 0, 0), x, y, width, height);
+            if (reader.isInterleaved()) {
+                for (int i = 0; i < pixelCount; i++) {
+                    int offset = i * samples;
+                    int r = bytes[offset] & 0xff;
+                    int g = bytes[offset + 1] & 0xff;
+                    int b = bytes[offset + 2] & 0xff;
+                    rgb[i] = (r << 16) | (g << 8) | b;
+                }
+            } else {
+                int planeSize = pixelCount;
+                for (int i = 0; i < pixelCount; i++) {
+                    int r = bytes[i] & 0xff;
+                    int g = bytes[planeSize + i] & 0xff;
+                    int b = bytes[2 * planeSize + i] & 0xff;
+                    rgb[i] = (r << 16) | (g << 8) | b;
+                }
+            }
+            return rgb;
+        }
+        byte[][] channels = new byte[3][];
+        for (int channel = 0; channel < 3; channel++) {
+            channels[channel] = reader.openBytes(reader.getIndex(0, channel, 0), x, y, width, height);
+        }
+        for (int i = 0; i < pixelCount; i++) {
+            rgb[i] = ((channels[0][i] & 0xff) << 16)
+                    | ((channels[1][i] & 0xff) << 8)
+                    | (channels[2][i] & 0xff);
+        }
+        return rgb;
     }
 
     public String firstImageId() { return registry.getFirst().id(); }
@@ -206,12 +553,12 @@ public class BioFormatsTileService {
         }
     }
 
-    private DisplayResponse toDisplayResponse(SessionDisplayState state) {
+    private DisplayResponse toDisplayResponse(SessionDisplayState state, ImageContext context) {
         List<ChannelDisplayDto> channels = new ArrayList<>();
         DisplayModel model = state.model();
         for (int i = 0; i < model.getChannelCount(); i++) {
             ChannelDisplaySettings settings = model.getChannel(i);
-            channels.add(new ChannelDisplayDto(i, "Channel " + i, settings.isVisible(),
+            channels.add(new ChannelDisplayDto(i, context.channelLabel(i), settings.isVisible(),
                     settings.getLut().name(), settings.getWindow().black(),
                     settings.getWindow().white(), settings.getGamma(), settings.getOpacity()));
         }

@@ -1,21 +1,16 @@
 package wsi_server.renderer;
 
 import org.springframework.stereotype.Component;
-import wsi_server.display.PixelMapper;
 import wsi_server.model.DisplaySettings;
 
 import java.awt.image.BufferedImage;
 
 /**
- * Converts interleaved 8-bit RGB pixel data into a
- * BufferedImage.
+ * Converts interleaved 8-bit RGB pixel data into a BufferedImage.
  *
  * Expected byte order:
  *
  * R, G, B, R, G, B, ...
- *
- * The PixelMapper parameter is unused because the input
- * already contains display-ready RGB values.
  */
 @Component
 public class RgbTileRenderer
@@ -28,8 +23,7 @@ public class RgbTileRenderer
             byte[] pixels,
             int width,
             int height,
-            DisplaySettings settings,
-            PixelMapper mapper
+            DisplaySettings settings
     ) {
 
         validateInput(
@@ -113,6 +107,12 @@ public class RgbTileRenderer
                 (long) width
                         * height
                         * CHANNELS;
+
+        if (expectedByteCount > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "Tile dimensions are too large."
+            );
+        }
 
         if (pixels.length < expectedByteCount) {
             throw new IllegalArgumentException(

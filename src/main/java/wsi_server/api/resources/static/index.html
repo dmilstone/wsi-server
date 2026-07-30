@@ -134,45 +134,6 @@
 
         main { position: relative; min-width: 0; min-height: 0; background: #000; }
         #viewer { width: 100%; height: 100%; background: #000; }
-
-        .scale-bar {
-            position: absolute; left: 18px; bottom: 18px; z-index: 15;
-            min-width: 72px; padding: 7px 10px 8px; border-radius: 8px;
-            color: white; background: rgba(0,0,0,.62); backdrop-filter: blur(8px);
-            pointer-events: none; user-select: none;
-        }
-        .scale-bar[hidden] { display: none; }
-        .scale-bar-label { display: block; margin-bottom: 4px; text-align: center; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-        .scale-bar-line { height: 8px; border-left: 2px solid currentColor; border-right: 2px solid currentColor; border-bottom: 3px solid currentColor; }
-
-        .slide-overview {
-            position: absolute;
-            top: 62px;
-            left: 16px;
-            z-index: 24;
-            width: min(440px, calc(100% - 32px));
-            max-height: calc(100% - 104px);
-            overflow: auto;
-            padding: 13px;
-            border: 1px solid rgba(255,255,255,.18);
-            border-radius: 11px;
-            background: rgba(12,17,23,.92);
-            box-shadow: 0 12px 34px rgba(0,0,0,.38);
-            backdrop-filter: blur(12px);
-        }
-        .slide-overview[hidden] { display: none; }
-        .slide-overview-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
-        .slide-overview-title { margin:0; font-size:14px; }
-        .slide-overview-close { width:30px; height:30px; padding:0; border-radius:7px; border:1px solid rgba(255,255,255,.15); color:white; background:rgba(255,255,255,.06); cursor:pointer; }
-        .slide-overview-close:hover { background:rgba(255,255,255,.14); }
-        .slide-overview-grid { display:grid; grid-template-columns:minmax(110px, .8fr) minmax(160px, 1.4fr); gap:12px; align-items:start; }
-        .overview-figure { margin:0; min-width:0; }
-        .overview-figure figcaption { margin-bottom:6px; color:rgba(255,255,255,.72); font-size:11px; font-weight:750; letter-spacing:.05em; text-transform:uppercase; }
-        .overview-image { display:block; width:100%; max-height:330px; object-fit:contain; border:1px solid rgba(255,255,255,.12); border-radius:8px; background:#05070a; }
-        .overview-error { min-height:92px; display:grid; place-items:center; padding:12px; border:1px dashed rgba(255,255,255,.18); border-radius:8px; color:rgba(255,255,255,.62); text-align:center; font-size:12px; }
-        .overview-error[hidden] { display:none; }
-        @media (max-width: 620px) { .slide-overview-grid { grid-template-columns:1fr; } }
-
         .viewer-badge {
             position: absolute;
             left: 16px;
@@ -276,35 +237,6 @@
         }
         .toolbar-button { min-width: 36px; min-height: 34px; padding: 5px 9px; background: transparent; border-color: transparent; color: rgba(255,255,255,.82); }
         .toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
-
-        .slide-overview {
-            position: absolute;
-            top: 62px;
-            left: 16px;
-            z-index: 24;
-            width: min(440px, calc(100% - 32px));
-            max-height: calc(100% - 104px);
-            overflow: auto;
-            padding: 13px;
-            border: 1px solid rgba(255,255,255,.18);
-            border-radius: 11px;
-            background: rgba(12,17,23,.92);
-            box-shadow: 0 12px 34px rgba(0,0,0,.38);
-            backdrop-filter: blur(12px);
-        }
-        .slide-overview[hidden] { display: none; }
-        .slide-overview-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
-        .slide-overview-title { margin:0; font-size:14px; }
-        .slide-overview-close { width:30px; height:30px; padding:0; border-radius:7px; border:1px solid rgba(255,255,255,.15); color:white; background:rgba(255,255,255,.06); cursor:pointer; }
-        .slide-overview-close:hover { background:rgba(255,255,255,.14); }
-        .slide-overview-grid { display:grid; grid-template-columns:minmax(110px, .8fr) minmax(160px, 1.4fr); gap:12px; align-items:start; }
-        .overview-figure { margin:0; min-width:0; }
-        .overview-figure figcaption { margin-bottom:6px; color:rgba(255,255,255,.72); font-size:11px; font-weight:750; letter-spacing:.05em; text-transform:uppercase; }
-        .overview-image { display:block; width:100%; max-height:330px; object-fit:contain; border:1px solid rgba(255,255,255,.12); border-radius:8px; background:#05070a; }
-        .overview-error { min-height:92px; display:grid; place-items:center; padding:12px; border:1px dashed rgba(255,255,255,.18); border-radius:8px; color:rgba(255,255,255,.62); text-align:center; font-size:12px; }
-        .overview-error[hidden] { display:none; }
-        @media (max-width: 620px) { .slide-overview-grid { grid-template-columns:1fr; } }
-
         .viewer-badge { left: auto; right: 16px; top: auto; bottom: 16px; }
         .panel-reveal {
             display: none; position: absolute; top: 50%; z-index: 18; transform: translateY(-50%);
@@ -316,36 +248,15 @@
         #reveal-right { right: 0; border-right: 0; border-radius: 9px 0 0 9px; }
         .workspace.left-collapsed #reveal-left, .workspace.right-collapsed #reveal-right { display: block; }
         .panel-reveal:hover { background: var(--accent); }
-        .image-info { margin: 10px 10px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); overflow: hidden; }
+        .image-info { margin: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
         .image-info[hidden] { display: none; }
-        .image-info > summary {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            min-height: 42px;
-            padding: 11px 13px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 800;
-            letter-spacing: .06em;
-            text-transform: uppercase;
-            list-style: none;
-        }
-        .image-info > summary::-webkit-details-marker { display: none; }
-        .image-info > summary::after { content: "▸"; color: var(--text-muted); font-size: 14px; transition: transform .15s ease; }
-        .image-info[open] > summary::after { transform: rotate(90deg); }
-        .image-info > summary:hover { color: var(--text); background: var(--surface-hover); }
-        .image-info-body { padding: 0 13px 13px; border-top: 1px solid var(--border); }
-        .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; margin: 12px 0 0; font-size: 12px; }
+        .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; margin: 0; font-size: 12px; }
         .info-grid dt { color: var(--text-muted); }
         .info-grid dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
         .channel-card.is-disabled { opacity: .68; }
         .channel-color { width: 13px; height: 13px; flex: 0 0 auto; border-radius: 4px; border: 1px solid rgba(255,255,255,.32); background: var(--channel-color,#aaa); box-shadow: 0 0 10px color-mix(in srgb, var(--channel-color,#aaa) 45%, transparent); }
         .channel-card .field { grid-template-columns: 60px minmax(100px,1fr) 70px 32px; }
         .field-value { min-height: 34px; padding: 7px 6px; text-align: right; color: var(--text); background: #0e151d; border: 1px solid var(--border-strong); border-radius: 7px; font-variant-numeric: tabular-nums; }
-        .display-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-        .display-actions .action { margin-top: 0; }
         .mini-reset { min-width: 30px; min-height: 30px; padding: 3px; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
         .mini-reset:hover { color: var(--text); background: var(--surface-hover); border-color: var(--border); }
         input[type="range"] { height: 28px; }
@@ -354,25 +265,7 @@
         .status-group strong { display: inline-block; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
         .status-zoom-value { width: 6.5ch; text-align: right; }
         .status-coordinate-value { width: 9ch; text-align: right; }
-        .status-pixel-value {
-            width: 48ch;
-            min-width: 48ch;
-            max-width: 48ch;
-            display: inline-flex !important;
-            align-items: center;
-            gap: 1ch;
-            overflow: hidden;
-            white-space: nowrap;
-        }
-        .pixel-channel-value {
-            width: 10ch;
-            min-width: 10ch;
-            max-width: 10ch;
-            display: inline-block;
-            text-align: right;
-            font-variant-numeric: tabular-nums;
-            font-feature-settings: "tnum" 1;
-        }
+        .status-pixel-value { width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .status-separator { width: 1px; height: 14px; flex: 0 0 auto; background: var(--border); }
         .presentation-mode { grid-template-rows: 0 minmax(0,1fr) 0; }
         .presentation-mode .app-header, .presentation-mode .status-bar { visibility: hidden; overflow: hidden; }
@@ -397,24 +290,6 @@
             .status-bar { min-height: 34px; }
             .status-help { display: none; }
         }
-    
-        .overview-image-button {
-            display:block; width:100%; padding:0; border:0; border-radius:8px;
-            background:transparent; cursor:zoom-in; text-align:inherit;
-        }
-        .overview-image-button[hidden] { display:none; }
-        .overview-image-button:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
-        .image-lightbox {
-            position:absolute; inset:0; z-index:40; display:grid; grid-template-rows:auto minmax(0,1fr);
-            padding:16px; background:rgba(0,0,0,.86); backdrop-filter:blur(8px);
-        }
-        .image-lightbox[hidden] { display:none; }
-        .image-lightbox-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
-        .image-lightbox-title { margin:0; color:white; font-size:15px; }
-        .image-lightbox-close { width:36px; height:36px; padding:0; border-radius:8px; border:1px solid rgba(255,255,255,.22); color:white; background:rgba(255,255,255,.08); cursor:pointer; font-size:22px; }
-        .image-lightbox-close:hover { background:rgba(255,255,255,.16); }
-        .image-lightbox-stage { min-width:0; min-height:0; display:grid; place-items:center; overflow:auto; }
-        .image-lightbox-image { display:block; max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain; background:#05070a; }
     </style>
 </head>
 <body>
@@ -443,20 +318,17 @@
             <div class="panel-title-row"><h2>Sample images</h2><button class="panel-toggle" data-collapse="left" title="Hide image browser" aria-label="Hide image browser">‹</button></div>
             <div id="directory" class="muted"></div>
         </div>
-        <details id="image-info" class="image-info" hidden>
-            <summary>Image information</summary>
-            <div class="image-info-body">
-                <dl class="info-grid">
-                    <dt>Name</dt><dd id="info-name">—</dd>
-                    <dt>Dimensions</dt><dd id="info-size">—</dd>
-                    <dt>Channels</dt><dd id="info-channels">—</dd>
-                    <dt>Levels</dt><dd id="info-levels">—</dd>
-                    <dt>Tile size</dt><dd id="info-tile">—</dd>
-                    <dt>Pixel size</dt><dd id="info-pixel-size">—</dd>
-                </dl>
-            </div>
-        </details>
         <div id="image-list"></div>
+        <section id="image-info" class="image-info" hidden>
+            <div class="panel-kicker">Image information</div>
+            <dl class="info-grid">
+                <dt>Name</dt><dd id="info-name">—</dd>
+                <dt>Dimensions</dt><dd id="info-size">—</dd>
+                <dt>Channels</dt><dd id="info-channels">—</dd>
+                <dt>Levels</dt><dd id="info-levels">—</dd>
+                <dt>Tile size</dt><dd id="info-tile">—</dd>
+            </dl>
+        </section>
     </aside>
     <div id="left-resizer" class="resize-handle" role="separator" aria-label="Resize image browser"></div>
     <main aria-label="Whole-slide image viewer">
@@ -464,44 +336,11 @@
         <div class="viewer-toolbar" aria-label="Viewer tools">
             <button id="home-view" class="toolbar-button" title="Home view" aria-label="Home view">⌂</button>
             <button id="fit-view" class="toolbar-button" title="Fit image" aria-label="Fit image">□</button>
-            <button id="slide-overview-button" class="toolbar-button" title="Show slide label and thumbnail overview" aria-label="Show slide label and thumbnail overview" disabled>▣</button>
             <button id="full-screen" class="toolbar-button" title="Browser full screen" aria-label="Browser full screen">⛶</button>
         </div>
-        <section id="slide-overview" class="slide-overview" hidden aria-label="Slide label and thumbnail overview">
-            <div class="slide-overview-header">
-                <h2 class="slide-overview-title">Slide overview</h2>
-                <button id="slide-overview-close" class="slide-overview-close" type="button" aria-label="Close slide overview">×</button>
-            </div>
-            <div class="slide-overview-grid">
-                <figure class="overview-figure">
-                    <figcaption>Slide label</figcaption>
-                    <button id="slide-label-open" class="overview-image-button" type="button" aria-label="Open slide label in a larger viewer">
-                        <img id="slide-label-image" class="overview-image" alt="Slide label">
-                    </button>
-                    <div id="slide-label-error" class="overview-error" hidden>Slide label is unavailable.</div>
-                </figure>
-                <figure class="overview-figure">
-                    <figcaption>Whole-slide thumbnail overview</figcaption>
-                    <button id="slide-thumbnail-open" class="overview-image-button" type="button" aria-label="Open whole-slide thumbnail overview in a larger viewer">
-                        <img id="slide-thumbnail-image" class="overview-image" alt="Thumbnail overview of the entire glass slide">
-                    </button>
-                    <div id="slide-thumbnail-error" class="overview-error" hidden>Thumbnail overview is unavailable for this slide.</div>
-                </figure>
-            </div>
-        </section>
-        <section id="image-lightbox" class="image-lightbox" hidden role="dialog" aria-modal="true" aria-labelledby="image-lightbox-title">
-            <div class="image-lightbox-header">
-                <h2 id="image-lightbox-title" class="image-lightbox-title">Image</h2>
-                <button id="image-lightbox-close" class="image-lightbox-close" type="button" aria-label="Close larger image view">×</button>
-            </div>
-            <div class="image-lightbox-stage">
-                <img id="image-lightbox-image" class="image-lightbox-image" alt="">
-            </div>
-        </section>
         <button id="presentation-exit" class="toolbar-button presentation-exit" aria-label="Exit presentation mode">Exit presentation</button>
         <button id="reveal-left" class="panel-reveal" type="button" aria-label="Show image browser">Show images</button>
         <button id="reveal-right" class="panel-reveal" type="button" aria-label="Show display controls">Show channels</button>
-        <div id="scale-bar" class="scale-bar" hidden aria-label="Image scale"><span id="scale-bar-label" class="scale-bar-label"></span><div id="scale-bar-line" class="scale-bar-line"></div></div>
         <div class="viewer-badge">Drag to pan · Scroll to zoom</div>
     </main>
     <div id="right-resizer" class="resize-handle" role="separator" aria-label="Resize display controls"></div>
@@ -510,7 +349,7 @@
             <div class="panel-kicker">Display</div>
             <div class="panel-title-row"><h2>Channels</h2><button class="panel-toggle" data-collapse="right" title="Hide display controls" aria-label="Hide display controls">›</button></div>
             <div class="muted">Choose visible channels and adjust how signal is displayed.</div>
-            <div class="display-actions"><button id="reset" class="action" disabled>Reset display</button><button id="recompute-auto" class="action" disabled>Recompute auto</button></div>
+            <button id="reset" class="action" disabled>Reset automatic display</button>
         </div>
         <div id="channels"></div>
     </aside>
@@ -535,32 +374,16 @@
     let updateTimer;
     let updateSequence = 0;
     const STORAGE_PREFIX = "wsi.viewer.v1";
-    const DISPLAY_CALIBRATION_VERSION = 3;
 
     const statusElement = document.getElementById("status");
     const imageListElement = document.getElementById("image-list");
     const channelsElement = document.getElementById("channels");
     const resetButton = document.getElementById("reset");
-    const recomputeAutoButton = document.getElementById("recompute-auto");
-    const imageInfoElement = document.getElementById("image-info");
     const workspace = document.querySelector(".workspace");
     const zoomStatus = document.getElementById("status-zoom");
     const xStatus = document.getElementById("status-x");
     const yStatus = document.getElementById("status-y");
     const pixelStatus = document.getElementById("status-pixel");
-    const scaleBar = document.getElementById("scale-bar");
-    const scaleBarLabel = document.getElementById("scale-bar-label");
-    const scaleBarLine = document.getElementById("scale-bar-line");
-    const slideOverviewButton = document.getElementById("slide-overview-button");
-    const slideOverview = document.getElementById("slide-overview");
-    const slideLabelImage = document.getElementById("slide-label-image");
-    const slideThumbnailImage = document.getElementById("slide-thumbnail-image");
-    const imageLightbox = document.getElementById("image-lightbox");
-    const imageLightboxImage = document.getElementById("image-lightbox-image");
-    const imageLightboxTitle = document.getElementById("image-lightbox-title");
-    let imageLightboxReturnFocus = null;
-    let overviewLoadedImageId = null;
-    let overviewRequestGeneration = 0;
     let pixelSampleGeneration = 0;
     let latestPixelPosition = null;
     const pixelBlockCache = new Map();
@@ -581,7 +404,6 @@
 
     async function initialize() {
         try {
-            imageInfoElement.open = localStorage.getItem(`${STORAGE_PREFIX}.imageInfoOpen`) !== "closed";
             const result = await request("/api/images");
             document.getElementById("directory").textContent = result.directory;
             renderImageList(result.images);
@@ -632,8 +454,6 @@
             statusElement.textContent = `Opening ${image.name}…`;
             clearTimeout(updateTimer);
             updateSequence++;
-            closeImageLightbox(false);
-            prepareSlideOverviewForImageChange();
             selectedImage = image;
             clearPixelReadout();
             document.querySelectorAll(".image-button").forEach(button =>
@@ -653,17 +473,13 @@
             }
             localStorage.setItem(`${STORAGE_PREFIX}.selectedImage`, image.id);
             document.getElementById("selected-name").textContent = image.name;
-            imageInfoElement.hidden = false;
+            document.getElementById("image-info").hidden = false;
             document.getElementById("info-name").textContent = image.name;
             document.getElementById("info-size").textContent = `${metadata.width.toLocaleString()} × ${metadata.height.toLocaleString()} px`;
             document.getElementById("info-channels").textContent = metadata.channels;
             document.getElementById("info-levels").textContent = metadata.resolutionCount;
             document.getElementById("info-tile").textContent = `${metadata.tileSize} px`;
-            document.getElementById("info-pixel-size").textContent = formatPixelSize(metadata);
             resetButton.disabled = false;
-            recomputeAutoButton.disabled = false;
-            slideOverviewButton.disabled = false;
-            if (!slideOverview.hidden) refreshSlideOverview();
             renderChannels();
             openViewer();
             statusElement.textContent = `${metadata.width} × ${metadata.height} · ${metadata.channels} channels`;
@@ -671,84 +487,6 @@
             showError(error);
         }
     }
-
-    function prepareSlideOverviewForImageChange() {
-        overviewLoadedImageId = null;
-        overviewRequestGeneration++;
-        for (const [imageElement, errorElement] of [
-            [slideLabelImage, document.getElementById("slide-label-error")],
-            [slideThumbnailImage, document.getElementById("slide-thumbnail-error")]
-        ]) {
-            imageElement.onload = null;
-            imageElement.onerror = null;
-            imageElement.removeAttribute("src");
-            imageElement.closest(".overview-image-button").hidden = true;
-            errorElement.hidden = true;
-        }
-    }
-
-    function setOverviewImage(imageElement, errorElement, url, requestGeneration) {
-        const openButton = imageElement.closest(".overview-image-button");
-        errorElement.hidden = true;
-        openButton.hidden = true;
-        imageElement.onload = () => {
-            if (requestGeneration !== overviewRequestGeneration) return;
-            errorElement.hidden = true;
-            openButton.hidden = false;
-        };
-        imageElement.onerror = () => {
-            if (requestGeneration !== overviewRequestGeneration) return;
-            openButton.hidden = true;
-            errorElement.hidden = false;
-            if (!imageLightbox.hidden && imageLightboxImage.src === imageElement.src) closeImageLightbox(false);
-        };
-        imageElement.src = url;
-    }
-
-    function openImageLightbox(sourceImage, title, trigger) {
-        if (!sourceImage?.src || sourceImage.hidden) return;
-        imageLightboxReturnFocus = trigger || document.activeElement;
-        imageLightboxTitle.textContent = title;
-        imageLightboxImage.src = sourceImage.src;
-        imageLightboxImage.alt = sourceImage.alt;
-        imageLightbox.hidden = false;
-        document.getElementById("image-lightbox-close").focus();
-    }
-
-    function closeImageLightbox(restoreFocus = true) {
-        if (imageLightbox.hidden) return;
-        imageLightbox.hidden = true;
-        imageLightboxImage.removeAttribute("src");
-        if (restoreFocus) imageLightboxReturnFocus?.focus?.();
-        imageLightboxReturnFocus = null;
-    }
-
-    function refreshSlideOverview() {
-        if (!selectedImage || !display) return;
-        if (overviewLoadedImageId === selectedImage.id
-                && slideLabelImage.getAttribute("src")
-                && slideThumbnailImage.getAttribute("src")) return;
-        overviewLoadedImageId = selectedImage.id;
-        const requestGeneration = ++overviewRequestGeneration;
-        const imageId = encodeURIComponent(selectedImage.id);
-        setOverviewImage(slideLabelImage, document.getElementById("slide-label-error"),
-                `/api/images/${imageId}/label.png`, requestGeneration);
-        setOverviewImage(slideThumbnailImage, document.getElementById("slide-thumbnail-error"),
-                `/api/images/${imageId}/thumbnail.png`, requestGeneration);
-    }
-
-    function setSlideOverviewVisible(visible) {
-        slideOverview.hidden = !visible;
-        slideOverviewButton.setAttribute("aria-pressed", String(visible));
-        if (visible) refreshSlideOverview();
-    }
-
-    slideOverviewButton.addEventListener("click", () => setSlideOverviewVisible(slideOverview.hidden));
-    document.getElementById("slide-overview-close").addEventListener("click", () => setSlideOverviewVisible(false));
-    document.getElementById("slide-label-open").addEventListener("click", event => openImageLightbox(slideLabelImage, "Slide label", event.currentTarget));
-    document.getElementById("slide-thumbnail-open").addEventListener("click", event => openImageLightbox(slideThumbnailImage, "Whole-slide thumbnail overview", event.currentTarget));
-    document.getElementById("image-lightbox-close").addEventListener("click", closeImageLightbox);
-    imageLightbox.addEventListener("click", event => { if (event.target === imageLightbox) closeImageLightbox(); });
 
     function tileSource() {
         const imageId = encodeURIComponent(selectedImage.id);
@@ -860,13 +598,10 @@
         pixelStatus.textContent = "—";
     }
 
-    function displayPixelValues(values) {
-        pixelStatus.replaceChildren(...values.map((value, index) => {
-            const cell = document.createElement("span");
-            cell.className = "pixel-channel-value";
-            cell.textContent = `C${index} ${Number(value).toLocaleString()}`;
-            return cell;
-        }));
+    function formatPixelValues(values) {
+        return values
+            .map((value, index) => `C${index} ${Number(value).toLocaleString()}`)
+            .join(" · ");
     }
 
     function blockKey(imageId, blockX, blockY) {
@@ -899,7 +634,7 @@
         const values = valuesFromBlock(block, x, y);
         if (!values) return false;
         lastSampledPixel = key;
-        displayPixelValues(values);
+        pixelStatus.textContent = formatPixelValues(values);
         return true;
     }
 
@@ -1112,26 +847,8 @@
         }
     });
 
-    recomputeAutoButton.addEventListener("click", async () => {
-        try {
-            recomputeAutoButton.disabled = true;
-            statusElement.textContent = "Recomputing background-aware automatic contrast…";
-            display = await request(`/api/images/${encodeURIComponent(selectedImage.id)}/display/recompute-auto`, {method: "POST"});
-            saveLocalDisplay(selectedImage.id, display);
-            renderChannels();
-            openViewer(true);
-            statusElement.textContent = "Automatic contrast recomputed from sampled image signal";
-        } catch (error) {
-            showError(error);
-        } finally {
-            recomputeAutoButton.disabled = false;
-            slideOverviewButton.disabled = false;
-            if (!slideOverview.hidden) refreshSlideOverview();
-        }
-    });
-
     function preferenceKey(imageId) {
-        return `${STORAGE_PREFIX}.display.v${DISPLAY_CALIBRATION_VERSION}.${imageId}`;
+        return `${STORAGE_PREFIX}.display.${imageId}`;
     }
 
     function saveLocalDisplay(imageId, value) {
@@ -1169,51 +886,6 @@
         statusElement.textContent = `Error: ${error.message}`;
     }
 
-    function formatPixelSize(imageMetadata) {
-        const x = Number(imageMetadata?.micronsPerPixelX);
-        const y = Number(imageMetadata?.micronsPerPixelY);
-        if (!(x > 0)) return "Not calibrated";
-        if (y > 0 && Math.abs(x - y) / Math.max(x, y) > 0.001) {
-            return `${x.toFixed(4)} × ${y.toFixed(4)} µm/px`;
-        }
-        return `${x.toFixed(4)} µm/px`;
-    }
-
-    function niceScaleLength(targetMicrons) {
-        if (!(targetMicrons > 0)) return null;
-        const exponent = Math.floor(Math.log10(targetMicrons));
-        const power = 10 ** exponent;
-        const normalized = targetMicrons / power;
-        const factor = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
-        return factor * power;
-    }
-
-    function updateScaleBar() {
-        const micronsPerPixel = Number(metadata?.micronsPerPixelX);
-        if (!viewer || !viewer.viewport || !viewer.world.getItemCount() || !(micronsPerPixel > 0)) {
-            scaleBar.hidden = true;
-            return;
-        }
-        const tiledImage = viewer.world.getItemAt(0);
-        const imageZoom = tiledImage.viewportToImageZoom(viewer.viewport.getZoom(true));
-        if (!(imageZoom > 0)) {
-            scaleBar.hidden = true;
-            return;
-        }
-        const micronsPerScreenPixel = micronsPerPixel / imageZoom;
-        const physicalLength = niceScaleLength(micronsPerScreenPixel * 120);
-        if (!(physicalLength > 0)) {
-            scaleBar.hidden = true;
-            return;
-        }
-        const width = Math.max(45, Math.min(180, physicalLength / micronsPerScreenPixel));
-        scaleBarLine.style.width = `${width}px`;
-        scaleBarLabel.textContent = physicalLength >= 1000
-                ? `${Number((physicalLength / 1000).toPrecision(3))} mm`
-                : `${Number(physicalLength.toPrecision(3))} µm`;
-        scaleBar.hidden = false;
-    }
-
     function updateViewerStatus() {
         if (!viewer || !viewer.viewport || !viewer.world.getItemCount()) return;
 
@@ -1225,7 +897,6 @@
         const homeZoom = viewer.viewport.getHomeZoom();
         const displayZoom = homeZoom > 0 ? currentZoom / homeZoom : 1;
         zoomStatus.textContent = `${displayZoom.toFixed(displayZoom < 10 ? 2 : 1)}×`;
-        updateScaleBar();
     }
 
     function setPanelCollapsed(side, collapsed) {
@@ -1238,10 +909,6 @@
             : (side === "left" ? "Hide image browser" : "Hide display controls");
         setTimeout(() => viewer?.viewport?.resize(), 0);
     }
-
-    imageInfoElement.addEventListener("toggle", () => localStorage.setItem(
-        `${STORAGE_PREFIX}.imageInfoOpen`, imageInfoElement.open ? "open" : "closed"
-    ));
 
     document.getElementById("toggle-left").addEventListener("click", () => setPanelCollapsed("left", !workspace.classList.contains("left-collapsed")));
     document.getElementById("toggle-right").addEventListener("click", () => setPanelCollapsed("right", !workspace.classList.contains("right-collapsed")));
@@ -1296,12 +963,7 @@
     }
     document.getElementById("presentation").addEventListener("click", () => setPresentationMode(!document.body.classList.contains("presentation-mode")));
     document.getElementById("presentation-exit").addEventListener("click", () => setPresentationMode(false));
-    document.addEventListener("keydown", event => {
-        if (event.key !== "Escape") return;
-        if (!imageLightbox.hidden) closeImageLightbox();
-        else if (!slideOverview.hidden) setSlideOverviewVisible(false);
-        else if (document.body.classList.contains("presentation-mode")) setPresentationMode(false);
-    });
+    document.addEventListener("keydown", event => { if (event.key === "Escape" && document.body.classList.contains("presentation-mode")) setPresentationMode(false); });
 
     initialize();
 </script>

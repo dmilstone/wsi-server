@@ -1,6 +1,7 @@
 package wsi_server.renderer;
 
 import org.springframework.stereotype.Component;
+import wsi_server.display.AutoContrastPixelMapper;
 import wsi_server.display.PixelMapper;
 import wsi_server.model.DisplaySettings;
 
@@ -9,9 +10,6 @@ import java.awt.image.BufferedImage;
 /**
  * Converts unsigned 16-bit fluorescence pixels into a
  * display image.
- *
- * Intensity-to-color conversion is delegated to the
- * supplied PixelMapper.
  */
 @Component
 public class FluorescenceTileRenderer
@@ -24,51 +22,65 @@ public class FluorescenceTileRenderer
             byte[] pixels,
             int width,
             int height,
-            DisplaySettings settings,
-            PixelMapper mapper
+            DisplaySettings settings
     ) {
+        validateInput(pixels, width, height, settings);
 
-        validateInput(
+        int minimum = 0xffff;
+        int maximum = 0;
+        int pixelCount = width * height;
+
+        for (int i = 0; i < pixelCount; i++) {
+            int value16 = readUint16(
+                    pixels,
+                    i * BYTES_PER_PIXEL,
+                    settings.littleEndian()
+            );
+            minimum = Math.min(minimum, value16);
+            maximum = Math.max(maximum, value16);
+        }
+
+        return render(
                 pixels,
                 width,
                 height,
                 settings,
-                mapper
+                new AutoContrastPixelMapper(minimum, maximum)
+        );
+    }
+
+    /**
+     * Renders fluorescence pixels using the caller-supplied display mapping.
+     * This overload is used for persistent slide-wide window, LUT and gamma
+     * settings.
+     */
+    public BufferedImage render(
+            byte[] pixels,
+            int width,
+            int height,
+            DisplaySettings settings,
+            PixelMapper mapper
+    ) {
+        validateInput(pixels, width, height, settings);
+        if (mapper == null) {
+            throw new IllegalArgumentException("Pixel mapper is required.");
+        }
+
+        int pixelCount = width * height;
+        BufferedImage image = new BufferedImage(
+                width,
+                height,
+                BufferedImage.TYPE_INT_RGB
         );
 
-        BufferedImage image =
-                new BufferedImage(
-                        width,
-                        height,
-                        BufferedImage.TYPE_INT_RGB
-                );
-
-        int pixelCount =
-                width * height;
-
         for (int i = 0; i < pixelCount; i++) {
-
-            int value16 =
-                    readUint16(
-                            pixels,
-                            i * BYTES_PER_PIXEL,
-                            settings.littleEndian()
-                    );
-
-            int rgb =
-                    mapper.map(value16);
-
-            int x =
-                    i % width;
-
-            int y =
-                    i / width;
-
-            image.setRGB(
-                    x,
-                    y,
-                    rgb
+            int value16 = readUint16(
+                    pixels,
+                    i * BYTES_PER_PIXEL,
+                    settings.littleEndian()
             );
+            int rgb = mapper.map(value16);
+            image.setRGB(i % width, i / width, rgb);
         }
 
         return image;
@@ -99,8 +111,7 @@ public class FluorescenceTileRenderer
             byte[] pixels,
             int width,
             int height,
-            DisplaySettings settings,
-            PixelMapper mapper
+            DisplaySettings settings
     ) {
 
         if (pixels == null) {
@@ -115,30 +126,25 @@ public class FluorescenceTileRenderer
             );
         }
 
-        if (mapper == null) {
-            throw new IllegalArgumentException(
-                    "Pixel mapper cannot be null."
-            );
-        }
-
         if (width <= 0 || height <= 0) {
             throw new IllegalArgumentException(
                     "Image dimensions must be positive."
             );
         }
 
-        long expectedByteCount =
+        long expected =
                 (long) width
                         * height
                         * BYTES_PER_PIXEL;
 
-        if (pixels.length < expectedByteCount) {
+        if (pixels.length < expected) {
             throw new IllegalArgumentException(
-                    "Expected at least "
-                            + expectedByteCount
+                    "Expected "
+                            + expected
                             + " bytes but received "
                             + pixels.length
             );
         }
     }
+
 }
