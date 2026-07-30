@@ -9,249 +9,69 @@ class AnnotationAdapter {
 
     constructor(annotator) {
         this.annotator = annotator;
-
-        this.loadGeneration = 0;
-        this.currentImageId = null;
-        this.currentCollection = null;
-
         this.metadataById = new Map();
         this.backendIdByClientId = new Map();
         this.nonDisplayedAnnotations = [];
-
-        this.saveTimer = null;
-        this.saveDelayMs = 400;
-        this.changeVersion = 0;
-        this.savedVersion = 0;
-        this.saveInProgress = false;
-        this.activeSavePromise = null;
-        this.saveRequested = false;
         this.suppressEvents = false;
         this.ignoredDeletedAnnotationIds = new Set();
+
+        // AnnotationStore owns lifecycle and persistence; this adapter only maps
+        // between the backend document and Annotorious' geometry model.
+        this.store = new AnnotationStore({
+            reconcileSavedCollection: (_local, saved) => {
+                this.reconcileSavedMetadata(saved);
+                return this.toBackendCollection();
+            }
+        });
+        this.store.subscribe("collectionChanged", event => {
+            if (event.reason === "imageChanged") {
+                this.metadataById.clear();
+                this.backendIdByClientId.clear();
+                this.nonDisplayedAnnotations = [];
+                this.replaceAnnotoriousAnnotations([]);
+            } else if (event.reason === "loaded" || event.reason === "saved") {
+                this.applyBackendCollection(event.collection);
+                console.info(`AnnotationAdapter: ${event.reason} annotations`, event.collection);
+            }
+        });
     }
 
     async loadCurrentImage(imageId) {
-        const nextImageId = imageId || null;
-
-        // Do not discard a pending edit merely because the user changed slides.
-        if (this.currentImageId && this.currentImageId !== nextImageId && this.hasUnsavedChanges()) {
-            await this.flushSave();
-        }
-
-        const generation = ++this.loadGeneration;
-        this.cancelSaveTimer();
-        this.currentImageId = nextImageId;
-        this.currentCollection = null;
-        this.metadataById.clear();
-        this.backendIdByClientId.clear();
-        this.nonDisplayedAnnotations = [];
-        this.changeVersion = 0;
-        this.savedVersion = 0;
-
-        this.replaceAnnotoriousAnnotations([]);
-
-        if (!this.currentImageId) {
-            return;
-        }
-
-        try {
-            const response = await fetch(
-                `/api/images/${encodeURIComponent(this.currentImageId)}/annotations`,
-                { headers: { "Accept": "application/json" } }
-            );
-
-            if (!response.ok) {
-                throw new Error(await this.responseError(response));
-            }
-
-            const collection = await response.json();
-
-            // Ignore a response that completed after another image was selected.
-            if (generation !== this.loadGeneration || collection.imageId !== this.currentImageId) {
-                return;
-            }
-
-            this.applyBackendCollection(collection);
-
-            console.info(
-                `AnnotationAdapter: loaded ${this.annotator.getAnnotations().length} annotation${this.annotator.getAnnotations().length === 1 ? "" : "s"}`,
-                collection
-            );
-        } catch (error) {
-            if (generation !== this.loadGeneration) {
-                return;
-            }
-
-            console.error(
-                `AnnotationAdapter: unable to load annotations for image ${this.currentImageId}`,
-                error
-            );
-        }
+        await this.store.load(imageId);
     }
 
     annotationCreated(annotation) {
         if (this.suppressEvents) return;
         console.info("AnnotationAdapter: annotation created", annotation);
-        this.scheduleSave();
+        this.collectionEdited();
     }
 
     annotationUpdated(annotation, previous) {
         if (this.suppressEvents) return;
         console.info("AnnotationAdapter: annotation updated", { annotation, previous });
-        this.scheduleSave();
+        this.collectionEdited();
     }
 
     annotationDeleted(annotation) {
         const annotationId = annotation?.id;
-
-        // Annotorious may emit delete events asynchronously after a programmatic
-        // clear. Those are UI housekeeping events, not user edits.
-        if (annotationId && this.ignoredDeletedAnnotationIds.delete(annotationId)) {
-            return;
-        }
-
+        if (annotationId && this.ignoredDeletedAnnotationIds.delete(annotationId)) return;
         if (this.suppressEvents) return;
         console.info("AnnotationAdapter: annotation deleted", annotation);
-        this.scheduleSave();
+        this.collectionEdited();
     }
 
-    scheduleSave() {
-        if (!this.currentImageId || !this.currentCollection) {
-            console.warn("AnnotationAdapter: edit was not saved because no annotation collection is loaded");
-            return;
-        }
-
-        this.changeVersion += 1;
-        this.saveRequested = true;
-        this.cancelSaveTimer();
-        this.saveTimer = window.setTimeout(() => {
-            this.saveTimer = null;
-            void this.saveCurrentImage();
-        }, this.saveDelayMs);
-    }
-
-    async flushSave() {
-        this.cancelSaveTimer();
-
-        // Wait for any request already in flight. Without this, switching images
-        // can reset the adapter state before the previous image's PUT completes.
-        if (this.activeSavePromise) {
-            await this.activeSavePromise;
-        }
-
-        while (this.hasUnsavedChanges()) {
-            await this.saveCurrentImage();
-            if (this.activeSavePromise) {
-                await this.activeSavePromise;
-            }
-        }
-    }
-
-    hasUnsavedChanges() {
-        return this.saveRequested || this.changeVersion !== this.savedVersion;
-    }
-
-    async saveCurrentImage() {
-        if (!this.currentImageId || !this.currentCollection) {
-            return;
-        }
-
-        if (this.activeSavePromise) {
-            this.saveRequested = true;
-            return this.activeSavePromise;
-        }
-
-        const imageId = this.currentImageId;
-        const generation = this.loadGeneration;
-        const versionBeingSaved = this.changeVersion;
-        const document = this.toBackendCollection();
-
-        this.saveInProgress = true;
-        this.saveRequested = false;
-
-        const request = (async () => {
-            try {
-                const response = await fetch(
-                    `/api/images/${encodeURIComponent(imageId)}/annotations`,
-                    {
-                        method: "PUT",
-                        headers: {
-                            "Accept": "application/json",
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify(document)
-                    }
-                );
-
-                if (!response.ok) {
-                    throw new Error(await this.responseError(response));
-                }
-
-                const savedCollection = await response.json();
-
-                // The PUT belongs to the image captured above. Even if the user has
-                // switched images, the server-side save is complete. Only mutate
-                // the visible adapter state when this is still the active image.
-                if (generation === this.loadGeneration && imageId === this.currentImageId) {
-                    this.savedVersion = Math.max(this.savedVersion, versionBeingSaved);
-
-                    if (this.changeVersion === versionBeingSaved && !this.saveRequested) {
-                        // Rebuild from the saved backend document so annotations created
-                        // in this session receive the same canonical UUID-backed model,
-                        // geometry bounds and edit behavior as annotations loaded later.
-                        // Programmatic delete events are filtered by
-                        // replaceAnnotoriousAnnotations().
-                        this.applyBackendCollection(savedCollection);
-                        this.savedVersion = this.changeVersion;
-                    } else {
-                        // A newer browser edit occurred while this PUT was in flight.
-                        // Keep that visible geometry intact and only reconcile IDs and
-                        // timestamps before scheduling the next save.
-                        this.currentCollection = savedCollection;
-                        this.reconcileSavedMetadata(savedCollection);
-                        this.saveRequested = true;
-                    }
-                }
-
-                console.info(
-                    `AnnotationAdapter: saved ${savedCollection.annotations?.length || 0} annotation${savedCollection.annotations?.length === 1 ? "" : "s"}`,
-                    savedCollection
-                );
-            } catch (error) {
-                if (generation === this.loadGeneration && imageId === this.currentImageId) {
-                    this.saveRequested = true;
-                }
-                console.error(`AnnotationAdapter: unable to save annotations for image ${imageId}`, error);
-            } finally {
-                this.saveInProgress = false;
-                this.activeSavePromise = null;
-
-                if (
-                    generation === this.loadGeneration &&
-                    imageId === this.currentImageId &&
-                    this.hasUnsavedChanges()
-                ) {
-                    this.cancelSaveTimer();
-                    this.saveTimer = window.setTimeout(() => {
-                        this.saveTimer = null;
-                        void this.saveCurrentImage();
-                    }, this.saveDelayMs);
-                }
-            }
-        })();
-
-        this.activeSavePromise = request;
-        return request;
+    collectionEdited() {
+        this.store.updateCollection(this.toBackendCollection());
     }
 
     applyBackendCollection(collection) {
-        this.currentCollection = collection;
         this.indexBackendMetadata(collection);
 
         const displayed = [];
         this.nonDisplayedAnnotations = [];
 
         for (const annotation of collection.annotations || []) {
-            if (annotation.visible === false) {
+            if (annotation.visible === false || !this.isSupportedBackendAnnotation(annotation)) {
                 this.nonDisplayedAnnotations.push(annotation);
                 continue;
             }
@@ -344,11 +164,11 @@ class AnnotationAdapter {
         ];
 
         return {
-            version: this.currentCollection?.version || 1,
-            imageId: this.currentImageId,
-            slidePath: this.currentCollection?.slidePath || null,
-            userId: this.currentCollection?.userId || null,
-            modifiedAt: this.currentCollection?.modifiedAt || null,
+            version: this.store.currentCollection?.version || 1,
+            imageId: this.store.currentImageId,
+            slidePath: this.store.currentCollection?.slidePath || null,
+            userId: this.store.currentCollection?.userId || null,
+            modifiedAt: this.store.currentCollection?.modifiedAt || null,
             annotations
         };
     }
@@ -428,13 +248,6 @@ class AnnotationAdapter {
         };
     }
 
-    cancelSaveTimer() {
-        if (this.saveTimer !== null) {
-            window.clearTimeout(this.saveTimer);
-            this.saveTimer = null;
-        }
-    }
-
     isUuid(value) {
         return typeof value === "string" &&
             /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -443,17 +256,5 @@ class AnnotationAdapter {
     positiveNumber(value, fallback) {
         const number = Number(value);
         return Number.isFinite(number) && number > 0 ? number : fallback;
-    }
-
-    async responseError(response) {
-        const text = await response.text();
-        if (!text) return `${response.status} ${response.statusText}`;
-
-        try {
-            const body = JSON.parse(text);
-            return body.detail || body.message || body.title || text;
-        } catch {
-            return text;
-        }
     }
 }

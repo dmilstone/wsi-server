@@ -1,8 +1,8 @@
 /**
  * Annotorious evaluation integration.
  *
- * Annotorious owns drawing and editing behavior. AnnotationAdapter owns the
- * conversion between Annotorious geometry and the WSI server annotation API.
+ * Annotorious owns drawing and editing behavior. AnnotationAdapter converts
+ * geometry, while AnnotationStore owns annotation state and persistence.
  */
 class AnnotoriousSpike {
 
@@ -49,6 +49,11 @@ class AnnotoriousSpike {
 
         this.annotator.on("deleteAnnotation", annotation => {
             this.adapter.annotationDeleted(annotation);
+        });
+
+        this.annotator.on("selectionChanged", selected => {
+            const annotation = Array.isArray(selected) ? selected[0] : selected;
+            this.adapter.store.setSelectedAnnotationId(annotation?.id || null);
         });
 
         this.toggleButton.disabled = false;
