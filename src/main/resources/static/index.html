@@ -7,6 +7,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@latest/dist/annotorious-openseadragon.css">
     <script src="https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@latest/dist/annotorious-openseadragon.js"></script>
+    <script src="/annotation-adapter.js"></script>
     <script src="/annotorious-spike.js"></script>
     <style>
         :root {
@@ -818,7 +819,11 @@
             viewer.addHandler("animation", updateViewerStatus);
             viewer.addHandler("zoom", updateViewerStatus);
             viewer.addHandler("open", updateViewerStatus);
-            annotationSpike = new AnnotoriousSpike(viewer, document.getElementById("annotation-mode"));
+            annotationSpike = new AnnotoriousSpike(
+                viewer,
+                document.getElementById("annotation-mode"),
+                () => selectedImage?.id
+            );
             // Use native pointer events here rather than OpenSeadragon's canvas-move
             // event, which is not emitted consistently across browsers/configurations.
             const updatePointerCoordinates = event => {

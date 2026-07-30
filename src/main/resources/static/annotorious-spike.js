@@ -1,15 +1,17 @@
 /**
- * Temporary Annotorious evaluation integration.
+ * Annotorious evaluation integration.
  *
- * This spike deliberately keeps annotations in browser memory. Persistence and
- * conversion to the WSI server annotation model will be evaluated separately.
+ * Annotorious owns drawing and editing behavior. AnnotationAdapter owns the
+ * conversion between Annotorious geometry and the WSI server annotation API.
  */
 class AnnotoriousSpike {
 
-    constructor(viewer, toggleButton) {
+    constructor(viewer, toggleButton, getCurrentImageId) {
         this.viewer = viewer;
         this.toggleButton = toggleButton;
+        this.getCurrentImageId = getCurrentImageId;
         this.annotator = null;
+        this.adapter = null;
         this.drawingEnabled = false;
 
         this.initialize();
@@ -35,20 +37,18 @@ class AnnotoriousSpike {
         });
 
         this.annotator.setDrawingTool("rectangle");
+        this.adapter = new AnnotationAdapter(this.annotator);
 
         this.annotator.on("createAnnotation", annotation => {
-            console.info("Annotorious spike: rectangle created", annotation);
+            this.adapter.annotationCreated(annotation);
         });
 
         this.annotator.on("updateAnnotation", (annotation, previous) => {
-            console.info("Annotorious spike: annotation updated", {
-                annotation,
-                previous
-            });
+            this.adapter.annotationUpdated(annotation, previous);
         });
 
         this.annotator.on("deleteAnnotation", annotation => {
-            console.info("Annotorious spike: annotation deleted", annotation);
+            this.adapter.annotationDeleted(annotation);
         });
 
         this.toggleButton.disabled = false;
@@ -59,17 +59,14 @@ class AnnotoriousSpike {
 
         this.installKeyboardShortcuts();
 
-        // Annotations from one slide must not be displayed over another during
-        // the spike. Backend loading will replace this behavior later.
         this.viewer.addHandler("open", () => {
-            this.annotator.clearAnnotations();
             this.setDrawingEnabled(false);
+            this.adapter.loadCurrentImage(this.getCurrentImageId?.());
         });
     }
 
     installKeyboardShortcuts() {
         document.addEventListener("keydown", event => {
-
             if (event.key !== "Delete" && event.key !== "Backspace") {
                 return;
             }
@@ -105,7 +102,6 @@ class AnnotoriousSpike {
         }
 
         this.drawingEnabled = Boolean(enabled);
-
         this.annotator.setDrawingEnabled(this.drawingEnabled);
 
         this.toggleButton.setAttribute(
