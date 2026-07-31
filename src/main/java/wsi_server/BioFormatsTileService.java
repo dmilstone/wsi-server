@@ -445,29 +445,89 @@ public class BioFormatsTileService {
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
-            if (context.isRgb()) {
-                int[] rgb = readRgbRegion(reader, region.x(), region.y(), region.width(), region.height());
-                BufferedImage image = new BufferedImage(region.width(), region.height(), BufferedImage.TYPE_INT_RGB);
-                image.setRGB(0, 0, region.width(), region.height(), rgb, 0, region.width());
-                return encodePng(image);
-            }
-            List<byte[]> channelPixels = new ArrayList<>();
-            List<PixelMapper> mappers = new ArrayList<>();
-            List<Double> opacities = new ArrayList<>();
-            for (int channel = 0; channel < settingsSnapshot.size(); channel++) {
-                ChannelDisplaySettings settings = settingsSnapshot.get(channel);
-                if (!settings.isVisible() || settings.getOpacity() <= 0) continue;
-                channelPixels.add(reader.openBytes(reader.getIndex(0, channel, 0),
-                        region.x(), region.y(), region.width(), region.height()));
-                mappers.add(new LinearWindowPixelMapper(settings.getWindow(), settings.getLut(), settings.getGamma()));
-                opacities.add(settings.getOpacity());
-            }
-            BufferedImage image = channelPixels.isEmpty()
-                    ? new BufferedImage(region.width(), region.height(), BufferedImage.TYPE_INT_RGB)
-                    : multichannelRenderer.render(channelPixels, region.width(), region.height(),
-                    DisplaySettings.forPixelData(reader.isLittleEndian()), mappers, opacities);
-            return encodePng(image);
+            return encodePng(renderCompositeRegion(context, reader, settingsSnapshot,
+                    region.x(), region.y(), region.width(), region.height()));
         }
+    }
+
+    /**
+     * Renders a rectangular region from resolution zero through the same reader and
+     * display pipeline used by the OpenSeadragon tiles.
+     */
+    public byte[] exportRegion(String imageId, int x, int y, int width, int height,
+                               double scale, HttpSession session) throws Exception {
+        ImageContext context = context(imageId);
+        SessionDisplayState state = sessionState(session, imageId, context);
+        List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
+        synchronized (state) {
+            for (int channel = 0; channel < state.model().getChannelCount(); channel++) {
+                settingsSnapshot.add(copySettings(state.model().getChannel(channel)));
+            }
+        }
+
+        synchronized (context) {
+            IFormatReader reader = context.reader();
+            reader.setResolution(0);
+            if (x < 0 || y < 0 || width <= 0 || height <= 0
+                    || (long) x + width > reader.getSizeX()
+                    || (long) y + height > reader.getSizeY()) {
+                throw new IllegalArgumentException("Export region must be contained within the image.");
+            }
+
+            BufferedImage image = renderCompositeRegion(context, reader, settingsSnapshot,
+                    x, y, width, height);
+            return encodePng(scale == 1.0 ? image : scaleImage(image, scale));
+        }
+    }
+
+    private BufferedImage renderCompositeRegion(ImageContext context, IFormatReader reader,
+                                                List<ChannelDisplaySettings> settings,
+                                                int x, int y, int width, int height) throws Exception {
+        if (context.isRgb()) {
+            int[] rgb = readRgbRegion(reader, x, y, width, height);
+            BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            image.setRGB(0, 0, width, height, rgb, 0, width);
+            return image;
+        }
+
+        List<byte[]> channelPixels = new ArrayList<>();
+        List<PixelMapper> mappers = new ArrayList<>();
+        List<Double> opacities = new ArrayList<>();
+        for (int channel = 0; channel < settings.size(); channel++) {
+            ChannelDisplaySettings channelSettings = settings.get(channel);
+            if (!channelSettings.isVisible() || channelSettings.getOpacity() <= 0) continue;
+            channelPixels.add(reader.openBytes(reader.getIndex(0, channel, 0), x, y, width, height));
+            mappers.add(new LinearWindowPixelMapper(channelSettings.getWindow(),
+                    channelSettings.getLut(), channelSettings.getGamma()));
+            opacities.add(channelSettings.getOpacity());
+        }
+        return channelPixels.isEmpty()
+                ? new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+                : multichannelRenderer.render(channelPixels, width, height,
+                DisplaySettings.forPixelData(reader.isLittleEndian()), mappers, opacities);
+    }
+
+    private BufferedImage scaleImage(BufferedImage source, double scale) {
+        long scaledWidth = Math.round(source.getWidth() * scale);
+        long scaledHeight = Math.round(source.getHeight() * scale);
+        if (scaledWidth < 1 || scaledHeight < 1
+                || scaledWidth > Integer.MAX_VALUE || scaledHeight > Integer.MAX_VALUE
+                || scaledWidth * scaledHeight > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Scale produces invalid export dimensions.");
+        }
+        BufferedImage scaled = new BufferedImage((int) scaledWidth, (int) scaledHeight,
+                BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = scaled.createGraphics();
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING,
+                    RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.drawImage(source, 0, 0, scaled.getWidth(), scaled.getHeight(), null);
+        } finally {
+            graphics.dispose();
+        }
+        return scaled;
     }
 
 
