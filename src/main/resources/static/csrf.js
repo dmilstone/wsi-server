@@ -22,9 +22,10 @@
                 throw new Error(text || `${response.status} ${response.statusText}`);
             }
             const csrf = await response.json();
-            csrfToken = csrf.token;
             csrfHeaderName = csrf.headerName;
-            if (!csrfToken || !csrfHeaderName) throw new Error("Invalid CSRF token response");
+            csrfToken = cookieValue("XSRF-TOKEN");
+            if (!csrfHeaderName) throw new Error("Invalid CSRF token response: headerName is absent");
+            if (!csrfToken) throw new Error("CSRF token acquisition failed: XSRF-TOKEN cookie is absent");
         })().finally(() => {
             tokenRequest = null;
         });
@@ -48,6 +49,13 @@
         const headers = new Headers(options.headers || {});
         headers.set(csrfHeaderName, csrfToken);
         return fetch(url, {...options, headers});
+    }
+
+    function cookieValue(name) {
+        const prefix = `${encodeURIComponent(name)}=`;
+        const cookie = document.cookie.split(";").map(part => part.trim())
+            .find(part => part.startsWith(prefix));
+        return cookie ? decodeURIComponent(cookie.substring(prefix.length)) : null;
     }
 
     global.WsiCsrf = {initialize: acquireToken, csrfFetch};
