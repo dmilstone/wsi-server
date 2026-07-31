@@ -288,6 +288,17 @@
         }
         .toolbar-button { min-width: 36px; min-height: 34px; padding: 5px 9px; background: transparent; border-color: transparent; color: rgba(255,255,255,.82); }
         .toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
+        .export-menu { position: relative; }
+        .export-menu > summary { list-style: none; }
+        .export-menu > summary::-webkit-details-marker { display: none; }
+        .export-menu-items {
+            position: absolute; top: calc(100% + 8px); left: 0; min-width: 170px; padding: 6px;
+            border: 1px solid rgba(255,255,255,.16); border-radius: 9px;
+            background: rgba(12,17,23,.96); box-shadow: var(--shadow);
+        }
+        .export-menu-item { width: 100%; padding: 9px 10px; text-align: left; color: white; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+        .export-menu-item:hover:not(:disabled) { background: rgba(255,255,255,.10); }
+        .export-menu-item:disabled { color: var(--text-muted); cursor: default; }
 
         .slide-overview {
             position: absolute;
@@ -478,6 +489,12 @@
             <button id="fit-view" class="toolbar-button" title="Fit image" aria-label="Fit image">□</button>
             <button id="slide-overview-button" class="toolbar-button" title="Show slide label and thumbnail overview" aria-label="Show slide label and thumbnail overview" disabled>▣</button>
             <button id="annotation-mode" class="toolbar-button" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>▱</button>
+            <details id="export-menu" class="export-menu">
+                <summary class="toolbar-button" aria-label="Export image region">Export ▾</summary>
+                <div class="export-menu-items">
+                    <button id="export-visible-region" class="export-menu-item" type="button" disabled>Visible Region</button>
+                </div>
+            </details>
             <button id="full-screen" class="toolbar-button" title="Browser full screen" aria-label="Browser full screen">⛶</button>
         </div>
         <section id="slide-overview" class="slide-overview" hidden aria-label="Slide label and thumbnail overview">
@@ -557,6 +574,7 @@
     const resetButton = document.getElementById("reset");
     const recomputeAutoButton = document.getElementById("recompute-auto");
     const imageInfoElement = document.getElementById("image-info");
+    const exportVisibleRegionButton = document.getElementById("export-visible-region");
     const workspace = document.querySelector(".workspace");
     const zoomStatus = document.getElementById("status-zoom");
     const xStatus = document.getElementById("status-x");
@@ -915,11 +933,55 @@
 
         markImageSwitchTiming(selectedImage.id, "viewer.open called");
         viewer.open(tileSource());
+        exportVisibleRegionButton.disabled = false;
         if (bounds && zoom) {
             viewer.addOnceHandler("open", () => {
                 viewer.viewport.fitBounds(bounds, true);
                 viewer.viewport.zoomTo(zoom, null, true);
             });
+        }
+    }
+
+    // Bounds are accepted separately so annotation export can reuse this path later.
+    async function exportImageBounds(bounds) {
+        if (!selectedImage || !metadata) return;
+        const left = Math.max(0, Math.floor(bounds.x));
+        const top = Math.max(0, Math.floor(bounds.y));
+        const right = Math.min(metadata.width, Math.ceil(bounds.x + bounds.width));
+        const bottom = Math.min(metadata.height, Math.ceil(bounds.y + bounds.height));
+        if (right <= left || bottom <= top) throw new Error("No image pixels are visible to export.");
+
+        const parameters = new URLSearchParams({
+            image: selectedImage.id,
+            x: String(left), y: String(top),
+            width: String(right - left), height: String(bottom - top)
+        });
+        const response = await fetch(`/export?${parameters}`);
+        if (!response.ok) throw new Error(await response.text() || `Export failed (${response.status})`);
+        const blobUrl = URL.createObjectURL(await response.blob());
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = `${selectedImage.name.replace(/\.[^.]+$/, "")}-region.png`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+    }
+
+    async function exportVisibleRegion() {
+        if (!viewer?.viewport || !viewer.world.getItemCount()) return;
+        exportVisibleRegionButton.disabled = true;
+        document.getElementById("export-menu").open = false;
+        try {
+            const viewportBounds = viewer.viewport.getBounds(true);
+            const imageBounds = viewer.world.getItemAt(0).viewportToImageRectangle(viewportBounds);
+            statusElement.textContent = "Exporting visible region at native resolution…";
+            await exportImageBounds(imageBounds);
+            statusElement.textContent = "Visible region exported.";
+        } catch (error) {
+            statusElement.textContent = error.message;
+        } finally {
+            exportVisibleRegionButton.disabled = false;
         }
     }
 
@@ -1356,6 +1418,7 @@
 
     document.getElementById("home-view").addEventListener("click", () => viewer?.viewport?.goHome());
     document.getElementById("fit-view").addEventListener("click", () => viewer?.viewport?.fitBounds(viewer.viewport.getHomeBounds(), false));
+    exportVisibleRegionButton.addEventListener("click", exportVisibleRegion);
     document.getElementById("full-screen").addEventListener("click", async () => {
         if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
         else await document.exitFullscreen();
