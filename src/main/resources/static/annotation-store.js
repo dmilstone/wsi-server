@@ -152,11 +152,11 @@ class AnnotationStore {
 
         const request = (async () => {
             try {
-                const response = await fetch(`/api/images/${encodeURIComponent(imageId)}/annotations`, WsiCsrf.withCsrf({
+                const response = await WsiCsrf.csrfFetch(`/api/images/${encodeURIComponent(imageId)}/annotations`, {
                     method: "PUT",
                     headers: { "Accept": "application/json", "Content-Type": "application/json" },
                     body: JSON.stringify(document)
-                }));
+                });
                 if (!response.ok) throw new Error(await this.responseError(response));
                 const savedCollection = await response.json();
                 AnnotationStore.collectionCache.set(imageId, Promise.resolve(savedCollection));
