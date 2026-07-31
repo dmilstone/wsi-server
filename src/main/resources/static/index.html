@@ -7,6 +7,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@latest/dist/annotorious-openseadragon.css">
     <script src="https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@latest/dist/annotorious-openseadragon.js"></script>
+    <script src="/csrf.js"></script>
     <script src="/annotation-store.js"></script>
     <script src="/annotation-adapter.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -638,7 +639,7 @@
     }
 
     async function request(url, options = {}) {
-        const response = await fetch(url, options);
+        const response = await fetch(url, WsiCsrf.withCsrf(options));
         if (!response.ok) {
             const text = await response.text();
             throw new Error(text || `${response.status} ${response.statusText}`);
