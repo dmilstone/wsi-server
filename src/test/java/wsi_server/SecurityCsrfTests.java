@@ -47,7 +47,7 @@ class SecurityCsrfTests {
         mockMvc.perform(displayUpdate()
                         .with(user("viewer").roles("VIEWER"))
                         .cookie(csrf.cookie())
-                        .header(csrf.headerName(), csrf.token()))
+                        .header(csrf.headerName(), csrf.cookie().getValue()))
                 .andExpect(status().isOk());
     }
 
@@ -85,12 +85,11 @@ class SecurityCsrfTests {
         String body = result.getResponse().getContentAsString();
         Cookie cookie = result.getResponse().getCookie("XSRF-TOKEN");
         return new AcquiredCsrf(
-                JsonPath.read(body, "$.token"),
                 JsonPath.read(body, "$.headerName"),
                 cookie
         );
     }
 
-    private record AcquiredCsrf(String token, String headerName, Cookie cookie) {
+    private record AcquiredCsrf(String headerName, Cookie cookie) {
     }
 }
