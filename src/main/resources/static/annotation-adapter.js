@@ -7,8 +7,9 @@
  */
 class AnnotationAdapter {
 
-    constructor(annotator) {
+    constructor(annotator, timingCallbacks = {}) {
         this.annotator = annotator;
+        this.timingCallbacks = timingCallbacks;
         this.metadataById = new Map();
         this.backendIdByClientId = new Map();
         this.nonDisplayedAnnotations = [];
@@ -30,7 +31,13 @@ class AnnotationAdapter {
                 this.nonDisplayedAnnotations = [];
                 this.replaceAnnotoriousAnnotations([]);
             } else if (event.reason === "loaded" || event.reason === "saved") {
+                if (event.reason === "loaded") {
+                    this.timingCallbacks.annotationsLoaded?.(event.collection.imageId);
+                }
                 this.applyBackendCollection(event.collection);
+                if (event.reason === "loaded") {
+                    this.timingCallbacks.annotationsRendered?.(event.collection.imageId);
+                }
                 console.info(`AnnotationAdapter: ${event.reason} annotations`, event.collection);
             }
         });
