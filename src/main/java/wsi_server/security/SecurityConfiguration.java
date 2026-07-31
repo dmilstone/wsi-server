@@ -7,6 +7,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfToken;
 
 @Configuration
 public class SecurityConfiguration {
@@ -38,6 +40,13 @@ public class SecurityConfiguration {
                 )
                 .formLogin(form -> form.permitAll())
                 .logout(logout -> logout.permitAll());
+
+        http.addFilterAfter((request, response, chain) -> {
+            CsrfToken csrfToken =
+                    (CsrfToken) request.getAttribute(CsrfToken.class.getName());
+            csrfToken.getToken();
+            chain.doFilter(request, response);
+        }, CsrfFilter.class);
 
         return http.build();
     }
