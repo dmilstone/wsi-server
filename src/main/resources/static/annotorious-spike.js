@@ -6,10 +6,11 @@
  */
 class AnnotoriousSpike {
 
-    constructor(viewer, toggleButton, getCurrentImageId) {
+    constructor(viewer, toggleButton, getCurrentImageId, timingCallbacks = {}) {
         this.viewer = viewer;
         this.toggleButton = toggleButton;
         this.getCurrentImageId = getCurrentImageId;
+        this.timingCallbacks = timingCallbacks;
         this.annotator = null;
         this.adapter = null;
         this.drawingEnabled = false;
@@ -37,7 +38,10 @@ class AnnotoriousSpike {
         });
 
         this.annotator.setDrawingTool("rectangle");
-        this.adapter = new AnnotationAdapter(this.annotator);
+        this.adapter = new AnnotationAdapter(this.annotator, {
+            annotationsLoaded: imageId => this.timingCallbacks.annotationsLoaded?.(imageId),
+            annotationsRendered: imageId => this.timingCallbacks.annotationsRendered?.(imageId)
+        });
 
         this.annotator.on("createAnnotation", annotation => {
             this.adapter.annotationCreated(annotation);
@@ -65,8 +69,10 @@ class AnnotoriousSpike {
         this.installKeyboardShortcuts();
 
         this.viewer.addHandler("open", () => {
+            const imageId = this.getCurrentImageId?.();
+            this.timingCallbacks.open?.(imageId);
             this.setDrawingEnabled(false);
-            this.adapter.loadCurrentImage(this.getCurrentImageId?.());
+            this.adapter.loadCurrentImage(imageId);
         });
     }
 

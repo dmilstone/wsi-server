@@ -582,7 +582,42 @@
     const PIXEL_BLOCK_SIZE = 64;
     const PIXEL_BLOCK_CACHE_LIMIT = 128;
     let lastSampledPixel = "";
+    let imageSwitchTiming = null;
     const LUT_COLORS = {BLUE:"#438cff", GREEN:"#3bd671", RED:"#ff5757", MAGENTA:"#ed62f5", CYAN:"#4de4e4", GRAY:"#b8c0ca", YELLOW:"#f4df52"};
+
+    function startImageSwitchTiming(image) {
+        imageSwitchTiming = {
+            imageId: image.id,
+            imageName: image.name,
+            startedAt: performance.now(),
+            milestones: new Map()
+        };
+    }
+
+    function markImageSwitchTiming(imageId, milestone) {
+        const timing = imageSwitchTiming;
+        if (!timing || timing.imageId !== imageId || timing.milestones.has(milestone)) return;
+
+        timing.milestones.set(milestone, performance.now() - timing.startedAt);
+        if (milestone !== "annotations shown") return;
+
+        const rows = [
+            ["prefetch started", "prefetch started"],
+            ["metadata loaded", "metadata loaded"],
+            ["display loaded", "display loaded"],
+            ["viewer.open called", "viewer.open called"],
+            ["OSD open event", "OSD open event"],
+            ["annotations loaded", "annotations loaded"],
+            ["annotations shown", "annotations shown"]
+        ];
+        console.groupCollapsed(`Image switch: ${timing.imageName}`);
+        for (const [label, key] of rows) {
+            const elapsed = timing.milestones.get(key);
+            if (elapsed !== undefined) console.log(`${`${label}:`.padEnd(22)} ${Math.round(elapsed)} ms`);
+        }
+        console.log(`${"total:".padEnd(22)} ${Math.round(performance.now() - timing.startedAt)} ms`);
+        console.groupEnd();
+    }
 
     async function request(url, options = {}) {
         const response = await fetch(url, options);
@@ -642,6 +677,7 @@
     }
 
     async function selectImage(image) {
+        startImageSwitchTiming(image);
         try {
             statusElement.textContent = `Opening ${image.name}…`;
             clearTimeout(updateTimer);
@@ -651,6 +687,7 @@
             selectedImage = image;
             // Start annotation I/O alongside metadata/display loading. The store
             // retains the result so the viewer-open handler does not issue another GET.
+            markImageSwitchTiming(image.id, "prefetch started");
             void AnnotationStore.prefetchImage(image.id).catch(error =>
                 console.warn(`Unable to prefetch annotations for image ${image.id}`, error)
             );
@@ -659,8 +696,14 @@
                 button.classList.toggle("active", button.dataset.imageId === image.id)
             );
             [metadata, display] = await Promise.all([
-                request(`/api/images/${encodeURIComponent(image.id)}`),
-                request(`/api/images/${encodeURIComponent(image.id)}/display`)
+                request(`/api/images/${encodeURIComponent(image.id)}`).then(result => {
+                    markImageSwitchTiming(image.id, "metadata loaded");
+                    return result;
+                }),
+                request(`/api/images/${encodeURIComponent(image.id)}/display`).then(result => {
+                    markImageSwitchTiming(image.id, "display loaded");
+                    return result;
+                })
             ]);
             const saved = loadLocalDisplay(image.id);
             if (saved && compatibleDisplay(saved, display)) {
@@ -828,7 +871,12 @@
             annotationSpike = new AnnotoriousSpike(
                 viewer,
                 document.getElementById("annotation-mode"),
-                () => selectedImage?.id
+                () => selectedImage?.id,
+                {
+                    open: imageId => markImageSwitchTiming(imageId, "OSD open event"),
+                    annotationsLoaded: imageId => markImageSwitchTiming(imageId, "annotations loaded"),
+                    annotationsRendered: imageId => markImageSwitchTiming(imageId, "annotations shown")
+                }
             );
             // Use native pointer events here rather than OpenSeadragon's canvas-move
             // event, which is not emitted consistently across browsers/configurations.
@@ -865,6 +913,7 @@
             viewer.canvas.addEventListener("pointerleave", clearPixelReadout);
         }
 
+        markImageSwitchTiming(selectedImage.id, "viewer.open called");
         viewer.open(tileSource());
         if (bounds && zoom) {
             viewer.addOnceHandler("open", () => {
