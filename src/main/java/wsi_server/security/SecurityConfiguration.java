@@ -6,9 +6,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
-import org.springframework.security.web.csrf.CsrfFilter;
-import org.springframework.security.web.csrf.CsrfToken;
 
 @Configuration
 public class SecurityConfiguration {
@@ -21,9 +18,7 @@ public class SecurityConfiguration {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(csrf -> csrf
-                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
-                )
+                .csrf(csrf -> csrf.spa())
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/login").permitAll()
                         .requestMatchers(
@@ -40,13 +35,6 @@ public class SecurityConfiguration {
                 )
                 .formLogin(form -> form.permitAll())
                 .logout(logout -> logout.permitAll());
-
-        http.addFilterAfter((request, response, chain) -> {
-            CsrfToken csrfToken =
-                    (CsrfToken) request.getAttribute(CsrfToken.class.getName());
-            csrfToken.getToken();
-            chain.doFilter(request, response);
-        }, CsrfFilter.class);
 
         return http.build();
     }
