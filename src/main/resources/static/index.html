@@ -639,7 +639,7 @@
     }
 
     async function request(url, options = {}) {
-        const response = await fetch(url, WsiCsrf.withCsrf(options));
+        const response = await WsiCsrf.csrfFetch(url, options);
         if (!response.ok) {
             const text = await response.text();
             throw new Error(text || `${response.status} ${response.statusText}`);
@@ -649,6 +649,7 @@
 
     async function initialize() {
         try {
+            await WsiCsrf.initialize();
             imageInfoElement.open = localStorage.getItem(`${STORAGE_PREFIX}.imageInfoOpen`) !== "closed";
             const result = await request("/api/images");
             document.getElementById("directory").textContent = result.directory;
