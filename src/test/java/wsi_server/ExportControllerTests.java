@@ -38,4 +38,25 @@ class ExportControllerTests {
                 org.mockito.ArgumentMatchers.eq(30), org.mockito.ArgumentMatchers.eq(40),
                 org.mockito.ArgumentMatchers.eq(1.0), any());
     }
+
+    @Test
+    void returnsBadRequestProblemForPixelLimitViolation() throws Exception {
+        ExportService service = mock(ExportService.class);
+        when(service.export(org.mockito.ArgumentMatchers.eq("slide"),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyDouble(), any()))
+                .thenThrow(new IllegalArgumentException(
+                        "Export exceeds the configured maximum of 16000000 pixels."));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new ExportController(service))
+                .setControllerAdvice(new ExportExceptionHandler()).build();
+
+        mvc.perform(get("/export").param("image", "slide")
+                        .param("x", "0").param("y", "0")
+                        .param("width", "5000").param("height", "5000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType("application/problem+json"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "Export exceeds the configured maximum")));
+    }
 }

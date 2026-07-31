@@ -10,6 +10,8 @@ import loci.formats.gui.BufferedImageReader;
 import loci.formats.meta.MetadataRetrieve;
 import ome.units.UNITS;
 import ome.units.quantity.Length;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import wsi_server.api.AssociatedImageSeriesDto;
 import wsi_server.api.ChannelDisplayDto;
@@ -44,19 +46,26 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class BioFormatsTileService {
     private static final String SESSION_STATES = BioFormatsTileService.class.getName() + ".displayStates";
+    private static final Logger LOGGER = LoggerFactory.getLogger(BioFormatsTileService.class);
 
     private final ImageRegistry registry;
     private final FluorescenceTileRenderer fluorescenceRenderer;
     private final MultichannelTileRenderer multichannelRenderer;
+    private final ExportReaderFactory exportReaderFactory;
+    private final ExportValidator exportValidator;
     private final Map<String, ImageContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, AssociatedImages> associatedImageCache = new ConcurrentHashMap<>();
 
     public BioFormatsTileService(ImageRegistry registry,
                                  FluorescenceTileRenderer fluorescenceRenderer,
-                                 MultichannelTileRenderer multichannelRenderer) {
+                                 MultichannelTileRenderer multichannelRenderer,
+                                 ExportReaderFactory exportReaderFactory,
+                                 ExportValidator exportValidator) {
         this.registry = registry;
         this.fluorescenceRenderer = fluorescenceRenderer;
         this.multichannelRenderer = multichannelRenderer;
+        this.exportReaderFactory = exportReaderFactory;
+        this.exportValidator = exportValidator;
     }
 
     public ImageListResponse listImages() {
@@ -450,12 +459,10 @@ public class BioFormatsTileService {
         }
     }
 
-    /**
-     * Renders a rectangular region from resolution zero through the same reader and
-     * display pipeline used by the OpenSeadragon tiles.
-     */
+    /** Renders resolution zero with the tile display pipeline and an export-owned reader. */
     public byte[] exportRegion(String imageId, int x, int y, int width, int height,
                                double scale, HttpSession session) throws Exception {
+        long totalStarted = System.nanoTime();
         ImageContext context = context(imageId);
         SessionDisplayState state = sessionState(session, imageId, context);
         List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
@@ -465,28 +472,51 @@ public class BioFormatsTileService {
             }
         }
 
-        synchronized (context) {
-            IFormatReader reader = context.reader();
-            reader.setResolution(0);
-            if (x < 0 || y < 0 || width <= 0 || height <= 0
-                    || (long) x + width > reader.getSizeX()
-                    || (long) y + height > reader.getSizeY()) {
-                throw new IllegalArgumentException("Export region must be contained within the image.");
-            }
+        long acquisitionStarted = System.nanoTime();
+        long acquisitionNanos;
+        ExportTimings timings = new ExportTimings();
+        try (ExportReaderFactory.ExportReader exportReader =
+                     exportReaderFactory.open(context.entry())) {
+            acquisitionNanos = System.nanoTime() - acquisitionStarted;
+            IFormatReader reader = exportReader.reader();
+            exportValidator.validate(x, y, width, height, scale,
+                    reader.getSizeX(), reader.getSizeY());
 
             BufferedImage image = renderCompositeRegion(context, reader, settingsSnapshot,
-                    x, y, width, height);
-            return encodePng(scale == 1.0 ? image : scaleImage(image, scale));
+                    x, y, width, height, timings);
+            long scalingStarted = System.nanoTime();
+            BufferedImage output = scale == 1.0 ? image : scaleImage(image, scale);
+            timings.scalingNanos = System.nanoTime() - scalingStarted;
+            long encodingStarted = System.nanoTime();
+            byte[] png = encodePng(output);
+            timings.encodingNanos = System.nanoTime() - encodingStarted;
+            LOGGER.info("Export timing image={} region={}x{} scale={} readerAcquireMs={} decodeMs={} compositeMs={} scaleMs={} pngMs={} totalMs={}",
+                    imageId, width, height, scale, milliseconds(acquisitionNanos),
+                    milliseconds(timings.decodingNanos), milliseconds(timings.compositingNanos),
+                    milliseconds(timings.scalingNanos), milliseconds(timings.encodingNanos),
+                    milliseconds(System.nanoTime() - totalStarted));
+            return png;
         }
     }
 
     private BufferedImage renderCompositeRegion(ImageContext context, IFormatReader reader,
                                                 List<ChannelDisplaySettings> settings,
                                                 int x, int y, int width, int height) throws Exception {
+        return renderCompositeRegion(context, reader, settings, x, y, width, height, null);
+    }
+
+    private BufferedImage renderCompositeRegion(ImageContext context, IFormatReader reader,
+                                                List<ChannelDisplaySettings> settings,
+                                                int x, int y, int width, int height,
+                                                ExportTimings timings) throws Exception {
+        long decodingStarted = System.nanoTime();
         if (context.isRgb()) {
             int[] rgb = readRgbRegion(reader, x, y, width, height);
+            if (timings != null) timings.decodingNanos = System.nanoTime() - decodingStarted;
+            long compositingStarted = System.nanoTime();
             BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
             image.setRGB(0, 0, width, height, rgb, 0, width);
+            if (timings != null) timings.compositingNanos = System.nanoTime() - compositingStarted;
             return image;
         }
 
@@ -501,10 +531,14 @@ public class BioFormatsTileService {
                     channelSettings.getLut(), channelSettings.getGamma()));
             opacities.add(channelSettings.getOpacity());
         }
-        return channelPixels.isEmpty()
+        if (timings != null) timings.decodingNanos = System.nanoTime() - decodingStarted;
+        long compositingStarted = System.nanoTime();
+        BufferedImage image = channelPixels.isEmpty()
                 ? new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
                 : multichannelRenderer.render(channelPixels, width, height,
                 DisplaySettings.forPixelData(reader.isLittleEndian()), mappers, opacities);
+        if (timings != null) timings.compositingNanos = System.nanoTime() - compositingStarted;
+        return image;
     }
 
     private BufferedImage scaleImage(BufferedImage source, double scale) {
@@ -649,6 +683,17 @@ public class BioFormatsTileService {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         if (!ImageIO.write(image, "png", output)) throw new IllegalStateException("No PNG image writer is available.");
         return output.toByteArray();
+    }
+
+    private long milliseconds(long nanos) {
+        return nanos / 1_000_000;
+    }
+
+    private static final class ExportTimings {
+        private long decodingNanos;
+        private long compositingNanos;
+        private long scalingNanos;
+        private long encodingNanos;
     }
 
     @PreDestroy public void closeReaders() {
