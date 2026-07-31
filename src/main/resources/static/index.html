@@ -493,6 +493,7 @@
                 <summary class="toolbar-button" aria-label="Export image region">Export ▾</summary>
                 <div class="export-menu-items">
                     <button id="export-visible-region" class="export-menu-item" type="button" disabled>Visible Region</button>
+                    <button id="export-selected-annotation" class="export-menu-item" type="button" disabled>Selected Annotation</button>
                 </div>
             </details>
             <button id="full-screen" class="toolbar-button" title="Browser full screen" aria-label="Browser full screen">⛶</button>
@@ -575,6 +576,7 @@
     const recomputeAutoButton = document.getElementById("recompute-auto");
     const imageInfoElement = document.getElementById("image-info");
     const exportVisibleRegionButton = document.getElementById("export-visible-region");
+    const exportSelectedAnnotationButton = document.getElementById("export-selected-annotation");
     const workspace = document.querySelector(".workspace");
     const zoomStatus = document.getElementById("status-zoom");
     const xStatus = document.getElementById("status-x");
@@ -703,6 +705,7 @@
             closeImageLightbox(false);
             prepareSlideOverviewForImageChange();
             selectedImage = image;
+            updateSelectedAnnotationExportState();
             // Start annotation I/O alongside metadata/display loading. The store
             // retains the result so the viewer-open handler does not issue another GET.
             markImageSwitchTiming(image.id, "prefetch started");
@@ -893,7 +896,8 @@
                 {
                     open: imageId => markImageSwitchTiming(imageId, "OSD open event"),
                     annotationsLoaded: imageId => markImageSwitchTiming(imageId, "annotations loaded"),
-                    annotationsRendered: imageId => markImageSwitchTiming(imageId, "annotations shown")
+                    annotationsRendered: imageId => markImageSwitchTiming(imageId, "annotations shown"),
+                    selectionChanged: updateSelectedAnnotationExportState
                 }
             );
             // Use native pointer events here rather than OpenSeadragon's canvas-move
@@ -982,6 +986,32 @@
             statusElement.textContent = error.message;
         } finally {
             exportVisibleRegionButton.disabled = false;
+        }
+    }
+
+    function updateSelectedAnnotationExportState() {
+        exportSelectedAnnotationButton.disabled =
+            annotationSpike?.getSelectedAnnotations().length !== 1;
+    }
+
+    async function exportSelectedAnnotation() {
+        const selected = annotationSpike?.getSelectedAnnotations() || [];
+        if (selected.length !== 1) {
+            updateSelectedAnnotationExportState();
+            return;
+        }
+
+        exportSelectedAnnotationButton.disabled = true;
+        document.getElementById("export-menu").open = false;
+        try {
+            const annotationBounds = annotationSpike.getAnnotationBounds(selected[0]);
+            statusElement.textContent = "Exporting selected annotation at native resolution…";
+            await exportImageBounds(annotationBounds);
+            statusElement.textContent = "Selected annotation exported.";
+        } catch (error) {
+            statusElement.textContent = error.message;
+        } finally {
+            updateSelectedAnnotationExportState();
         }
     }
 
@@ -1419,6 +1449,7 @@
     document.getElementById("home-view").addEventListener("click", () => viewer?.viewport?.goHome());
     document.getElementById("fit-view").addEventListener("click", () => viewer?.viewport?.fitBounds(viewer.viewport.getHomeBounds(), false));
     exportVisibleRegionButton.addEventListener("click", exportVisibleRegion);
+    exportSelectedAnnotationButton.addEventListener("click", exportSelectedAnnotation);
     document.getElementById("full-screen").addEventListener("click", async () => {
         if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
         else await document.exitFullscreen();
