@@ -8,6 +8,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MvcResult;
 import wsi_server.api.DisplayResponse;
 
@@ -26,6 +28,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 class SecurityCsrfTests {
+
+    @DynamicPropertySource
+    static void imageRoot(DynamicPropertyRegistry properties) {
+        properties.add("wsi.image-directory", () -> TestImageRoot.ROOT.toString());
+    }
 
     @Autowired
     private MockMvc mockMvc;

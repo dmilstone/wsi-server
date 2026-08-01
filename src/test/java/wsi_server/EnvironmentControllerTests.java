@@ -3,6 +3,7 @@ package wsi_server;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class EnvironmentControllerTests {
 
@@ -22,8 +23,9 @@ class EnvironmentControllerTests {
     }
 
     @Test
-    void unknownValueSafelyUsesProduction() {
-        assertThat(new EnvironmentController("<script>unexpected</script>").environment())
-                .isEqualTo("production");
+    void environmentNormalizationIsSharedAndStrict() {
+        assertThatThrownBy(() -> new EnvironmentController("<script>unexpected</script>"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("expected production, staging, or development");
     }
 }

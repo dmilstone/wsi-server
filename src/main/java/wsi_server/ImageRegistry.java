@@ -34,7 +34,7 @@ public class ImageRegistry {
             throw new IllegalStateException("Set wsi.image-directory to the image root directory.");
         }
         Path configured = Paths.get(configuredPath).toAbsolutePath().normalize();
-        this.rootDirectory = Files.isDirectory(configured) ? configured : configured.getParent();
+        this.rootDirectory = configured.toRealPath();
         this.recursive = recursive;
         if (rootDirectory == null || !Files.isDirectory(rootDirectory)) {
             throw new IllegalStateException("Image directory does not exist: " + configuredPath);
@@ -151,6 +151,7 @@ public class ImageRegistry {
 
     private boolean hasSupportedSuffix(Path path) {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (name.startsWith(".wsi-environment-")) return false;
         return SUPPORTED_SUFFIXES.stream().anyMatch(name::endsWith);
     }
 
