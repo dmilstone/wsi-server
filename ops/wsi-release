@@ -1,0 +1,493 @@
+#!/bin/bash
+
+set -euo pipefail
+
+REPO="${WSI_REPO:-/Users/dm026/Downloads/wsi-server_works}"
+STAGING="${WSI_STAGING_ROOT:-/Users/dm026/wsi-staging}"
+PRODUCTION="${WSI_PRODUCTION_ROOT:-/Users/dm026/wsi-server-production}"
+PRODUCTION_ANNOTATIONS="${WSI_PRODUCTION_ANNOTATIONS:-/Users/dm026/.wsi-server/annotations}"
+WSI_CONTROL="${WSI_CONTROL:-/Users/dm026/bin/wsi}"
+JAR_NAME="${WSI_JAR_NAME:-wsi-server-0.0.1-SNAPSHOT.jar}"
+AUDIT_LOG="${WSI_RELEASE_AUDIT_LOG:-$PRODUCTION/logs/release-audit.log}"
+
+STEP_MODE=false
+DRY_RUN=false
+VERBOSE=false
+ASSUME_YES=false
+COMMAND=""
+TARGET=""
+TAG_NAME=""
+
+fail() {
+    printf '\nERROR: %s\n' "$1" >&2
+    exit 1
+}
+
+usage() {
+    cat <<'EOF'
+Usage:
+  wsi-release status
+  wsi-release verify {staging|production}
+  wsi-release stage [--step] [--dry-run] [--verbose] [--yes]
+  wsi-release promote [--step] [--dry-run] [--verbose] [--yes]
+  wsi-release rollback [--step] [--dry-run] [--verbose] [--yes]
+  wsi-release tag [TAG_NAME] [--step] [--dry-run] [--verbose] [--yes]
+  wsi-release history
+
+Modes:
+  --step      Show every operational action and wait for Enter before running it.
+  --dry-run   Show the complete plan without modifying files or services.
+  --verbose   Print operational actions during normal execution.
+  --yes       Bypass typed STAGE/TAG confirmation; PROMOTE and ROLLBACK still
+              require their explicit tokens.
+EOF
+    exit 2
+}
+
+quote_command() {
+    local rendered="" item
+    for item in "$@"; do
+        printf -v item '%q' "$item"
+        rendered+="${rendered:+ }$item"
+    done
+    printf '%s' "$rendered"
+}
+
+approve_action() {
+    local description="$1"
+    local display="$2"
+    local answer
+
+    if $DRY_RUN; then
+        printf '[DRY-RUN] %s\n          %s\n' "$description" "$display"
+        return 1
+    fi
+
+    if $STEP_MODE; then
+        while true; do
+            printf '\nSTEP: %s\nCOMMAND: %s\n' "$description" "$display"
+            read -r -p "Press Enter to run, p to print again, or q to stop safely: " answer
+            case "$answer" in
+                "") return 0 ;;
+                p|P) ;;
+                q|Q) echo "Stopped safely before: $description"; exit 0 ;;
+                *) echo "Please press Enter, p, or q." ;;
+            esac
+        done
+    fi
+
+    if $VERBOSE; then
+        printf 'ACTION: %s\nCOMMAND: %s\n' "$description" "$display"
+    fi
+    return 0
+}
+
+run_cmd() {
+    local description="$1"
+    shift
+    local display
+    display="$(quote_command "$@")"
+    if approve_action "$description" "$display"; then
+        "$@"
+    fi
+}
+
+run_function() {
+    local description="$1"
+    local display="$2"
+    local function_name="$3"
+    shift 3
+    if approve_action "$description" "$display"; then
+        "$function_name" "$@"
+    fi
+}
+
+audit() {
+    local message="$1"
+    if $DRY_RUN; then
+        return
+    fi
+    mkdir -p "$(dirname "$AUDIT_LOG")"
+    printf '%s user=%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$(id -un)" "$message" >> "$AUDIT_LOG"
+}
+
+property_value() {
+    local file="$1" key="$2"
+    awk -F= -v wanted="$key" '$1 == wanted {sub(/^[^=]*=/, ""); print; exit}' "$file"
+}
+
+sha256() {
+    shasum -a 256 "$1" | awk '{print $1}'
+}
+
+listener_pid() {
+    local port="$1"
+    lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n 1
+}
+
+require_file() {
+    [[ -s "$1" ]] || fail "$2: $1"
+}
+
+validate_environment_config() {
+    local expected_environment="$1" config_file="$2" expected_port="$3"
+    local configured_environment image_root port marker expected_marker marker_count
+
+    require_file "$config_file" "Configuration is missing"
+    configured_environment="$(property_value "$config_file" wsi.environment)"
+    image_root="$(property_value "$config_file" wsi.image-directory)"
+    port="$(property_value "$config_file" server.port)"
+
+    [[ "$configured_environment" = "$expected_environment" ]] || fail "Expected wsi.environment=$expected_environment in $config_file, found '$configured_environment'."
+    [[ "$port" = "$expected_port" ]] || fail "Expected server.port=$expected_port in $config_file, found '$port'."
+    [[ -n "$image_root" && -d "$image_root" ]] || fail "Configured image directory is missing or invalid: $image_root"
+
+    expected_marker=".wsi-environment-$expected_environment"
+    marker_count=0
+    marker=""
+    while IFS= read -r found; do
+        marker_count=$((marker_count + 1))
+        marker="$(basename "$found")"
+    done < <(find "$image_root" -maxdepth 1 -name '.wsi-environment-*' -print)
+
+    [[ "$marker_count" -eq 1 ]] || fail "Expected exactly one environment marker in $image_root; found $marker_count."
+    [[ "$marker" = "$expected_marker" ]] || fail "Expected $expected_marker in $image_root; found $marker."
+
+    printf '%-11s config: %s\n' "$expected_environment" "$config_file"
+    printf '%-11s images: %s (%s)\n' "$expected_environment" "$image_root" "$marker"
+}
+
+verify_artifact() {
+    local root="$1" label="$2"
+    local jar="$root/app/wsi-server.jar"
+    local recorded actual
+    require_file "$jar" "$label JAR is missing"
+    require_file "$root/app/BUILD_TAG.txt" "$label BUILD_TAG.txt is missing"
+    require_file "$root/app/BUILD_COMMIT.txt" "$label BUILD_COMMIT.txt is missing"
+    require_file "$root/app/SHA256.txt" "$label SHA256.txt is missing"
+    recorded="$(awk '{print $1}' "$root/app/SHA256.txt")"
+    actual="$(sha256 "$jar")"
+    [[ "$recorded" = "$actual" ]] || fail "$label recorded and calculated checksums differ."
+    printf '%-11s build:  %s\n' "$label" "$(cat "$root/app/BUILD_TAG.txt")"
+    printf '%-11s commit: %s\n' "$label" "$(cat "$root/app/BUILD_COMMIT.txt")"
+    printf '%-11s SHA256: %s\n' "$label" "$actual"
+}
+
+verify_runtime() {
+    local target="$1" root port environment pid
+    case "$target" in
+        staging) root="$STAGING"; port=8082; environment=staging ;;
+        production) root="$PRODUCTION"; port=8080; environment=production ;;
+        *) fail "verify target must be staging or production." ;;
+    esac
+    validate_environment_config "$environment" "$root/config/application.properties" "$port"
+    verify_artifact "$root" "$environment"
+    pid="$(listener_pid "$port")"
+    [[ -n "$pid" ]] || fail "$environment is not listening on port $port."
+    printf '%-11s port:   %s (PID %s)\n' "$environment" "$port" "$pid"
+}
+
+show_status() {
+    local head="unavailable"
+    if [[ -d "$REPO/.git" ]]; then
+        head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf unavailable)"
+    fi
+    echo "Repository HEAD: $head"
+    echo
+    for target in staging production; do
+        echo "[$target]"
+        if verify_runtime "$target"; then
+            :
+        else
+            echo "$target verification failed."
+        fi
+        echo
+    done
+}
+
+write_metadata() {
+    local root="$1" build_tag="$2" build_commit="$3" checksum="$4"
+    printf '%s\n' "$build_tag" > "$root/app/BUILD_TAG.txt"
+    printf '%s\n' "$build_commit" > "$root/app/BUILD_COMMIT.txt"
+    printf '%s  %s\n' "$checksum" "$root/app/wsi-server.jar" > "$root/app/SHA256.txt"
+}
+
+backup_staging() {
+    local destination="$1"
+    mkdir -p "$destination/app" "$destination/config"
+    cp -p "$STAGING/app/wsi-server.jar" "$destination/app/"
+    cp -p "$STAGING/app/BUILD_TAG.txt" "$destination/app/"
+    cp -p "$STAGING/app/BUILD_COMMIT.txt" "$destination/app/"
+    cp -p "$STAGING/app/SHA256.txt" "$destination/app/"
+    cp -p "$STAGING/config/application.properties" "$destination/config/"
+    [[ "$(sha256 "$STAGING/app/wsi-server.jar")" = "$(sha256 "$destination/app/wsi-server.jar")" ]] || fail "Staging backup checksum does not match."
+}
+
+stage_release() {
+    local build_commit build_tag new_jar new_sha stamp backup candidate
+
+    [[ -d "$REPO/.git" ]] || fail "Repository not found: $REPO"
+    [[ -z "$(git -C "$REPO" status --porcelain)" ]] || fail "Git working tree is not clean."
+    validate_environment_config staging "$STAGING/config/application.properties" 8082
+    verify_artifact "$STAGING" staging
+
+    build_commit="$(git -C "$REPO" rev-parse HEAD)"
+    build_tag="$(git -C "$REPO" describe --tags --always)"
+    new_jar="$REPO/target/$JAR_NAME"
+
+    if $DRY_RUN; then
+        echo "[DRY-RUN] Build commit: $build_commit"
+        echo "[DRY-RUN] Build tag:    $build_tag"
+        run_cmd "Run the complete Maven build and tests" "$REPO/mvnw" clean package
+        if command -v node >/dev/null 2>&1; then
+            run_cmd "Run JavaScript tests" node --test "$REPO"/src/test/js/*.test.js
+        fi
+        echo "[DRY-RUN] Back up current staging under $STAGING/releases/<timestamp>."
+        echo "[DRY-RUN] Copy and checksum $new_jar."
+        echo "[DRY-RUN] Require STAGE confirmation, stop 8082, atomically install, write metadata, restart and verify."
+        return
+    fi
+
+    run_cmd "Run the complete Maven build and tests" "$REPO/mvnw" clean package
+    if command -v node >/dev/null 2>&1 && compgen -G "$REPO/src/test/js/*.test.js" >/dev/null; then
+        run_cmd "Run JavaScript tests" node --test "$REPO"/src/test/js/*.test.js
+    fi
+
+    require_file "$new_jar" "Built JAR is missing"
+    jar tf "$new_jar" >/dev/null || fail "Built JAR is not a readable archive."
+    new_sha="$(sha256 "$new_jar")"
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup="$STAGING/releases/$stamp"
+    candidate="$STAGING/app/wsi-server.candidate.jar"
+
+    run_function "Back up and verify the current staging release" "backup staging to $backup" backup_staging "$backup"
+    run_cmd "Copy the candidate JAR into staging" cp -p "$new_jar" "$candidate"
+    [[ "$(sha256 "$candidate")" = "$new_sha" ]] || fail "Copied staging candidate checksum differs from the build."
+
+    echo
+    echo "Candidate commit:   $build_commit"
+    echo "Candidate build:    $build_tag"
+    echo "Candidate checksum: $new_sha"
+    echo "Staging backup:     $backup"
+    echo
+
+    if ! $ASSUME_YES; then
+        local answer
+        read -r -p "Type STAGE to stop port 8082 and install this candidate: " answer
+        [[ "$answer" = STAGE ]] || fail "Staging installation cancelled."
+    fi
+
+    run_cmd "Stop staging" "$WSI_CONTROL" staging stop
+    [[ -z "$(listener_pid 8082)" ]] || fail "Port 8082 is still occupied after stopping staging."
+    run_cmd "Atomically install the staging JAR" mv "$candidate" "$STAGING/app/wsi-server.jar"
+    run_function "Write staging build metadata" "write BUILD_TAG.txt, BUILD_COMMIT.txt and SHA256.txt" write_metadata "$STAGING" "$build_tag" "$build_commit" "$new_sha"
+    [[ "$(sha256 "$STAGING/app/wsi-server.jar")" = "$new_sha" ]] || fail "Installed staging JAR checksum is incorrect."
+    run_cmd "Start staging" "$WSI_CONTROL" staging start
+    verify_runtime staging
+    audit "action=stage result=success commit=$build_commit sha256=$new_sha backup=$backup"
+    echo
+    echo "Staging installation completed. Perform manual browser validation before promotion."
+}
+
+backup_production() {
+    local destination="$1"
+    mkdir -p "$destination/app" "$destination/config" "$destination/annotations"
+    cp -p "$PRODUCTION/app/wsi-server.jar" "$destination/app/wsi-server.jar"
+    cp -p "$PRODUCTION/app/BUILD_TAG.txt" "$destination/app/BUILD_TAG.txt"
+    cp -p "$PRODUCTION/app/BUILD_COMMIT.txt" "$destination/app/BUILD_COMMIT.txt"
+    cp -p "$PRODUCTION/config/application.properties" "$destination/config/application.properties"
+    if [[ -d "$PRODUCTION_ANNOTATIONS" ]]; then
+        cp -R "$PRODUCTION_ANNOTATIONS/." "$destination/annotations/"
+    fi
+    printf '%s\n' "$(sha256 "$PRODUCTION/app/wsi-server.jar")" > "$destination/app/ORIGINAL_SHA256.txt"
+    [[ "$(sha256 "$destination/app/wsi-server.jar")" = "$(cat "$destination/app/ORIGINAL_SHA256.txt")" ]] || fail "Production backup checksum does not match."
+}
+
+promote_release() {
+    local git_commit staging_commit staging_tag staging_sha production_sha stamp release_dir candidate last_release answer
+
+    [[ -z "$(git -C "$REPO" status --porcelain)" ]] || fail "Git working tree is not clean."
+    validate_environment_config staging "$STAGING/config/application.properties" 8082
+    validate_environment_config production "$PRODUCTION/config/application.properties" 8080
+    verify_artifact "$STAGING" staging
+    verify_artifact "$PRODUCTION" production
+    [[ -n "$(listener_pid 8080)" ]] || fail "Production is not currently listening on port 8080."
+
+    git_commit="$(git -C "$REPO" rev-parse HEAD)"
+    staging_commit="$(cat "$STAGING/app/BUILD_COMMIT.txt")"
+    staging_tag="$(cat "$STAGING/app/BUILD_TAG.txt")"
+    staging_sha="$(sha256 "$STAGING/app/wsi-server.jar")"
+    production_sha="$(sha256 "$PRODUCTION/app/wsi-server.jar")"
+    [[ "$git_commit" = "$staging_commit" ]] || fail "Git HEAD does not match the staging commit."
+
+    if $DRY_RUN; then
+        echo "[DRY-RUN] Production checksum: $production_sha"
+        echo "[DRY-RUN] Candidate commit:    $staging_commit"
+        echo "[DRY-RUN] Candidate build:     $staging_tag"
+        echo "[DRY-RUN] Candidate checksum:  $staging_sha"
+        echo "[DRY-RUN] Back up and verify production, copy candidate, require PROMOTE, stop 8080, install exact staging JAR, restart and verify."
+        return
+    fi
+
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    release_dir="$PRODUCTION/releases/$stamp"
+    candidate="$PRODUCTION/app/wsi-server.candidate.jar"
+    last_release="$PRODUCTION/run/last-release.txt"
+
+    run_function "Back up and verify production before stopping it" "backup production to $release_dir" backup_production "$release_dir"
+    run_cmd "Copy the exact staging JAR as the production candidate" cp -p "$STAGING/app/wsi-server.jar" "$candidate"
+    [[ "$(sha256 "$candidate")" = "$staging_sha" ]] || fail "Production candidate checksum differs from staging."
+    run_function "Record the rollback directory" "write $release_dir to $last_release" write_text_file "$last_release" "$release_dir"
+
+    echo
+    echo "Current production checksum: $production_sha"
+    echo "Candidate commit:            $staging_commit"
+    echo "Candidate build:             $staging_tag"
+    echo "Candidate checksum:          $staging_sha"
+    echo "Rollback directory:          $release_dir"
+    echo
+    read -r -p "Type PROMOTE to stop production and install this candidate: " answer
+    [[ "$answer" = PROMOTE ]] || fail "Promotion cancelled."
+
+    run_cmd "Stop production" "$WSI_CONTROL" production stop
+    [[ -z "$(listener_pid 8080)" ]] || fail "Port 8080 is still occupied after stopping production."
+    run_cmd "Atomically install the production JAR" mv "$candidate" "$PRODUCTION/app/wsi-server.jar"
+    run_function "Copy staging metadata to production" "install BUILD_TAG.txt, BUILD_COMMIT.txt and SHA256.txt" write_metadata "$PRODUCTION" "$staging_tag" "$staging_commit" "$staging_sha"
+    [[ "$(sha256 "$PRODUCTION/app/wsi-server.jar")" = "$staging_sha" ]] || fail "Installed production JAR checksum is incorrect."
+    run_cmd "Start production" "$WSI_CONTROL" production start
+    verify_runtime production
+    audit "action=promote result=success commit=$staging_commit sha256=$staging_sha rollback=$release_dir"
+    echo
+    echo "Promotion completed. Validate production in the browser before tagging."
+}
+
+write_text_file() {
+    local destination="$1" value="$2"
+    mkdir -p "$(dirname "$destination")"
+    printf '%s\n' "$value" > "$destination"
+}
+
+rollback_release() {
+    local last_release release_dir expected actual failed_dir answer
+    last_release="$PRODUCTION/run/last-release.txt"
+    require_file "$last_release" "No last-release record exists"
+    release_dir="$(cat "$last_release")"
+    case "$release_dir" in
+        "$PRODUCTION"/releases/*) ;;
+        *) fail "The recorded rollback directory is invalid: $release_dir" ;;
+    esac
+    require_file "$release_dir/app/wsi-server.jar" "Rollback JAR is missing"
+    require_file "$release_dir/app/BUILD_TAG.txt" "Rollback BUILD_TAG.txt is missing"
+    require_file "$release_dir/app/BUILD_COMMIT.txt" "Rollback BUILD_COMMIT.txt is missing"
+    require_file "$release_dir/app/ORIGINAL_SHA256.txt" "Rollback checksum is missing"
+    require_file "$release_dir/config/application.properties" "Rollback configuration is missing"
+    expected="$(cat "$release_dir/app/ORIGINAL_SHA256.txt")"
+    actual="$(sha256 "$release_dir/app/wsi-server.jar")"
+    [[ "$expected" = "$actual" ]] || fail "Rollback JAR checksum does not match."
+
+    echo "Rollback directory: $release_dir"
+    echo "Rollback build:     $(cat "$release_dir/app/BUILD_TAG.txt")"
+    echo "Rollback commit:    $(cat "$release_dir/app/BUILD_COMMIT.txt")"
+    echo "Rollback checksum:  $actual"
+    echo "Annotations will not be restored or overwritten."
+
+    if $DRY_RUN; then
+        echo "[DRY-RUN] Preserve current failed release, require ROLLBACK, stop 8080, restore JAR/config/metadata, restart and verify."
+        return
+    fi
+
+    read -r -p "Type ROLLBACK to restore this release: " answer
+    [[ "$answer" = ROLLBACK ]] || fail "Rollback cancelled."
+    failed_dir="$PRODUCTION/failed-releases/$(date +%Y%m%d-%H%M%S)"
+    run_function "Preserve the currently installed release" "copy current artifacts to $failed_dir" preserve_failed_release "$failed_dir"
+    run_cmd "Stop production" "$WSI_CONTROL" production stop
+    run_function "Restore the verified production release" "restore JAR, metadata and config; do not restore annotations" restore_release "$release_dir" "$actual"
+    run_cmd "Start production" "$WSI_CONTROL" production start
+    verify_runtime production
+    audit "action=rollback result=success restored=$release_dir sha256=$actual"
+    echo "Rollback completed. Validate production in the browser."
+}
+
+preserve_failed_release() {
+    local destination="$1"
+    mkdir -p "$destination"
+    for name in wsi-server.jar BUILD_TAG.txt BUILD_COMMIT.txt SHA256.txt; do
+        [[ ! -f "$PRODUCTION/app/$name" ]] || cp -p "$PRODUCTION/app/$name" "$destination/$name"
+    done
+}
+
+restore_release() {
+    local release_dir="$1" checksum="$2"
+    cp -p "$release_dir/app/wsi-server.jar" "$PRODUCTION/app/wsi-server.jar"
+    cp -p "$release_dir/app/BUILD_TAG.txt" "$PRODUCTION/app/BUILD_TAG.txt"
+    cp -p "$release_dir/app/BUILD_COMMIT.txt" "$PRODUCTION/app/BUILD_COMMIT.txt"
+    cp -p "$release_dir/config/application.properties" "$PRODUCTION/config/application.properties"
+    printf '%s  %s\n' "$checksum" "$PRODUCTION/app/wsi-server.jar" > "$PRODUCTION/app/SHA256.txt"
+    [[ "$(sha256 "$PRODUCTION/app/wsi-server.jar")" = "$checksum" ]] || fail "Restored JAR checksum is incorrect."
+}
+
+tag_release() {
+    local production_commit current_commit answer
+    verify_artifact "$PRODUCTION" production
+    production_commit="$(cat "$PRODUCTION/app/BUILD_COMMIT.txt")"
+    current_commit="$(git -C "$REPO" rev-parse HEAD)"
+    [[ "$production_commit" = "$current_commit" ]] || fail "Production commit does not match repository HEAD."
+    TAG_NAME="${TAG_NAME:-production-$(date +%Y-%m-%d-%H%M%S)}"
+    git -C "$REPO" rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null 2>&1 && fail "Tag already exists: $TAG_NAME"
+
+    echo "Production commit: $production_commit"
+    echo "Proposed tag:      $TAG_NAME"
+    if $DRY_RUN; then
+        echo "[DRY-RUN] Create annotated tag and push it to origin."
+        return
+    fi
+    if ! $ASSUME_YES; then
+        read -r -p "Type TAG to create and publish this production tag: " answer
+        [[ "$answer" = TAG ]] || fail "Tagging cancelled."
+    fi
+    run_cmd "Create the annotated production tag" git -C "$REPO" tag -a "$TAG_NAME" "$production_commit" -m "Validated production release $TAG_NAME"
+    run_cmd "Push the production tag" git -C "$REPO" push origin "$TAG_NAME"
+    audit "action=tag result=success tag=$TAG_NAME commit=$production_commit"
+    echo "Published tag $TAG_NAME at $production_commit."
+}
+
+show_history() {
+    echo "Production release backups:"
+    if [[ -d "$PRODUCTION/releases" ]]; then
+        find "$PRODUCTION/releases" -mindepth 1 -maxdepth 1 -type d -print | sort -r
+    fi
+    echo
+    echo "Preserved failed releases:"
+    if [[ -d "$PRODUCTION/failed-releases" ]]; then
+        find "$PRODUCTION/failed-releases" -mindepth 1 -maxdepth 1 -type d -print | sort -r
+    fi
+}
+
+[[ $# -ge 1 ]] || usage
+COMMAND="$1"
+shift
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --step) STEP_MODE=true ;;
+        --dry-run) DRY_RUN=true ;;
+        --verbose) VERBOSE=true ;;
+        --yes) ASSUME_YES=true ;;
+        -h|--help) usage ;;
+        --*) fail "Unknown option: $1" ;;
+        *) POSITIONAL+=("$1") ;;
+    esac
+    shift
+done
+
+case "$COMMAND" in
+    status) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; show_status ;;
+    verify) [[ ${#POSITIONAL[@]} -eq 1 ]] || usage; verify_runtime "${POSITIONAL[0]}" ;;
+    stage) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; stage_release ;;
+    promote) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; promote_release ;;
+    rollback) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; rollback_release ;;
+    tag) [[ ${#POSITIONAL[@]} -le 1 ]] || usage; TAG_NAME="${POSITIONAL[0]:-}"; tag_release ;;
+    history) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; show_history ;;
+    *) usage ;;
+esac
