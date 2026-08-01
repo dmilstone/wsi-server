@@ -19,6 +19,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -70,6 +71,20 @@ class SecurityCsrfTests {
                 .andExpect(jsonPath("$.token").isNotEmpty())
                 .andExpect(jsonPath("$.headerName").isNotEmpty())
                 .andExpect(jsonPath("$.parameterName").isNotEmpty());
+    }
+
+    @Test
+    void environmentEndpointRequiresAuthentication() throws Exception {
+        mockMvc.perform(get("/api/environment"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    void authenticatedUserReceivesNormalizedEnvironment() throws Exception {
+        mockMvc.perform(get("/api/environment").with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/plain"))
+                .andExpect(content().string("production"));
     }
 
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder displayUpdate() {
