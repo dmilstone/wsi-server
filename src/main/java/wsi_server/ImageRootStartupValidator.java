@@ -69,16 +69,16 @@ public final class ImageRootStartupValidator
             throw refused(environment, configuredDirectory, null, expectedMarker, List.of(),
                     "image directory does not exist", null);
         }
+        if (Files.isSymbolicLink(configured)) {
+            throw refused(environment, configuredDirectory, null, expectedMarker, List.of(),
+                    "configured image-root entry is a symbolic link", null);
+        }
         final Path resolved;
         try {
             resolved = configured.toRealPath();
         } catch (IOException exception) {
             throw refused(environment, configuredDirectory, null, expectedMarker, List.of(),
                     "canonical image-directory path cannot be resolved", exception);
-        }
-        if (!configured.equals(resolved)) {
-            throw refused(environment, configuredDirectory, resolved, expectedMarker, List.of(),
-                    "symbolic links or canonical-path mismatches are not allowed", null);
         }
         if (!Files.isDirectory(resolved, LinkOption.NOFOLLOW_LINKS)) {
             throw refused(environment, configuredDirectory, resolved, expectedMarker, List.of(),

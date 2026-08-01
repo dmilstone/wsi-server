@@ -84,7 +84,38 @@ class ImageRootStartupValidatorTests {
         Path link = temporaryDirectory.resolve("link");
         Files.createSymbolicLink(link, target);
 
-        assertRefused("production", link, "symbolic links or canonical-path mismatches are not allowed");
+        assertRefused("production", link, "configured image-root entry is a symbolic link");
+    }
+
+    @Test
+    void canonicalizedAncestorAliasDoesNotRejectARealImageRoot() throws IOException {
+        Path physicalParent = Files.createDirectory(temporaryDirectory.resolve("physical-parent"));
+        Path root = Files.createDirectory(physicalParent.resolve("images"));
+        Files.createFile(root.resolve(".wsi-environment-production"));
+        Path parentAlias = temporaryDirectory.resolve("parent-alias");
+        Files.createSymbolicLink(parentAlias, physicalParent);
+        Path configuredRoot = parentAlias.resolve("images");
+
+        assertThat(Files.isSymbolicLink(configuredRoot)).isFalse();
+        assertThat(configuredRoot.toAbsolutePath().normalize()).isNotEqualTo(configuredRoot.toRealPath());
+        assertThat(ImageRootStartupValidator.validate("production", configuredRoot.toString()))
+                .isEqualTo(root.toRealPath());
+    }
+
+    @Test
+    void markerDiagnosticsComeFromDirectoryBehindCanonicalizedAncestorAlias() throws IOException {
+        Path physicalParent = Files.createDirectory(temporaryDirectory.resolve("diagnostic-parent"));
+        Path root = Files.createDirectory(physicalParent.resolve("images"));
+        Files.createFile(root.resolve(".wsi-environment-staging"));
+        Path parentAlias = temporaryDirectory.resolve("diagnostic-alias");
+        Files.createSymbolicLink(parentAlias, physicalParent);
+
+        assertThatThrownBy(() -> ImageRootStartupValidator.validate(
+                "production", parentAlias.resolve("images").toString()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("resolvedPath=" + root.toRealPath())
+                .hasMessageContaining("foundMarkers=[.wsi-environment-staging]")
+                .hasMessageContaining("marker belongs to another environment");
     }
 
     private void assertValid(String environment, String marker) throws IOException {
