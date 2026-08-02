@@ -3,7 +3,7 @@
 set -u
 
 usage() {
-    echo "Usage: wsi {production|staging|development} {start|stop|status|logs}"
+    echo "Usage: wsi {production|staging|rehearsal|development} {start|stop|status|logs}"
     exit 2
 }
 
@@ -32,6 +32,17 @@ case "$ENVIRONMENT" in
         LOG_FILE="$BASE/logs/staging.log"
         PID_FILE="$BASE/run/staging.pid"
         LAUNCHER_PID_FILE="$BASE/run/staging-launcher.pid"
+        JAR="$BASE/app/wsi-server.jar"
+        MODE="jar"
+        ;;
+    rehearsal)
+        NAME="Production Rehearsal"
+        PORT="8083"
+        BASE="${WSI_REHEARSAL_ROOT:-/Users/dm026/wsi-production-rehearsal}"
+        CONFIG_DIR="$BASE/config"
+        LOG_FILE="$BASE/logs/rehearsal.log"
+        PID_FILE="$BASE/run/rehearsal.pid"
+        LAUNCHER_PID_FILE="$BASE/run/rehearsal-launcher.pid"
         JAR="$BASE/app/wsi-server.jar"
         MODE="jar"
         ;;

@@ -4,6 +4,7 @@ set -euo pipefail
 
 REPO="${WSI_REPO:-/Users/dm026/Downloads/wsi-server_works}"
 STAGING="${WSI_STAGING_ROOT:-/Users/dm026/wsi-staging}"
+REHEARSAL="${WSI_REHEARSAL_ROOT:-/Users/dm026/wsi-production-rehearsal}"
 PRODUCTION="${WSI_PRODUCTION_ROOT:-/Users/dm026/wsi-server-production}"
 PRODUCTION_ANNOTATIONS="${WSI_PRODUCTION_ANNOTATIONS:-/Users/dm026/.wsi-server/annotations}"
 WSI_CONTROL="${WSI_CONTROL:-/Users/dm026/bin/wsi}"
@@ -27,8 +28,9 @@ usage() {
     cat <<'EOF'
 Usage:
   wsi-release status
-  wsi-release verify {staging|production}
+  wsi-release verify {staging|rehearsal|production}
   wsi-release stage [--step] [--dry-run] [--verbose] [--yes]
+  wsi-release rehearse [--step] [--dry-run] [--verbose] [--yes]
   wsi-release promote [--step] [--dry-run] [--verbose] [--yes]
   wsi-release rollback [--step] [--dry-run] [--verbose] [--yes]
   wsi-release tag [TAG_NAME] [--step] [--dry-run] [--verbose] [--yes]
@@ -38,8 +40,8 @@ Modes:
   --step      Show every operational action and wait for Enter before running it.
   --dry-run   Show the complete plan without modifying files or services.
   --verbose   Print operational actions during normal execution.
-  --yes       Bypass typed STAGE/TAG confirmation; PROMOTE and ROLLBACK still
-              require their explicit tokens.
+  --yes       Bypass typed STAGE/REHEARSE/TAG confirmation; PROMOTE and
+              ROLLBACK still require their explicit tokens.
 EOF
     exit 2
 }
@@ -177,14 +179,15 @@ verify_runtime() {
     local target="$1" root port environment pid
     case "$target" in
         staging) root="$STAGING"; port=8082; environment=staging ;;
+        rehearsal) root="$REHEARSAL"; port=8083; environment=production ;;
         production) root="$PRODUCTION"; port=8080; environment=production ;;
-        *) fail "verify target must be staging or production." ;;
+        *) fail "verify target must be staging, rehearsal, or production." ;;
     esac
     validate_environment_config "$environment" "$root/config/application.properties" "$port"
-    verify_artifact "$root" "$environment"
+    verify_artifact "$root" "$target"
     pid="$(listener_pid "$port")"
     [[ -n "$pid" ]] || fail "$environment is not listening on port $port."
-    printf '%-11s port:   %s (PID %s)\n' "$environment" "$port" "$pid"
+    printf '%-11s port:   %s (PID %s)\n' "$target" "$port" "$pid"
 }
 
 show_status() {
@@ -194,7 +197,7 @@ show_status() {
     fi
     echo "Repository HEAD: $head"
     echo
-    for target in staging production; do
+    for target in staging rehearsal production; do
         echo "[$target]"
         if verify_runtime "$target"; then
             :
@@ -203,6 +206,72 @@ show_status() {
         fi
         echo
     done
+}
+
+backup_rehearsal() {
+    local destination="$1"
+    mkdir -p "$destination/app" "$destination/config"
+    if [[ -s "$REHEARSAL/app/wsi-server.jar" ]]; then
+        cp -p "$REHEARSAL/app/wsi-server.jar" "$destination/app/"
+        for name in BUILD_TAG.txt BUILD_COMMIT.txt SHA256.txt; do
+            [[ ! -f "$REHEARSAL/app/$name" ]] || cp -p "$REHEARSAL/app/$name" "$destination/app/"
+        done
+        [[ "$(sha256 "$REHEARSAL/app/wsi-server.jar")" = "$(sha256 "$destination/app/wsi-server.jar")" ]] || fail "Rehearsal backup checksum does not match."
+    fi
+    cp -p "$REHEARSAL/config/application.properties" "$destination/config/"
+}
+
+rehearse_release() {
+    local git_commit staging_commit staging_tag staging_sha stamp backup candidate answer
+
+    [[ -z "$(git -C "$REPO" status --porcelain)" ]] || fail "Git working tree is not clean."
+    validate_environment_config staging "$STAGING/config/application.properties" 8082
+    validate_environment_config production "$REHEARSAL/config/application.properties" 8083
+    verify_artifact "$STAGING" staging
+
+    git_commit="$(git -C "$REPO" rev-parse HEAD)"
+    staging_commit="$(cat "$STAGING/app/BUILD_COMMIT.txt")"
+    staging_tag="$(cat "$STAGING/app/BUILD_TAG.txt")"
+    staging_sha="$(sha256 "$STAGING/app/wsi-server.jar")"
+    [[ "$git_commit" = "$staging_commit" ]] || fail "Git HEAD does not match the staging commit."
+
+    if $DRY_RUN; then
+        echo "[DRY-RUN] Rehearsal candidate commit:   $staging_commit"
+        echo "[DRY-RUN] Rehearsal candidate build:    $staging_tag"
+        echo "[DRY-RUN] Rehearsal candidate checksum: $staging_sha"
+        echo "[DRY-RUN] Back up rehearsal, copy exact staging JAR, require REHEARSE, stop only 8083, install, restart and verify."
+        return
+    fi
+
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup="$REHEARSAL/releases/$stamp"
+    candidate="$REHEARSAL/app/wsi-server.candidate.jar"
+    run_function "Back up the current rehearsal environment" "backup rehearsal to $backup" backup_rehearsal "$backup"
+    run_cmd "Copy the exact staging JAR into rehearsal" cp -p "$STAGING/app/wsi-server.jar" "$candidate"
+    [[ "$(sha256 "$candidate")" = "$staging_sha" ]] || fail "Rehearsal candidate checksum differs from staging."
+
+    echo
+    echo "Rehearsal commit:   $staging_commit"
+    echo "Rehearsal build:    $staging_tag"
+    echo "Rehearsal checksum: $staging_sha"
+    echo "Rehearsal backup:   $backup"
+    echo
+
+    if ! $ASSUME_YES; then
+        read -r -p "Type REHEARSE to stop port 8083 and install this candidate: " answer
+        [[ "$answer" = REHEARSE ]] || fail "Production rehearsal installation cancelled."
+    fi
+
+    run_cmd "Stop production rehearsal" "$WSI_CONTROL" rehearsal stop
+    [[ -z "$(listener_pid 8083)" ]] || fail "Port 8083 is still occupied after stopping rehearsal."
+    run_cmd "Atomically install the rehearsal JAR" mv "$candidate" "$REHEARSAL/app/wsi-server.jar"
+    run_function "Write rehearsal build metadata" "write BUILD_TAG.txt, BUILD_COMMIT.txt and SHA256.txt" write_metadata "$REHEARSAL" "$staging_tag" "$staging_commit" "$staging_sha"
+    [[ "$(sha256 "$REHEARSAL/app/wsi-server.jar")" = "$staging_sha" ]] || fail "Installed rehearsal JAR checksum is incorrect."
+    run_cmd "Start production rehearsal" "$WSI_CONTROL" rehearsal start
+    verify_runtime rehearsal
+    audit "action=rehearse result=success commit=$staging_commit sha256=$staging_sha backup=$backup"
+    echo
+    echo "Production rehearsal installation completed. Validate http://localhost:8083 before promotion."
 }
 
 write_metadata() {
@@ -308,9 +377,12 @@ promote_release() {
 
     [[ -z "$(git -C "$REPO" status --porcelain)" ]] || fail "Git working tree is not clean."
     validate_environment_config staging "$STAGING/config/application.properties" 8082
+    validate_environment_config production "$REHEARSAL/config/application.properties" 8083
     validate_environment_config production "$PRODUCTION/config/application.properties" 8080
     verify_artifact "$STAGING" staging
+    verify_artifact "$REHEARSAL" rehearsal
     verify_artifact "$PRODUCTION" production
+    [[ -n "$(listener_pid 8083)" ]] || fail "Production rehearsal is not currently listening on port 8083."
     [[ -n "$(listener_pid 8080)" ]] || fail "Production is not currently listening on port 8080."
 
     git_commit="$(git -C "$REPO" rev-parse HEAD)"
@@ -319,6 +391,8 @@ promote_release() {
     staging_sha="$(sha256 "$STAGING/app/wsi-server.jar")"
     production_sha="$(sha256 "$PRODUCTION/app/wsi-server.jar")"
     [[ "$git_commit" = "$staging_commit" ]] || fail "Git HEAD does not match the staging commit."
+    [[ "$(cat "$REHEARSAL/app/BUILD_COMMIT.txt")" = "$staging_commit" ]] || fail "Rehearsal commit does not match staging."
+    [[ "$(sha256 "$REHEARSAL/app/wsi-server.jar")" = "$staging_sha" ]] || fail "Rehearsal JAR does not match staging."
 
     if $DRY_RUN; then
         echo "[DRY-RUN] Production checksum: $production_sha"
@@ -485,6 +559,7 @@ case "$COMMAND" in
     status) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; show_status ;;
     verify) [[ ${#POSITIONAL[@]} -eq 1 ]] || usage; verify_runtime "${POSITIONAL[0]}" ;;
     stage) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; stage_release ;;
+    rehearse) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; rehearse_release ;;
     promote) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; promote_release ;;
     rollback) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; rollback_release ;;
     tag) [[ ${#POSITIONAL[@]} -le 1 ]] || usage; TAG_NAME="${POSITIONAL[0]:-}"; tag_release ;;

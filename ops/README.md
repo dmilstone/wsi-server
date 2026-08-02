@@ -3,6 +3,16 @@
 This directory contains the version-controlled process and release commands for
 the WSI viewer.
 
+Reference documents:
+
+- [`RELEASE-CHEATSHEET.md`](RELEASE-CHEATSHEET.md) is the canonical online
+  quick reference rendered directly by GitHub.
+- [`RELEASE-CHEATSHEET.html`](RELEASE-CHEATSHEET.html) is a standalone browser
+  and print view.
+- `WSI-Release-Cheat-Sheet.pdf` is the verified two-page Letter print edition.
+- `render_cheatsheet.py` regenerates the PDF from the version-controlled
+  operational content.
+
 ## Commands
 
 `wsi` controls a running environment:
@@ -10,6 +20,7 @@ the WSI viewer.
 ```bash
 wsi production status
 wsi staging start
+wsi rehearsal status
 wsi development logs
 ```
 
@@ -19,6 +30,8 @@ wsi development logs
 wsi-release status
 wsi-release verify staging
 wsi-release stage
+wsi-release rehearse
+wsi-release verify rehearsal
 wsi-release promote
 wsi-release verify production
 wsi-release tag production-YYYY-MM-DD-description
@@ -31,9 +44,14 @@ required workflow remains:
 
 1. `wsi-release stage`
 2. Manual staging browser validation
-3. `wsi-release promote`
-4. Manual production browser validation
-5. `wsi-release tag TAG_NAME`
+3. `wsi-release rehearse`
+4. Manual production-mode rehearsal validation at `http://localhost:8083`
+5. `wsi-release promote`
+6. Manual production browser validation
+7. `wsi-release tag TAG_NAME`
+
+Production promotion refuses to proceed unless the running rehearsal artifact
+has the same commit and SHA-256 as staging.
 
 ## Troubleshooting modes
 
@@ -50,6 +68,7 @@ Examples:
 ```bash
 wsi-release stage --dry-run
 wsi-release stage --step --verbose
+wsi-release rehearse --step
 wsi-release promote --step
 ```
 
@@ -68,6 +87,20 @@ cp -p /Users/dm026/bin/wsi-rollback-production /Users/dm026/bin/wsi-rollback-pro
 ln -sfn /Users/dm026/Downloads/wsi-server_works/ops/wsi /Users/dm026/bin/wsi
 ln -sfn /Users/dm026/Downloads/wsi-server_works/ops/wsi-release /Users/dm026/bin/wsi-release
 ```
+
+Before first rehearsal use:
+
+```bash
+mkdir -p /Users/dm026/wsi-production-rehearsal/{app,config,data/annotations,logs,run,releases}
+mkdir -p /Users/dm026/wsi-images/production-rehearsal
+touch /Users/dm026/wsi-images/production-rehearsal/.wsi-environment-production
+cp -p ops/templates/rehearsal-application.properties /Users/dm026/wsi-production-rehearsal/config/application.properties
+```
+
+Populate the rehearsal image root only with verified deidentified validation
+slides. The configuration binds port 8083 to `127.0.0.1`, uses separate
+annotations, and deliberately reports `production` so the no-banner production
+layout is exercised.
 
 Do not replace the installed commands until `ops/tests/run.sh`, shell syntax
 checks, and `wsi-release stage --dry-run` pass locally.
@@ -94,6 +127,7 @@ can override them with:
 ```text
 WSI_REPO
 WSI_STAGING_ROOT
+WSI_REHEARSAL_ROOT
 WSI_PRODUCTION_ROOT
 WSI_DEVELOPMENT_ROOT
 WSI_PRODUCTION_ANNOTATIONS

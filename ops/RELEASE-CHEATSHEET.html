@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WSI Viewer Release Cheat Sheet</title>
+<style>
+:root{--navy:#0b1724;--blue:#2374b9;--light:#edf5fb;--green:#16764a;--amber:#9a6500;--red:#a42d2d;--line:#cbd7e2}
+*{box-sizing:border-box} body{margin:0;background:#f3f6f8;color:#17212b;font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+main{max-width:1050px;margin:24px auto;background:white;padding:32px 38px;box-shadow:0 2px 16px #0002}
+h1{margin:0;color:var(--navy);font-size:30px} .flow{margin:4px 0 22px;color:#526270;font-weight:650}
+h2{margin:22px 0 8px;padding-bottom:5px;border-bottom:2px solid var(--blue);color:var(--navy);font-size:20px}
+h3{margin:16px 0 5px;color:var(--blue);font-size:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+table{border-collapse:collapse;width:100%;font-size:13px}th{background:var(--navy);color:#fff;text-align:left}th,td{padding:7px 8px;border:1px solid var(--line);vertical-align:top}
+pre{margin:6px 0 9px;padding:9px 12px;background:#101a25;color:#eef6fd;border-radius:5px;white-space:pre-wrap;font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace}
+.gate{border-left:5px solid var(--green);background:#eef8f3;padding:8px 11px;margin:7px 0}.warn{border-left-color:var(--amber);background:#fff7e4}.stop{border-left-color:var(--red);background:#fff0f0}
+ul{margin:6px 0 9px;padding-left:21px}li{margin:3px 0}code{background:#edf1f4;padding:1px 4px;border-radius:3px}.page2{break-before:page}
+footer{margin-top:22px;border-top:1px solid var(--line);padding-top:8px;color:#667581;font-size:12px}
+@media(max-width:760px){main{margin:0;padding:20px}.grid{grid-template-columns:1fr}}
+@media print{@page{size:letter;margin:.42in}body{background:#fff;font-size:10pt}main{max-width:none;margin:0;padding:0;box-shadow:none}h1{font-size:22pt}h2{font-size:14pt;margin-top:12px}h3{font-size:11pt;margin-top:9px}pre{font-size:7.7pt;padding:6px 8px}table{font-size:8pt}.page2{break-before:page}.screen-only{display:none}}
+</style>
+</head>
+<body><main>
+<h1>WSI Viewer Release Cheat Sheet</h1>
+<div class="flow">Development &rarr; Staging &rarr; Production rehearsal &rarr; Production &rarr; Tag</div>
+<h2>Environments</h2>
+<table><thead><tr><th>Environment</th><th>Port</th><th>Runtime / identity</th><th>Data boundary</th></tr></thead><tbody>
+<tr><td>Development</td><td>8081</td><td>Live source; red banner</td><td>Deidentified development images and annotations</td></tr>
+<tr><td>Staging</td><td>8082</td><td>Candidate JAR; yellow banner</td><td>Deidentified staging images and annotations</td></tr>
+<tr><td>Rehearsal</td><td>8083</td><td>Exact staging JAR; production mode; loopback only</td><td>Deidentified production-marked images; rehearsal annotations</td></tr>
+<tr><td>Production</td><td>8080</td><td>Frozen validated JAR; no banner</td><td>Authorized clinical images and production annotations</td></tr>
+</tbody></table>
+<h2>Normal release</h2>
+<div class="grid"><section><h3>1. Development gate</h3><pre>cd /Users/dm026/Downloads/wsi-server_works
+git status --short
+./mvnw clean test
+node --test src/test/js/*.test.js
+git push origin feature/multichannel-viewer</pre><div class="gate stop">Stop if Git is dirty or any test fails.</div>
+<h3>2. Stage</h3><pre>wsi-release stage --step
+wsi-release verify staging</pre><div class="gate"><b>Browser 8082:</b> staging banner; expected deidentified slides; open, pan, zoom, channels, annotations, exports; no CSRF/403 errors.</div></section>
+<section><h3>3. Rehearse production mode</h3><pre>wsi-release rehearse --step
+wsi-release verify rehearsal</pre><div class="gate"><b>Browser 8083:</b> no banner; production layout; exact staging behavior; rehearsal-only data. Production remains available.</div>
+<h3>4. Promote</h3><pre>wsi-release promote --step
+wsi-release verify production</pre><div class="gate warn">Type <b>PROMOTE</b> only after staging and rehearsal match and the rollback backup verifies.</div>
+<h3>5. Tag after browser validation</h3><pre>wsi-release tag production-YYYY-MM-DD-description</pre></section></div>
+<div class="gate"><b>Browser 8080:</b> normal layout; authorized slides; pan, zoom, channels, annotations, exports; no CSRF/403 errors; other environments remain isolated.</div>
+
+<section class="page2"><h1>Troubleshooting and Recovery</h1>
+<div class="grid"><div><h2>Status</h2><pre>wsi production status
+wsi staging status
+wsi rehearsal status
+wsi development status
+wsi-release status
+wsi-release verify staging
+wsi-release verify rehearsal
+wsi-release verify production</pre>
+<h2>Logs</h2><pre>wsi production logs
+wsi staging logs
+wsi rehearsal logs
+wsi development logs</pre><p>Press <code>Control-C</code> to stop following a log.</p></div>
+<div><h2>Troubleshooting modes</h2><pre>wsi-release stage --dry-run
+wsi-release stage --step --verbose
+wsi-release rehearse --dry-run
+wsi-release promote --dry-run
+wsi-release history</pre><ul><li><code>--dry-run</code>: no changes.</li><li><code>--step</code>: Enter runs; <code>p</code> repeats; <code>q</code> exits safely.</li><li>Never bypass PROMOTE or ROLLBACK.</li></ul>
+<h2>Rollback</h2><pre>wsi-release history
+wsi-release rollback --step
+wsi-release verify production</pre><div class="gate warn">Rollback never restores, replaces, or overwrites annotations.</div></div></div>
+<h2>Stop conditions</h2><div class="grid"><ul><li>Dirty Git worktree or failed tests</li><li>Git HEAD differs from staging commit</li><li>Recorded and calculated SHA-256 differ</li><li>Staging and rehearsal differ</li></ul><ul><li>Environment marker, identity, image root, or port mismatch</li><li>Expected port does not bind</li><li>Browser regression in security, layout, images, annotations, or exports</li></ul></div>
+<h2>Marker rule</h2><table><thead><tr><th>Identity</th><th>Required marker</th></tr></thead><tbody><tr><td>development</td><td><code>.wsi-environment-development</code></td></tr><tr><td>staging</td><td><code>.wsi-environment-staging</code></td></tr><tr><td>production and rehearsal</td><td><code>.wsi-environment-production</code></td></tr></tbody></table>
+<div class="gate stop"><b>Privacy:</b> Never copy production slides into development, staging, or rehearsal. Verify filenames, metadata, embedded labels, thumbnails, macro images, and associated files are deidentified.</div>
+<footer>Canonical source: ops/RELEASE-CHEATSHEET.md &bull; Production changes only through explicit verified promotion.</footer></section>
+</main></body></html>

@@ -34,7 +34,7 @@ expect_failure "unknown command is rejected" "$RELEASE" unknown
 expect_failure "verify requires a target" "$RELEASE" verify
 expect_failure "unknown option is rejected" "$RELEASE" status --unsafe-option
 
-mkdir -p "$TEST_ROOT/repo/.git" "$TEST_ROOT/staging/app" "$TEST_ROOT/staging/config" "$TEST_ROOT/production/app" "$TEST_ROOT/production/config" "$TEST_ROOT/production/logs"
+mkdir -p "$TEST_ROOT/repo/.git" "$TEST_ROOT/staging/app" "$TEST_ROOT/staging/config" "$TEST_ROOT/rehearsal/app" "$TEST_ROOT/rehearsal/config" "$TEST_ROOT/production/app" "$TEST_ROOT/production/config" "$TEST_ROOT/production/logs"
 
 if grep -Eq 'eval |rm -rf|git reset --hard|git checkout --' "$RELEASE"; then
     echo "FAIL: prohibited destructive or eval construct found"
@@ -82,5 +82,31 @@ grep -q '\[DRY-RUN\].*Run the complete Maven build and tests' "$TEST_ROOT/dry-ru
 grep -q 'Require STAGE confirmation' "$TEST_ROOT/dry-run-output"
 [[ ! -e "$TEST_ROOT/staging/app/wsi-server.candidate.jar" ]]
 pass "stage dry-run performs no staging mutation"
+
+mkdir -p "$TEST_ROOT/rehearsal-images"
+touch "$TEST_ROOT/rehearsal-images/.wsi-environment-production"
+cat > "$TEST_ROOT/rehearsal/config/application.properties" <<EOF
+wsi.environment=production
+wsi.image-directory=$TEST_ROOT/rehearsal-images
+server.port=8083
+EOF
+
+WSI_REPO="$TEST_ROOT/repo" \
+WSI_STAGING_ROOT="$TEST_ROOT/staging" \
+WSI_REHEARSAL_ROOT="$TEST_ROOT/rehearsal" \
+WSI_PRODUCTION_ROOT="$TEST_ROOT/production" \
+WSI_CONTROL="$TEST_ROOT/never-called-wsi" \
+"$RELEASE" rehearse --dry-run > "$TEST_ROOT/rehearse-dry-run-output"
+
+grep -q 'exact staging JAR' "$TEST_ROOT/rehearse-dry-run-output"
+grep -q 'require REHEARSE' "$TEST_ROOT/rehearse-dry-run-output"
+[[ ! -e "$TEST_ROOT/rehearsal/app/wsi-server.candidate.jar" ]]
+pass "rehearsal dry-run preserves isolation and performs no mutation"
+
+grep -q 'PORT="8083"' "$CONTROL"
+grep -q 'WSI_REHEARSAL_ROOT' "$CONTROL"
+grep -q 'server.address=127.0.0.1' "$OPS_DIR/templates/rehearsal-application.properties"
+grep -q 'wsi.environment=production' "$OPS_DIR/templates/rehearsal-application.properties"
+pass "rehearsal is production-mode on loopback port 8083"
 
 echo "All $pass_count operational script tests passed."
