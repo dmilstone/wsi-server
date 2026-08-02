@@ -1,6 +1,8 @@
 package wsi_server.annotation;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 
 /**
  * One rectangular or elliptical ROI in level-0 slide pixel coordinates.
@@ -20,6 +22,7 @@ public record Annotation(
         double height,
         double rotation,
         Instant createdAt,
-        Instant modifiedAt
+        Instant modifiedAt,
+        List<Map<String, Object>> bodies
 ) {
 }

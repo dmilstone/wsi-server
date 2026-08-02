@@ -25,6 +25,27 @@ class AnnotoriousSpike {
             return;
         }
 
+        // Constructing the OSD annotator before the first OpenSeadragon `open`
+        // leaves its internal store only partly initialized. A cached annotation
+        // request can then reach add/setAnnotations while that store is being
+        // created. Initialize from the open event instead, then await loading.
+        this.viewer.addHandler("open", () => {
+            void this.handleViewerOpen().catch(error =>
+                console.error("Annotorious: unable to initialize annotations", error)
+            );
+        });
+    }
+
+    async handleViewerOpen() {
+        if (!this.annotator) this.createAnnotator();
+        const imageId = this.getCurrentImageId?.();
+        this.timingCallbacks.open?.(imageId);
+        this.setDrawingEnabled(false);
+        this.notifySelectionChanged();
+        await this.adapter.loadCurrentImage(imageId);
+    }
+
+    createAnnotator() {
         this.annotator = window.AnnotoriousOSD.createOSDAnnotator(this.viewer, {
             drawingEnabled: false,
             drawingMode: "drag",
@@ -76,13 +97,6 @@ class AnnotoriousSpike {
 
         this.installKeyboardShortcuts();
 
-        this.viewer.addHandler("open", () => {
-            const imageId = this.getCurrentImageId?.();
-            this.timingCallbacks.open?.(imageId);
-            this.setDrawingEnabled(false);
-            this.notifySelectionChanged();
-            this.adapter.loadCurrentImage(imageId);
-        });
     }
 
     getSelectedAnnotations() {

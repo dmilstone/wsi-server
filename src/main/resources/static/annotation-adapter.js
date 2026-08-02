@@ -15,6 +15,7 @@ class AnnotationAdapter {
         this.nonDisplayedAnnotations = [];
         this.suppressEvents = false;
         this.ignoredDeletedAnnotationIds = new Set();
+        this.replacementQueue = Promise.resolve();
 
         // AnnotationStore owns lifecycle and persistence; this adapter only maps
         // between the backend document and Annotorious' geometry model.
@@ -24,21 +25,21 @@ class AnnotationAdapter {
                 return this.toBackendCollection();
             }
         });
-        this.store.subscribe("collectionChanged", event => {
+        this.store.subscribe("collectionChanged", async event => {
             if (event.reason === "imageChanged") {
                 this.metadataById.clear();
                 this.backendIdByClientId.clear();
                 this.nonDisplayedAnnotations = [];
-                this.replaceAnnotoriousAnnotations([]);
+                await this.replaceAnnotoriousAnnotations([]);
             } else if (event.reason === "loaded" || event.reason === "saved") {
                 if (event.reason === "loaded") {
                     this.timingCallbacks.annotationsLoaded?.(event.collection.imageId);
                 }
-                this.applyBackendCollection(event.collection);
+                await this.applyBackendCollection(event.collection);
                 if (event.reason === "loaded") {
                     this.timingCallbacks.annotationsRendered?.(event.collection.imageId);
                 }
-                console.info(`AnnotationAdapter: ${event.reason} annotations`, event.collection);
+                console.info(`AnnotationAdapter: ${event.reason} ${event.collection.annotations?.length || 0} annotations`);
             }
         });
     }
@@ -71,13 +72,20 @@ class AnnotationAdapter {
         this.store.updateCollection(this.toBackendCollection());
     }
 
-    applyBackendCollection(collection) {
+    async applyBackendCollection(collection) {
         this.indexBackendMetadata(collection);
 
         const displayed = [];
         this.nonDisplayedAnnotations = [];
 
-        for (const annotation of collection.annotations || []) {
+        const annotations = Array.isArray(collection.annotations) ? collection.annotations : [];
+        for (let index = 0; index < annotations.length; index += 1) {
+            const annotation = annotations[index];
+            if (!annotation || typeof annotation !== "object") {
+                console.warn(`AnnotationAdapter: preserved malformed annotation at index ${index}; it was not displayed`);
+                this.nonDisplayedAnnotations.push(annotation);
+                continue;
+            }
             if (annotation.visible === false || !this.isSupportedBackendAnnotation(annotation)) {
                 this.nonDisplayedAnnotations.push(annotation);
                 continue;
@@ -92,7 +100,7 @@ class AnnotationAdapter {
             }
         }
 
-        this.replaceAnnotoriousAnnotations(displayed);
+        await this.replaceAnnotoriousAnnotations(displayed);
     }
 
     indexBackendMetadata(collection) {
@@ -141,27 +149,48 @@ class AnnotationAdapter {
     }
 
     replaceAnnotoriousAnnotations(annotations) {
-        // Remember currently displayed IDs before clearing. Annotorious can emit
-        // their delete events after this method returns.
-        for (const annotation of this.annotator.getAnnotations()) {
-            if (annotation?.id) {
-                this.ignoredDeletedAnnotationIds.add(annotation.id);
-            }
-        }
+        const safeAnnotations = (Array.isArray(annotations) ? annotations : [])
+            .filter(annotation => annotation && typeof annotation === "object")
+            .map(annotation => ({
+                ...annotation,
+                bodies: Array.isArray(annotation.bodies)
+                    ? annotation.bodies.filter(body => body && typeof body === "object")
+                    : []
+            }));
 
-        this.suppressEvents = true;
-        try {
-            this.annotator.clearAnnotations();
-            if (annotations.length > 0) {
-                if (typeof this.annotator.addAnnotations === "function") {
-                    this.annotator.addAnnotations(annotations);
-                } else {
-                    annotations.forEach(annotation => this.annotator.addAnnotation(annotation));
+        // Annotorious replacement can be asynchronous. Serializing replacements
+        // makes an older image incapable of winning a race with a newer one.
+        const replacement = this.replacementQueue.then(async () => {
+            // Remember currently displayed IDs before clearing. Annotorious can emit
+            // their delete events after this method returns.
+            for (const annotation of this.annotator.getAnnotations()) {
+                if (annotation?.id) {
+                    this.ignoredDeletedAnnotationIds.add(annotation.id);
                 }
             }
-        } finally {
-            this.suppressEvents = false;
-        }
+
+            this.suppressEvents = true;
+            try {
+                if (typeof this.annotator.setAnnotations === "function") {
+                    await this.annotator.setAnnotations(safeAnnotations, true);
+                } else {
+                    await this.annotator.clearAnnotations();
+                    if (safeAnnotations.length > 0) {
+                        if (typeof this.annotator.addAnnotations === "function") {
+                            await this.annotator.addAnnotations(safeAnnotations);
+                        } else {
+                            for (const annotation of safeAnnotations) {
+                                await this.annotator.addAnnotation(annotation);
+                            }
+                        }
+                    }
+                }
+            } finally {
+                this.suppressEvents = false;
+            }
+        });
+        this.replacementQueue = replacement.catch(() => {});
+        return replacement;
     }
 
     toBackendCollection() {
@@ -196,6 +225,7 @@ class AnnotationAdapter {
         const type = selectorType === "ELLIPSE" ? "ellipse" : "rectangle";
 
         return {
+            ...existing,
             // Annotorious-generated IDs are not guaranteed to be UUIDs. Sending
             // null lets the backend assign a canonical UUID.
             id: this.backendIdByClientId.get(annotation.id) ||
@@ -212,7 +242,10 @@ class AnnotationAdapter {
             height,
             rotation: Number.isFinite(Number(existing?.rotation)) ? Number(existing.rotation) : 0,
             createdAt: existing?.createdAt || null,
-            modifiedAt: existing?.modifiedAt || null
+            modifiedAt: existing?.modifiedAt || null,
+            bodies: Array.isArray(annotation?.bodies)
+                ? annotation.bodies.filter(body => body && typeof body === "object")
+                : (Array.isArray(existing?.bodies) ? existing.bodies : [])
         };
     }
 
@@ -223,7 +256,7 @@ class AnnotationAdapter {
         const height = Number(annotation.height);
 
         if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
-            console.warn("AnnotationAdapter: skipped invalid annotation geometry", annotation);
+            console.warn(`AnnotationAdapter: preserved annotation ${annotation?.id || "without an ID"}; invalid geometry was not displayed`);
             return null;
         }
 
@@ -234,7 +267,9 @@ class AnnotationAdapter {
 
         return {
             id: annotation.id,
-            bodies: [],
+            bodies: Array.isArray(annotation.bodies)
+                ? annotation.bodies.filter(body => body && typeof body === "object")
+                : [],
             target: {
                 selector: {
                     type: selectorType,

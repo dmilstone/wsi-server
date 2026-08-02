@@ -55,21 +55,25 @@ class AnnotationStore {
         return () => this.listeners.get(eventName)?.delete(listener);
     }
 
-    emit(eventName, detail) {
-        for (const listener of this.listeners.get(eventName) || []) listener(detail);
+    async emit(eventName, detail) {
+        for (const listener of this.listeners.get(eventName) || []) await listener(detail);
     }
 
     setSaveState(saveState) {
         if (this.saveState === saveState) return;
         this.saveState = saveState;
-        this.emit("saveStateChanged", { saveState, dirty: this.dirty });
+        void this.emit("saveStateChanged", { saveState, dirty: this.dirty }).catch(error =>
+            console.error("AnnotationStore: save-state listener failed", error)
+        );
     }
 
     setSelectedAnnotationId(annotationId) {
         const nextId = annotationId || null;
         if (this.selectedAnnotationId === nextId) return;
         this.selectedAnnotationId = nextId;
-        this.emit("selectionChanged", { selectedAnnotationId: nextId });
+        void this.emit("selectionChanged", { selectedAnnotationId: nextId }).catch(error =>
+            console.error("AnnotationStore: selection listener failed", error)
+        );
     }
 
     async load(imageId) {
@@ -88,7 +92,7 @@ class AnnotationStore {
         this.dirty = false;
         this.setSelectedAnnotationId(null);
         this.setSaveState("idle");
-        this.emit("collectionChanged", { collection: null, reason: "imageChanged" });
+        await this.emit("collectionChanged", { collection: null, reason: "imageChanged" });
         if (!nextImageId) return;
 
         this.setSaveState("loading");
@@ -97,7 +101,7 @@ class AnnotationStore {
             if (generation !== this.loadGeneration || collection.imageId !== this.currentImageId) return;
             this.currentCollection = collection;
             this.setSaveState("idle");
-            this.emit("collectionChanged", { collection, reason: "loaded" });
+            await this.emit("collectionChanged", { collection, reason: "loaded" });
         } catch (error) {
             if (generation !== this.loadGeneration) return;
             this.setSaveState("error");
@@ -115,7 +119,9 @@ class AnnotationStore {
         this.saveRequested = true;
         this.dirty = true;
         this.setSaveState("dirty");
-        this.emit("collectionChanged", { collection, reason: "edited" });
+        void this.emit("collectionChanged", { collection, reason: "edited" }).catch(error =>
+            console.error("AnnotationStore: edit listener failed", error)
+        );
         this.cancelSaveTimer();
         this.saveTimer = window.setTimeout(() => {
             this.saveTimer = null;
@@ -167,14 +173,14 @@ class AnnotationStore {
                         this.currentCollection = savedCollection;
                         this.savedVersion = this.changeVersion;
                         this.dirty = false;
-                        this.emit("collectionChanged", { collection: savedCollection, reason: "saved" });
+                        await this.emit("collectionChanged", { collection: savedCollection, reason: "saved" });
                     } else {
                         this.currentCollection = this.reconcileSavedCollection
                             ? this.reconcileSavedCollection(this.currentCollection, savedCollection)
                             : this.currentCollection;
                         this.saveRequested = true;
                         this.dirty = true;
-                        this.emit("collectionChanged", {
+                        await this.emit("collectionChanged", {
                             collection: this.currentCollection,
                             serverCollection: savedCollection,
                             reason: "reconciled"
