@@ -97,6 +97,24 @@ async function loadWithDocuments(documents) {
     assert.equal(fixture.adapter.store.dirty, false);
     assert.equal(fixture.annotator.events, 0);
 
+    // A clean save response updates canonical metadata without replacing live
+    // Annotorious geometry. In particular, a newly drawn shape stays mounted
+    // instead of disappearing until the next pointer-triggered overlay redraw.
+    const replacementsBeforeSave = fixture.annotator.replacements;
+    const newlyDrawn = fixture.adapter.toAnnotorious(rectangle(
+        "00000000-0000-4000-8000-000000000005", { name: "New" }
+    ));
+    fixture.annotator.annotations.push(newlyDrawn);
+    await fixture.adapter.store.emit("collectionChanged", {
+        reason: "saved",
+        collection: collection("malformed", [malformed, rectangle(
+            "00000000-0000-4000-8000-000000000005", { name: "New" }
+        )])
+    });
+    assert.equal(fixture.annotator.replacements, replacementsBeforeSave);
+    assert.equal(fixture.annotator.annotations.length, 2);
+    assert.equal(fixture.annotator.annotations[1], newlyDrawn);
+
     // A slow earlier image cannot render after a rapidly selected later image.
     let releaseSlow;
     const slow = new Promise(resolve => { releaseSlow = resolve; });

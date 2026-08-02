@@ -25,10 +25,10 @@ class AnnotoriousSpike {
             return;
         }
 
-        // Constructing the OSD annotator before the first OpenSeadragon `open`
-        // leaves its internal store only partly initialized. A cached annotation
-        // request can then reach add/setAnnotations while that store is being
-        // created. Initialize from the open event instead, then await loading.
+        // Annotorious must subscribe to OpenSeadragon before its first `open`.
+        // Creating it from inside `open` makes it miss the lifecycle event that
+        // initializes and invalidates its SVG overlay.
+        this.createAnnotator();
         this.viewer.addHandler("open", () => {
             void this.handleViewerOpen().catch(error =>
                 console.error("Annotorious: unable to initialize annotations", error)
@@ -37,12 +37,21 @@ class AnnotoriousSpike {
     }
 
     async handleViewerOpen() {
-        if (!this.annotator) this.createAnnotator();
         const imageId = this.getCurrentImageId?.();
         this.timingCallbacks.open?.(imageId);
         this.setDrawingEnabled(false);
         this.notifySelectionChanged();
+        // Annotorious' own OSD open handler runs before this handler, but its
+        // overlay/store commit completes during the next paint. Do not let a
+        // cached annotation response overtake that commit on the first image.
+        await this.waitForAnnotoriousReady();
         await this.adapter.loadCurrentImage(imageId);
+    }
+
+    waitForAnnotoriousReady() {
+        return new Promise(resolve => window.requestAnimationFrame(() =>
+            window.requestAnimationFrame(resolve)
+        ));
     }
 
     createAnnotator() {

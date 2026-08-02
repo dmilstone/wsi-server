@@ -14,7 +14,6 @@ class AnnotationAdapter {
         this.backendIdByClientId = new Map();
         this.nonDisplayedAnnotations = [];
         this.suppressEvents = false;
-        this.ignoredDeletedAnnotationIds = new Set();
         this.replacementQueue = Promise.resolve();
 
         // AnnotationStore owns lifecycle and persistence; this adapter only maps
@@ -31,15 +30,17 @@ class AnnotationAdapter {
                 this.backendIdByClientId.clear();
                 this.nonDisplayedAnnotations = [];
                 await this.replaceAnnotoriousAnnotations([]);
-            } else if (event.reason === "loaded" || event.reason === "saved") {
-                if (event.reason === "loaded") {
-                    this.timingCallbacks.annotationsLoaded?.(event.collection.imageId);
-                }
+            } else if (event.reason === "loaded") {
+                this.timingCallbacks.annotationsLoaded?.(event.collection.imageId);
                 await this.applyBackendCollection(event.collection);
-                if (event.reason === "loaded") {
-                    this.timingCallbacks.annotationsRendered?.(event.collection.imageId);
-                }
-                console.info(`AnnotationAdapter: ${event.reason} ${event.collection.annotations?.length || 0} annotations`);
+                this.timingCallbacks.annotationsRendered?.(event.collection.imageId);
+                console.info(`AnnotationAdapter: loaded ${event.collection.annotations?.length || 0} annotations`);
+            } else if (event.reason === "saved") {
+                // A save changes canonical IDs/timestamps, not client geometry.
+                // Replacing here tears down a just-created Annotorious shape and
+                // can leave its overlay stale until the next pointer event.
+                this.reconcileSavedMetadata(event.collection);
+                console.info(`AnnotationAdapter: saved ${event.collection.annotations?.length || 0} annotations`);
             }
         });
     }
@@ -61,8 +62,6 @@ class AnnotationAdapter {
     }
 
     annotationDeleted(annotation) {
-        const annotationId = annotation?.id;
-        if (annotationId && this.ignoredDeletedAnnotationIds.delete(annotationId)) return;
         if (this.suppressEvents) return;
         console.info("AnnotationAdapter: annotation deleted", annotation);
         this.collectionEdited();
@@ -161,14 +160,6 @@ class AnnotationAdapter {
         // Annotorious replacement can be asynchronous. Serializing replacements
         // makes an older image incapable of winning a race with a newer one.
         const replacement = this.replacementQueue.then(async () => {
-            // Remember currently displayed IDs before clearing. Annotorious can emit
-            // their delete events after this method returns.
-            for (const annotation of this.annotator.getAnnotations()) {
-                if (annotation?.id) {
-                    this.ignoredDeletedAnnotationIds.add(annotation.id);
-                }
-            }
-
             this.suppressEvents = true;
             try {
                 if (typeof this.annotator.setAnnotations === "function") {
