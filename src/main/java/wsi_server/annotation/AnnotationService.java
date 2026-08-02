@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -115,7 +116,8 @@ public class AnnotationService {
 
         return new Annotation(
                 id, value.type(), name, value.visible(), value.locked(), color.toLowerCase(), value.lineWidth(),
-                value.x(), value.y(), value.width(), value.height(), value.rotation(), created, modified
+                value.x(), value.y(), value.width(), value.height(), value.rotation(), created, modified,
+                value.bodies() == null ? List.of() : value.bodies().stream().filter(Objects::nonNull).toList()
         );
     }
 

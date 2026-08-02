@@ -25,6 +25,36 @@ class AnnotoriousSpike {
             return;
         }
 
+        // Annotorious must subscribe to OpenSeadragon before its first `open`.
+        // Creating it from inside `open` makes it miss the lifecycle event that
+        // initializes and invalidates its SVG overlay.
+        this.createAnnotator();
+        this.viewer.addHandler("open", () => {
+            void this.handleViewerOpen().catch(error =>
+                console.error("Annotorious: unable to initialize annotations", error)
+            );
+        });
+    }
+
+    async handleViewerOpen() {
+        const imageId = this.getCurrentImageId?.();
+        this.timingCallbacks.open?.(imageId);
+        this.setDrawingEnabled(false);
+        this.notifySelectionChanged();
+        // Annotorious' own OSD open handler runs before this handler, but its
+        // overlay/store commit completes during the next paint. Do not let a
+        // cached annotation response overtake that commit on the first image.
+        await this.waitForAnnotoriousReady();
+        await this.adapter.loadCurrentImage(imageId);
+    }
+
+    waitForAnnotoriousReady() {
+        return new Promise(resolve => window.requestAnimationFrame(() =>
+            window.requestAnimationFrame(resolve)
+        ));
+    }
+
+    createAnnotator() {
         this.annotator = window.AnnotoriousOSD.createOSDAnnotator(this.viewer, {
             drawingEnabled: false,
             drawingMode: "drag",
@@ -76,13 +106,6 @@ class AnnotoriousSpike {
 
         this.installKeyboardShortcuts();
 
-        this.viewer.addHandler("open", () => {
-            const imageId = this.getCurrentImageId?.();
-            this.timingCallbacks.open?.(imageId);
-            this.setDrawingEnabled(false);
-            this.notifySelectionChanged();
-            this.adapter.loadCurrentImage(imageId);
-        });
     }
 
     getSelectedAnnotations() {
