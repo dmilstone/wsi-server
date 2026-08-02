@@ -107,21 +107,21 @@ def environment_table():
 def page_one():
     left = [
         P("1. Development gate", h3),
-        codebox(["cd /Users/dm026/Downloads/wsi-server_works", "git status --short", "./mvnw clean test", "node --test src/test/js/*.test.js", "git push origin feature/multichannel-viewer"]),
-        callout("<b>STOP:</b> Git must be clean and every test must pass.", RED, LIGHT_RED),
+        codebox(["cd /Users/dm026/Downloads/wsi-server_works", "git status --short", "./mvnw clean test", "node --test src/test/js/*.test.js", "./ops/tests/run.sh", "git push origin feature/multichannel-viewer"]),
+        callout("<b>STOP:</b> Git must be clean and every required test must pass.", RED, LIGHT_RED),
         P("2. Build and install staging", h3),
-        codebox(["wsi-release stage --step", "wsi-release verify staging"]),
-        callout("<b>Browser 8082:</b> staging banner; expected deidentified slides; pan, zoom, channels, annotations and exports; no CSRF/403 errors."),
+        codebox(["./ops/wsi-release stage --dry-run", "./ops/wsi-release stage --step", "./ops/wsi-release verify staging", "wsi staging status"]),
+        callout("<b>Browser 8082:</b> yellow banner; deidentified slides; viewer, channels, annotations and exports; no 403, 500 or unhandled JavaScript errors."),
     ]
     right = [
         P("3. Rehearse production mode", h3),
-        codebox(["wsi-release rehearse --step", "wsi-release verify rehearsal"]),
-        callout("<b>Browser 8083:</b> no banner; production layout; exact staging behavior; rehearsal-only data. Port 8080 remains available."),
+        codebox(["./ops/wsi-release rehearse --dry-run", "./ops/wsi-release rehearse --step", "./ops/wsi-release verify rehearsal", "wsi rehearsal status"]),
+        callout("<b>Browser 8083:</b> no banner; production layout; exact staging artifact; deidentified rehearsal data only. Port 8080 remains available."),
         P("4. Promote exact rehearsed candidate", h3),
-        codebox(["wsi-release promote --step", "wsi-release verify production"]),
-        callout("Type <b>PROMOTE</b> only after staging and rehearsal match and the rollback backup verifies.", AMBER, LIGHT_AMBER),
+        codebox(["./ops/wsi-release verify staging", "./ops/wsi-release verify rehearsal", "./ops/wsi-release promote --dry-run", "./ops/wsi-release promote --step", "./ops/wsi-release verify production"]),
+        callout("Type <b>PROMOTE</b> only when staging and rehearsal commit/SHA-256 match and the rollback backup verifies.", AMBER, LIGHT_AMBER),
         P("5. Tag after production validation", h3),
-        codebox(["wsi-release tag production-YYYY-MM-DD-description"]),
+        codebox(["./ops/wsi-release tag production-YYYY-MM-DD-description"]),
     ]
     columns = Table([[left, right]], colWidths=[3.68*inch, 3.68*inch], hAlign="LEFT")
     columns.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -134,23 +134,23 @@ def page_one():
             P("Environments", h2), environment_table(),
             P("Normal release", h2), columns,
             Spacer(1, 5),
-            callout("<b>Browser 8080:</b> normal production layout; authorized slides; pan, zoom, channels, annotations and exports; no CSRF/403 errors; all other environments remain isolated.")]
+            callout("<b>Browser 8080:</b> normal production layout/title; authorized slides; viewer, channels, annotations and exports; no security, layout or persistence regression; other environments remain isolated.")]
 
 
 def page_two():
     left = [P("Status and verification", h2),
-            codebox(["wsi production status", "wsi staging status", "wsi rehearsal status", "wsi development status", "wsi-release status", "wsi-release verify staging", "wsi-release verify rehearsal", "wsi-release verify production"]),
+            codebox(["wsi production status", "wsi staging status", "wsi rehearsal status", "wsi development status", "./ops/wsi-release status", "./ops/wsi-release verify staging", "./ops/wsi-release verify rehearsal", "./ops/wsi-release verify production"]),
             P("Logs", h2),
             codebox(["wsi production logs", "wsi staging logs", "wsi rehearsal logs", "wsi development logs"]),
             P("Press <b>Control-C</b> to stop following a log.", small),
             P("Rollback", h2),
-            codebox(["wsi-release history", "wsi-release rollback --step", "wsi-release verify production"]),
+            codebox(["./ops/wsi-release history", "./ops/wsi-release rollback --step", "./ops/wsi-release verify production"]),
             callout("Rollback restores the prior JAR, metadata, checksum and configuration. It <b>never restores or overwrites annotations</b>.", AMBER, LIGHT_AMBER)]
     right = [P("Troubleshooting modes", h2),
-             codebox(["wsi-release stage --dry-run", "wsi-release stage --step --verbose", "wsi-release rehearse --dry-run", "wsi-release promote --dry-run", "wsi-release history"]),
-             P("<b>--dry-run</b>: plan only. <b>--step</b>: Enter runs, p repeats, q exits safely. Never bypass PROMOTE or ROLLBACK.", small),
+             codebox(["./ops/wsi-release stage --dry-run", "./ops/wsi-release stage --step --verbose", "./ops/wsi-release rehearse --dry-run", "./ops/wsi-release promote --dry-run", "./ops/wsi-release history"]),
+             P("<b>--dry-run</b>: plan only. <b>--step</b>: Enter runs, p repeats, q exits safely. Use ./ops/wsi-release if the installed command is missing. Never bypass PROMOTE or ROLLBACK.", small),
              P("Stop conditions", h2),
-             P("- Dirty Git tree or failed tests<br/>- Git HEAD differs from staging commit<br/>- Recorded and calculated SHA-256 differ<br/>- Staging and rehearsal differ<br/>- Environment marker, identity, root or port mismatch<br/>- Expected port does not bind<br/>- Browser regression in security, layout, images, annotations or exports", small),
+             P("- Dirty Git tree or failed required test<br/>- Git HEAD differs from staging commit<br/>- Recorded/calculated SHA-256 differ<br/>- Staging and rehearsal differ<br/>- Environment identity, marker, root or port mismatch<br/>- Production backup validation fails<br/>- New 403, 500, unhandled JavaScript error, lost annotation, blank image or routine delay", small),
              callout("Do not repair a mismatch by editing build metadata or checksum files.", RED, LIGHT_RED),
              P("Marker rule", h2)]
     marker = Table([[P("Identity", table_header), P("Required marker", table_header)],
@@ -167,9 +167,11 @@ def page_two():
     columns.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP"), ("LEFTPADDING", (0,0), (-1,-1), 0),
                                  ("RIGHTPADDING", (0,0), (0,-1), 8), ("LEFTPADDING", (1,0), (1,-1), 8),
                                  ("RIGHTPADDING", (1,0), (1,-1), 0)]))
-    return [P("Troubleshooting and Recovery", title), columns, Spacer(1, 7),
-            callout("<b>Privacy:</b> Never copy production slides into development, staging or rehearsal. Verify deidentification of filenames, metadata, embedded labels, thumbnails, macro images and associated files.", RED, LIGHT_RED),
-            Spacer(1, 5), P("Exactly one environment marker must exist. A missing, multiple or cross-environment marker prevents startup before the server accepts requests.", small)]
+    return [P("Troubleshooting and Recovery", title), columns, Spacer(1, 5),
+            callout("<b>Timing:</b> Image-switch total ends at OpenSeadragon open and may not include all visible tiles. Use browser Network timing and server logs for repeatable delays.", AMBER, LIGHT_AMBER),
+            Spacer(1, 4),
+            callout("<b>Privacy:</b> Never copy production slides into development, staging or rehearsal. Verify filenames, metadata, embedded labels, thumbnails, macro images and associated files. Never synthesize a missing embedded label/thumbnail from diagnostic pixels.", RED, LIGHT_RED),
+            Spacer(1, 4), P("Exactly one environment marker must exist. A missing, multiple or cross-environment marker prevents startup before the server accepts requests.", small)]
 
 
 def build():

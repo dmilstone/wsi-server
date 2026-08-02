@@ -4,16 +4,15 @@
 
 ## Environments
 
-| Environment | Port | Runtime | Identity | Images | Annotations |
-|---|---:|---|---|---|---|
-| Development | 8081 | Live Maven source | Red development banner | Deidentified development set | Development-only |
-| Staging | 8082 | Candidate JAR | Yellow staging banner | Deidentified staging set | Staging-only |
-| Rehearsal | 8083 | Exact staging JAR | Production mode, no banner | Deidentified production-marked set | Rehearsal-only |
-| Production | 8080 | Frozen validated JAR | Production mode, no banner | Authorized clinical set | Production-only |
+| Environment | Port | Runtime and identity | Data boundary |
+|---|---:|---|---|
+| Development | 8081 | Live Maven source; red banner | Deidentified development images and annotations |
+| Staging | 8082 | Candidate JAR; yellow banner | Deidentified staging images and annotations |
+| Rehearsal | 8083 | Exact staging JAR; production mode; loopback only | Deidentified production-marked images; rehearsal annotations |
+| Production | 8080 | Frozen validated JAR; no banner | Authorized clinical images and production annotations |
 
-Rehearsal binds to `127.0.0.1`; it is not a user-accessible service. Its image
-root contains `.wsi-environment-production`, but contains only verified
-deidentified slides.
+Rehearsal binds to `127.0.0.1` and is not user accessible. Production source
+edits do not affect users until an explicitly rehearsed artifact is promoted.
 
 ## Normal release
 
@@ -24,75 +23,88 @@ cd /Users/dm026/Downloads/wsi-server_works
 git status --short
 ./mvnw clean test
 node --test src/test/js/*.test.js
+./ops/tests/run.sh
 git push origin feature/multichannel-viewer
 ```
 
-Stop if Git is dirty or any test fails.
+Stop if Git is dirty or any required test fails.
 
 ### 2. Build and install staging
 
 ```bash
-wsi-release stage --step
-wsi-release verify staging
+./ops/wsi-release stage --dry-run
+./ops/wsi-release stage --step
+./ops/wsi-release verify staging
+wsi staging status
 ```
 
-Type `STAGE` only after reviewing commit, build, checksum, and backup path.
+Type `STAGE` only after reviewing the commit, build, SHA-256, paths and backup.
 
-**Browser gate - 8082:** staging banner; expected deidentified slides; open,
-pan, zoom, channels, annotations, exports; no CSRF/403 errors; no production
-annotations or images.
+**Browser gate - 8082:** yellow staging banner; correct deidentified slides;
+open, pan, zoom and change channels; test annotations and exports; no CSRF `403`,
+HTTP `500` or unhandled JavaScript errors. Close/reopen the browser and verify
+existing annotations appear, can be edited, and persist after switching.
 
-### 3. Install exact candidate in production rehearsal
+Confirm new files appear only beneath staging annotation storage.
+
+### 3. Install the exact candidate in production rehearsal
 
 ```bash
-wsi-release rehearse --step
-wsi-release verify rehearsal
+./ops/wsi-release rehearse --dry-run
+./ops/wsi-release rehearse --step
+./ops/wsi-release verify rehearsal
+wsi rehearsal status
 ```
 
-Type `REHEARSE` after confirming the rehearsal checksum equals staging.
+Type `REHEARSE` only after confirming rehearsal will receive the exact staging
+commit and SHA-256.
 
-**Browser gate - 8083:** no environment banner; production grid/layout; exact
-staging features; deidentified rehearsal slides only; separate annotations;
-8080 remains available throughout.
+**Browser gate - 8083:** no environment banner; production grid and title;
+exact staging features; deidentified rehearsal slides only; annotations remain
+under rehearsal storage; production `8080` remains available throughout.
 
-### 4. Promote the exact rehearsed candidate
+### 4. Final identity check and production promotion
 
 ```bash
-wsi-release promote --step
-wsi-release verify production
+./ops/wsi-release verify staging
+./ops/wsi-release verify rehearsal
+wsi production status
+wsi staging status
+wsi rehearsal status
+./ops/wsi-release promote --dry-run
+./ops/wsi-release promote --step
+./ops/wsi-release verify production
 ```
 
-Promotion refuses unless Git HEAD, staging, and rehearsal agree. Type `PROMOTE`
-only after all preflight checks and the verified rollback backup succeed.
+Promotion must report the same commit and SHA-256 for staging and rehearsal.
+Type `PROMOTE` only after preflight succeeds and the rollback backup verifies.
 
-**Browser gate - 8080:** normal production layout; authorized slides; pan,
-zoom, channels, annotations, exports; no CSRF/403 errors; 8081/8082/8083 remain
-isolated.
+**Browser gate - 8080:** normal production layout and title; authorized slides;
+pan, zoom, channels, annotations and exports; no CSRF `403`, HTTP `500`, layout
+or persistence regression. Confirm `8081`, `8082` and `8083` remain isolated.
 
 ### 5. Tag only after production validation
 
 ```bash
-wsi-release tag production-YYYY-MM-DD-description
+./ops/wsi-release tag production-YYYY-MM-DD-description
 ```
 
-Type `TAG`, then verify the tag commit matches production `BUILD_COMMIT.txt`.
+Type `TAG`, then confirm the tag commit equals production `BUILD_COMMIT.txt`.
 
 ---
 
-## Status and verification
+## Status and logs
 
 ```bash
-wsi production status
-wsi staging status
+wsi production status       # ports: production 8080, development 8081
+wsi staging status          # staging 8082, rehearsal 8083
 wsi rehearsal status
 wsi development status
-wsi-release status
-wsi-release verify staging
-wsi-release verify rehearsal
-wsi-release verify production
+./ops/wsi-release status
+./ops/wsi-release verify staging
+./ops/wsi-release verify rehearsal
+./ops/wsi-release verify production
 ```
-
-## Logs
 
 ```bash
 wsi production logs
@@ -101,61 +113,62 @@ wsi rehearsal logs
 wsi development logs
 ```
 
-Press `Control-C` to stop following a log.
+Press `Control-C` to stop following a log; it does not stop the server.
 
 ## Troubleshooting modes
 
 ```bash
-wsi-release stage --dry-run
-wsi-release stage --step --verbose
-wsi-release rehearse --dry-run
-wsi-release promote --dry-run
-wsi-release history
+./ops/wsi-release stage --dry-run
+./ops/wsi-release stage --step --verbose
+./ops/wsi-release rehearse --dry-run
+./ops/wsi-release promote --dry-run
+./ops/wsi-release history
 ```
 
 - `--dry-run`: show the plan without modifying files or services.
-- `--step`: pause before each operational action; Enter runs, `p` repeats, `q`
-  exits safely.
+- `--step`: Enter runs; `p` repeats; `q` exits safely before the next action.
 - `--verbose`: print actions during ordinary execution.
+- Use `./ops/wsi-release` if the installed `wsi-release` command is not found.
 - Never bypass `PROMOTE` or `ROLLBACK` confirmation.
 
 ## Stop conditions
 
 Stop immediately if any of these occur:
 
-- Git worktree is not clean.
+- Git worktree is dirty or a required test fails.
 - Git HEAD differs from staging `BUILD_COMMIT.txt`.
 - Recorded and calculated SHA-256 values differ.
 - Staging and rehearsal commits or JAR checksums differ.
-- Environment marker, configured environment, image root, or port disagrees.
+- Environment identity, image root, marker or port disagrees.
 - A server fails to bind its expected port.
-- Browser validation reveals layout, security, image, annotation, or export
-  regression.
+- Browser validation reveals a new security, layout, image, annotation,
+  persistence or export regression.
+- Production backup or metadata validation fails before port `8080` is stopped.
 
-Do not “fix” a mismatch by editing build metadata or checksum files.
+Do not repair a mismatch by editing build metadata or checksum files.
+
+## Performance observations
+
+The image-switch `total` timer ends at the OpenSeadragon open event; it may not
+include completion of all visible tiles. Investigate repeatable delays using
+both browser Network timing and the appropriate server log. A first cold
+Bio-Formats reader initialization may be slower than warm access, but a new or
+routine delay, blank image, timeout, `403`, `500` or lost annotation is a stop
+condition.
 
 ## Rollback
 
 ```bash
-wsi-release history
-wsi-release rollback --step
-```
-
-Review the rollback build, commit, checksum, and directory. Type `ROLLBACK` only
-when correct.
-
-Rollback restores the previous production JAR, build metadata, checksum, and
-configuration. It **does not restore, replace, or overwrite annotations**. The
-failed release is preserved for investigation.
-
-After rollback:
-
-```bash
-wsi-release verify production
+./ops/wsi-release history
+./ops/wsi-release rollback --step
+./ops/wsi-release verify production
 wsi production logs
 ```
 
-Complete the 8080 browser gate again.
+Review the rollback directory, build, commit and SHA-256. Type `ROLLBACK` only
+when correct. Rollback restores the previous JAR, build metadata, checksum and
+configuration. It **never restores, replaces or overwrites annotations**. The
+failed release is preserved for investigation. Repeat the `8080` browser gate.
 
 ## Environment-marker rule
 
@@ -165,15 +178,15 @@ Complete the 8080 browser gate again.
 | `staging` | `.wsi-environment-staging` |
 | `production` or rehearsal | `.wsi-environment-production` |
 
-Exactly one marker must exist. A missing, multiple, or cross-environment marker
+Exactly one marker must exist. A missing, multiple or cross-environment marker
 prevents startup before the server accepts requests.
 
 ## Safety reminders
 
-- Never copy production slides into development, staging, or rehearsal.
-- Verify deidentification includes filenames, metadata, embedded labels,
-  thumbnails, macro images, and associated files.
-- Never place credentials, PHI, internal addresses, or clinical filenames in
-  release notes or Git documentation.
-- Production runs a frozen JAR; source edits do not affect users until explicit
-  promotion.
+- Never copy production slides into development, staging or rehearsal.
+- Verify deidentification of filenames, metadata, embedded labels, thumbnails,
+  macro images and associated files.
+- Never place credentials, PHI, internal addresses or clinical filenames in
+  release notes, Git documentation or screenshots.
+- Never synthesize a missing embedded label or thumbnail from diagnostic slide
+  pixels; report it as absent.
