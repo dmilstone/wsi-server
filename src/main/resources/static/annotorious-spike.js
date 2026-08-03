@@ -20,6 +20,7 @@ class AnnotoriousSpike {
         this.annotationsVisible = true;
         this.labelGeneration = 0;
         this.labelRefreshVersions = new Map();
+        this.annotationPointerEdit = null;
 
         this.initialize();
     }
@@ -105,6 +106,9 @@ class AnnotoriousSpike {
         });
 
         this.annotator.on("deleteAnnotation", annotation => {
+            if (this.annotationPointerEdit?.annotationId === annotation?.id) {
+                this.annotationPointerEdit = null;
+            }
             this.cancelCommittedLabelRefresh(annotation?.id);
             this.adapter.annotationDeleted(annotation);
             this.labelLayer.remove(annotation.id);
@@ -137,10 +141,78 @@ class AnnotoriousSpike {
         });
 
         this.installKeyboardShortcuts();
+        this.installAnnotationPointerFinalization();
 
     }
 
+    installAnnotationPointerFinalization() {
+        const element = this.viewer.element;
+        element.addEventListener("pointerdown", event => {
+            this.annotationPointerEdit = null;
+            if (this.drawingEnabled || event.button !== 0) return;
+            const selected = this.getSelectedAnnotations();
+            if (selected.length !== 1 || !this.annotationContainsClientPoint(selected[0], event)) return;
+            this.annotationPointerEdit = {
+                pointerId: event.pointerId,
+                annotationId: selected[0].id,
+                startX: event.clientX,
+                startY: event.clientY,
+                moved: false,
+                generation: this.labelGeneration,
+                imageId: this.getCurrentImageId?.()
+            };
+        }, true);
+        element.addEventListener("pointermove", event => {
+            const edit = this.annotationPointerEdit;
+            if (!edit || edit.pointerId !== event.pointerId) return;
+            if (Math.hypot(event.clientX - edit.startX, event.clientY - edit.startY) >= 3) {
+                edit.moved = true;
+            }
+        }, true);
+        element.addEventListener("pointerup", event => {
+            const edit = this.annotationPointerEdit;
+            this.annotationPointerEdit = null;
+            if (edit?.pointerId === event.pointerId && edit.moved) {
+                void this.finalizeAnnotationPointerEdit(edit);
+            }
+        }, true);
+        element.addEventListener("pointercancel", () => {
+            this.annotationPointerEdit = null;
+        }, true);
+    }
+
+    annotationContainsClientPoint(annotation, event) {
+        const geometry = annotation?.target?.selector?.geometry;
+        const x = Number(geometry?.x ?? geometry?.bounds?.minX);
+        const y = Number(geometry?.y ?? geometry?.bounds?.minY);
+        const width = Number(geometry?.w ?? geometry?.width ??
+            (geometry?.bounds?.maxX - geometry?.bounds?.minX));
+        const height = Number(geometry?.h ?? geometry?.height ??
+            (geometry?.bounds?.maxY - geometry?.bounds?.minY));
+        if (![x, y, width, height].every(Number.isFinite)) return false;
+        const rect = this.viewer.element.getBoundingClientRect();
+        const point = this.viewer.viewport.viewerElementToImageCoordinates(
+            new OpenSeadragon.Point(event.clientX - rect.left, event.clientY - rect.top));
+        return point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height;
+    }
+
+    async finalizeAnnotationPointerEdit(edit) {
+        if (edit.generation !== this.labelGeneration ||
+            edit.imageId !== this.getCurrentImageId?.() ||
+            !this.annotator.getAnnotations().some(annotation => annotation?.id === edit.annotationId)) return;
+
+        // In this Annotorious lifecycle, changing selection is the public action
+        // that commits an active transform. Clear and restore the same selection
+        // so updateAnnotation is emitted at pointer release, not on a later click.
+        await this.annotator.setSelected();
+        if (edit.generation !== this.labelGeneration ||
+            edit.imageId !== this.getCurrentImageId?.() ||
+            !this.annotator.getAnnotations().some(annotation => annotation?.id === edit.annotationId)) return;
+        await this.annotator.setSelected(edit.annotationId);
+    }
+
     beginLabelImage(imageId) {
+        this.annotationPointerEdit = null;
         this.labelGeneration += 1;
         this.labelRefreshVersions.clear();
         this.labelLayer?.beginImage(imageId);
