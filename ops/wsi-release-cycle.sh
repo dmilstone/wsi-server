@@ -26,7 +26,9 @@ cycle_fail() {
 }
 cycle_hash_file() { [[ -f "$1" ]] && sha256 "$1" || printf absent; }
 cycle_hash_config() {
-    local root="$1" config="$root/config/application.properties" image annotations marker
+    local root="$1"
+    local config="$root/config/application.properties"
+    local image annotations marker
     image="$(property_value "$config" wsi.image-directory)"
     annotations="$(property_value "$config" wsi.annotations.directory)"
     marker="$(find "$image" -maxdepth 1 -name '.wsi-environment-*' -print 2>/dev/null | sort | sha256_stream)"

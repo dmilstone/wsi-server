@@ -113,6 +113,92 @@ if grep -Eq 'eval |rm -rf|git reset --hard|git checkout --' "$OPS_DIR/wsi-releas
 fi
 pass "cycle has no eval or broad destructive operation"
 
+# Exercise the real (non-dry-run) Phase 1 under nounset. The fixture has a
+# synchronized local remote and healthy-looking isolated environments. Quitting
+# at the first Phase 2 material command must preserve every environment and Git
+# ref while leaving a valid Phase 1 resume checkpoint.
+cycle_fixture="$TEST_ROOT/cycle-phase-one"
+cycle_repo="$cycle_fixture/repo"
+cycle_remote="$cycle_fixture/remote.git"
+mkdir -p "$cycle_fixture"
+git clone -q "$OPS_DIR/.." "$cycle_repo"
+git -C "$cycle_repo" switch -q -c fixture-release-cycle
+git init -q --bare "$cycle_remote"
+git -C "$cycle_repo" remote add fixture "$cycle_remote"
+git -C "$cycle_repo" push -q fixture fixture-release-cycle
+
+write_cycle_config() {
+    local root="$1"
+    local environment="$2"
+    local port="$3"
+    local image_root="$root/images"
+    local annotation_root="$root/annotations"
+    mkdir -p "$root/config" "$image_root" "$annotation_root"
+    touch "$image_root/.wsi-environment-$environment"
+    cat >"$root/config/application.properties" <<EOF
+wsi.environment=$environment
+wsi.image-directory=$image_root
+wsi.annotations.directory=$annotation_root
+server.port=$port
+EOF
+}
+
+cycle_runtime="$cycle_fixture/development"
+cycle_staging="$cycle_fixture/staging"
+cycle_rehearsal="$cycle_fixture/rehearsal"
+cycle_production="$cycle_fixture/production"
+write_cycle_config "$cycle_runtime" development 8081
+write_cycle_config "$cycle_staging" staging 8082
+write_cycle_config "$cycle_rehearsal" production 8083
+write_cycle_config "$cycle_production" production 8080
+mkdir -p "$cycle_production/app" "$cycle_production/logs"
+printf 'production fixture jar\n' >"$cycle_production/app/wsi-server.jar"
+printf 'fixture-build\n' >"$cycle_production/app/BUILD_TAG.txt"
+git -C "$cycle_repo" rev-parse HEAD >"$cycle_production/app/BUILD_COMMIT.txt"
+production_fixture_sha="$(shasum -a 256 "$cycle_production/app/wsi-server.jar" | awk '{print $1}')"
+printf '%s  %s\n' "$production_fixture_sha" "$cycle_production/app/wsi-server.jar" >"$cycle_production/app/SHA256.txt"
+
+fake_bin="$cycle_fixture/bin"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/lsof" <<'EOF'
+#!/bin/sh
+case "$*" in *8080*) printf '4242\n';; esac
+EOF
+cat >"$fake_bin/never-control" <<EOF
+#!/bin/sh
+touch "$cycle_fixture/process-control-was-called"
+exit 99
+EOF
+chmod +x "$fake_bin/lsof" "$fake_bin/never-control"
+
+before_fixture="$(find "$cycle_staging" "$cycle_rehearsal" "$cycle_production" -type f -exec shasum -a 256 {} \; | sort)"
+before_remote="$(git --git-dir="$cycle_remote" rev-parse refs/heads/fixture-release-cycle)"
+printf 'q\n' | PATH="$fake_bin:$PATH" \
+    WSI_REPO="$cycle_repo" \
+    WSI_CYCLE_BRANCH=fixture-release-cycle \
+    WSI_CYCLE_REMOTE=fixture \
+    WSI_CYCLE_RUNTIME="$cycle_runtime" \
+    WSI_STAGING_ROOT="$cycle_staging" \
+    WSI_REHEARSAL_ROOT="$cycle_rehearsal" \
+    WSI_PRODUCTION_ROOT="$cycle_production" \
+    WSI_CONTROL="$fake_bin/never-control" \
+    "$RELEASE" cycle --step --tag fixture-unused >"$cycle_fixture/output" 2>&1
+
+grep -q 'PHASE 1 — repository preflight' "$cycle_fixture/output"
+grep -q 'PHASE 2 — automated development validation' "$cycle_fixture/output"
+grep -q 'STEP: Maven clean tests' "$cycle_fixture/output"
+grep -q 'Stopped safely before: Maven clean tests' "$cycle_fixture/output"
+! grep -q 'unbound variable' "$cycle_fixture/output"
+[[ ! -e "$cycle_fixture/process-control-was-called" ]]
+[[ ! -d "$cycle_production/releases" ]]
+[[ "$before_fixture" = "$(find "$cycle_staging" "$cycle_rehearsal" "$cycle_production" -type f -exec shasum -a 256 {} \; | sort)" ]]
+[[ "$before_remote" = "$(git --git-dir="$cycle_remote" rev-parse refs/heads/fixture-release-cycle)" ]]
+state_file="$cycle_runtime/run/release-cycle.state"
+grep -q '^format=1$' "$state_file"
+grep -q '^completed_phase=1$' "$state_file"
+grep -q "^head=$(git -C "$cycle_repo" rev-parse HEAD)$" "$state_file"
+pass "non-dry-run cycle Phase 1 reaches safe step cancellation under nounset"
+
 # Build a small, non-running fixture and prove that stage --dry-run traverses
 # preflight without producing a candidate or invoking process control.
 mkdir -p "$TEST_ROOT/staging-images"
