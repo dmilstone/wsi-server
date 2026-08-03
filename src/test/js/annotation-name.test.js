@@ -55,7 +55,8 @@ context.WsiCsrf.csrfFetch = async (_url, options) => {
     adapter.store.saveDelayMs = 10;
     await adapter.loadCurrentImage("one");
     const input = new FakeInput();
-    const editor = new context.AnnotationNameEditor(input, adapter);
+    const committedIds = [];
+    const editor = new context.AnnotationNameEditor(input, adapter, id => committedIds.push(id));
     const firstShape = annotator.annotations[0];
     const original = structuredClone(adapter.toBackendCollection().annotations[0]);
 
@@ -72,6 +73,7 @@ context.WsiCsrf.csrfFetch = async (_url, options) => {
     input.dispatch("keydown", { key: "Enter" });
     assert.equal(adapter.getAnnotationName(firstShape.id), "Région 🧬, #2!");
     assert.equal(input.value, "Région 🧬, #2!");
+    assert.deepEqual(committedIds, [firstShape.id]);
 
     // Rapid input does not save; one actual commit follows the store debounce path.
     input.value = "Renamed once"; input.dispatch("input");
@@ -80,6 +82,7 @@ context.WsiCsrf.csrfFetch = async (_url, options) => {
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.equal(putCount, 1);
     assert.equal(adapter.getAnnotationName(firstShape.id), "Renamed twice");
+    assert.equal(committedIds.length, 2);
 
     // Escape restores, unchanged blur does not save, and blank removes the field.
     input.value = "not saved";
@@ -92,6 +95,7 @@ context.WsiCsrf.csrfFetch = async (_url, options) => {
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.equal(adapter.getAnnotationName(firstShape.id), "");
     assert.equal(putCount, 2);
+    assert.equal(committedIds.length, 3);
 
     // Code-point limit accepts 200 emoji and clearly rejects 201 without persistence.
     input.value = "🧬".repeat(200); input.dispatch("input"); assert.equal(input.validity, "");

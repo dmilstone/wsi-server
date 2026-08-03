@@ -2,9 +2,10 @@
 class AnnotationNameEditor {
     static MAX_LENGTH = 200;
 
-    constructor(input, adapter) {
+    constructor(input, adapter, nameCommitted = () => {}) {
         this.input = input;
         this.adapter = adapter;
+        this.nameCommitted = nameCommitted;
         this.selectedId = null;
         this.storedValue = "";
         this.visible = true;
@@ -62,7 +63,10 @@ class AnnotationNameEditor {
         const value = this.input.value.trim();
         if (value === this.storedValue) return false;
         const changed = this.adapter.setAnnotationName(this.selectedId, value || null);
-        if (changed) this.storedValue = value;
+        if (changed) {
+            this.storedValue = value;
+            this.nameCommitted(this.selectedId);
+        }
         this.input.value = this.storedValue;
         return changed;
     }

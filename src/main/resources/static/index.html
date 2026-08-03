@@ -12,6 +12,7 @@
     <script src="/annotation-store.js"></script>
     <script src="/annotation-adapter.js"></script>
     <script src="/annotation-name-editor.js"></script>
+    <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
     <style>
         :root {
@@ -315,6 +316,17 @@
         .annotation-visibility { min-width: auto; gap: 7px; font-weight: 750; }
         .annotation-visibility::before { content: "\25C9"; font-size: 15px; }
         .annotation-visibility[aria-pressed="true"]::before { content: "\25CC"; }
+        .annotation-visibility, .annotation-names { min-height: 32px; padding: 4px 7px; }
+        .annotation-names { min-width: auto; font-weight: 750; }
+        .annotation-name-layer { position: absolute; inset: 0; z-index: 11; overflow: hidden; pointer-events: none; }
+        .annotation-name-layer[hidden] { display: none; }
+        .annotation-name-label {
+            position: absolute; left: 0; top: 0; max-width: min(240px, calc(100% - 12px));
+            padding: 2px 5px; overflow: hidden; color: #fff; background: rgba(0,0,0,.78);
+            border: 1px solid rgba(255,255,255,.72); border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.9); font: 700 11px/1.25 system-ui, sans-serif;
+            overflow-wrap: anywhere; pointer-events: none; user-select: none;
+        }
         .annotation-name-control { display: flex; align-items: center; gap: 6px; margin-left: 3px; color: rgba(255,255,255,.72); font-size: 11px; font-weight: 700; }
         .annotation-name-control input { width: 170px; min-height: 30px; padding: 5px 8px; color: white; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.18); border-radius: 6px; }
         .annotation-name-control input:disabled { opacity: .55; }
@@ -532,6 +544,7 @@
             <button id="slide-overview-button" class="toolbar-button" title="Show slide label and thumbnail overview" aria-label="Show slide label and thumbnail overview" disabled>▣</button>
             <button id="annotation-mode" class="toolbar-button" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>▱</button>
             <button id="annotation-visibility" class="toolbar-button annotation-visibility" title="Hide annotations" aria-label="Hide annotations" aria-pressed="false" disabled>Hide annotations</button>
+            <button id="annotation-names" class="toolbar-button annotation-names" title="Hide annotation names" aria-label="Hide annotation names" aria-pressed="true" disabled>Hide names</button>
             <label class="annotation-name-control">Annotation name
                 <input id="annotation-name" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Select one annotation" disabled>
             </label>
@@ -624,6 +637,7 @@
     const exportVisibleRegionButton = document.getElementById("export-visible-region");
     const exportSelectedAnnotationButton = document.getElementById("export-selected-annotation");
     const annotationVisibilityButton = document.getElementById("annotation-visibility");
+    const annotationNamesButton = document.getElementById("annotation-names");
     const workspace = document.querySelector(".workspace");
     const zoomStatus = document.getElementById("status-zoom");
     const xStatus = document.getElementById("status-x");
@@ -942,6 +956,7 @@
                 viewer,
                 document.getElementById("annotation-mode"),
                 annotationVisibilityButton,
+                annotationNamesButton,
                 document.getElementById("annotation-name"),
                 () => selectedImage?.id,
                 {

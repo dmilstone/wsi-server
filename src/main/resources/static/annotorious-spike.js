@@ -6,10 +6,11 @@
  */
 class AnnotoriousSpike {
 
-    constructor(viewer, toggleButton, visibilityButton, nameInput, getCurrentImageId, timingCallbacks = {}) {
+    constructor(viewer, toggleButton, visibilityButton, namesButton, nameInput, getCurrentImageId, timingCallbacks = {}) {
         this.viewer = viewer;
         this.toggleButton = toggleButton;
         this.visibilityButton = visibilityButton;
+        this.namesButton = namesButton;
         this.nameInput = nameInput;
         this.getCurrentImageId = getCurrentImageId;
         this.timingCallbacks = timingCallbacks;
@@ -41,6 +42,7 @@ class AnnotoriousSpike {
 
     async handleViewerOpen() {
         const imageId = this.getCurrentImageId?.();
+        this.labelLayer?.beginImage(imageId);
         this.timingCallbacks.open?.(imageId);
         this.setDrawingEnabled(false);
         // Cancel any draft before the old Annotorious selection can outlive an
@@ -77,23 +79,32 @@ class AnnotoriousSpike {
         this.adapter = new AnnotationAdapter(this.annotator, {
             annotationsLoaded: imageId => this.timingCallbacks.annotationsLoaded?.(imageId),
             annotationsRendered: imageId => {
+                this.labelLayer?.sync(imageId);
                 this.timingCallbacks.annotationsRendered?.(imageId);
                 this.notifySelectionChanged();
             }
         });
-        this.nameEditor = new AnnotationNameEditor(this.nameInput, this.adapter);
+        this.labelLayer = new AnnotationLabelLayer(
+            this.viewer, this.annotator, id => this.adapter.getAnnotationName(id));
+        this.nameEditor = new AnnotationNameEditor(this.nameInput, this.adapter, id => {
+            const annotation = this.annotator.getAnnotations().find(item => item.id === id);
+            if (annotation) this.labelLayer.syncAnnotation(annotation);
+        });
 
         this.annotator.on("createAnnotation", annotation => {
             this.adapter.annotationCreated(annotation);
+            this.labelLayer.syncAnnotation(annotation);
             this.notifySelectionChanged();
         });
 
         this.annotator.on("updateAnnotation", (annotation, previous) => {
             this.adapter.annotationUpdated(annotation, previous);
+            this.labelLayer.syncAnnotation(annotation);
         });
 
         this.annotator.on("deleteAnnotation", annotation => {
             this.adapter.annotationDeleted(annotation);
+            this.labelLayer.remove(annotation.id);
             // Annotorious updates its canonical selection after dispatching the
             // delete event, so inspect it once that event has finished.
             queueMicrotask(() => this.notifySelectionChanged());
@@ -107,6 +118,8 @@ class AnnotoriousSpike {
 
         this.toggleButton.disabled = false;
         this.visibilityButton.disabled = false;
+        this.namesButton.disabled = false;
+        this.updateNamesButton();
 
         this.toggleButton.addEventListener("click", () => {
             this.setDrawingEnabled(!this.drawingEnabled);
@@ -115,9 +128,21 @@ class AnnotoriousSpike {
         this.visibilityButton.addEventListener("click", () => {
             this.setAnnotationsVisible(!this.annotationsVisible);
         });
+        this.namesButton.addEventListener("click", () => {
+            this.labelLayer.setNamesVisible(!this.labelLayer.namesVisible);
+            this.updateNamesButton();
+        });
 
         this.installKeyboardShortcuts();
 
+    }
+
+    updateNamesButton() {
+        const shown = this.labelLayer.namesVisible;
+        this.namesButton.setAttribute("aria-pressed", String(shown));
+        this.namesButton.textContent = shown ? "Hide names" : "Show names";
+        this.namesButton.title = shown ? "Hide annotation names" : "Show annotation names";
+        this.namesButton.setAttribute("aria-label", this.namesButton.title);
     }
 
     getSelectedAnnotations() {
@@ -238,6 +263,7 @@ class AnnotoriousSpike {
         // replace, or mutate annotations through Annotorious or AnnotationStore.
         // Keeping the live annotator intact also makes showing the layer instant.
         this.viewer.element.classList.toggle("annotations-hidden", !this.annotationsVisible);
+        this.labelLayer?.setAnnotationsVisible(this.annotationsVisible);
 
         if (!this.annotationsVisible) this.setDrawingEnabled(false);
         this.toggleButton.disabled = !this.annotationsVisible;

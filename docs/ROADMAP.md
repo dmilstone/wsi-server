@@ -9,8 +9,10 @@ for diagnosis and controlled partial reruns.
 
 ## Immediate priorities
 
-1. Global annotation visibility control.
-2. User-editable annotation names.
+Completed: global annotation visibility and persistent user-editable annotation
+names.
+
+1. On-slide annotation name labels.
 
 ## Agreed backlog
 
