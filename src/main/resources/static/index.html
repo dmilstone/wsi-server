@@ -311,6 +311,18 @@
         }
         .toolbar-button { min-width: 36px; min-height: 34px; padding: 5px 9px; background: transparent; border-color: transparent; color: rgba(255,255,255,.82); }
         .toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
+        .annotation-visibility { min-width: auto; gap: 7px; font-weight: 750; }
+        .annotation-visibility::before { content: "\25C9"; font-size: 15px; }
+        .annotation-visibility[aria-pressed="true"]::before { content: "\25CC"; }
+        /* Annotorious renders all geometry, handles, and selections in its a9s
+           overlay. Visibility is suppressed at the display boundary so no live
+           annotation data or persistence state is touched. */
+        #viewer.annotations-hidden .a9s-annotationlayer,
+        #viewer.annotations-hidden .a9s-annotation-layer,
+        #viewer.annotations-hidden [class*="a9s-"] {
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
         .export-menu { position: relative; }
         .export-menu > summary { list-style: none; }
         .export-menu > summary::-webkit-details-marker { display: none; }
@@ -515,6 +527,7 @@
             <button id="fit-view" class="toolbar-button" title="Fit image" aria-label="Fit image">□</button>
             <button id="slide-overview-button" class="toolbar-button" title="Show slide label and thumbnail overview" aria-label="Show slide label and thumbnail overview" disabled>▣</button>
             <button id="annotation-mode" class="toolbar-button" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>▱</button>
+            <button id="annotation-visibility" class="toolbar-button annotation-visibility" title="Hide annotations" aria-label="Hide annotations" aria-pressed="false" disabled>Hide annotations</button>
             <details id="export-menu" class="export-menu">
                 <summary class="toolbar-button" aria-label="Export image region">Export ▾</summary>
                 <div class="export-menu-items">
@@ -603,6 +616,7 @@
     const imageInfoElement = document.getElementById("image-info");
     const exportVisibleRegionButton = document.getElementById("export-visible-region");
     const exportSelectedAnnotationButton = document.getElementById("export-selected-annotation");
+    const annotationVisibilityButton = document.getElementById("annotation-visibility");
     const workspace = document.querySelector(".workspace");
     const zoomStatus = document.getElementById("status-zoom");
     const xStatus = document.getElementById("status-x");
@@ -920,6 +934,7 @@
             annotationSpike = new AnnotoriousSpike(
                 viewer,
                 document.getElementById("annotation-mode"),
+                annotationVisibilityButton,
                 () => selectedImage?.id,
                 {
                     open: imageId => markImageSwitchTiming(imageId, "OSD open event"),
@@ -1019,7 +1034,8 @@
 
     function updateSelectedAnnotationExportState() {
         exportSelectedAnnotationButton.disabled =
-            annotationSpike?.getSelectedAnnotations().length !== 1;
+            !annotationSpike?.annotationsVisible ||
+            annotationSpike.getSelectedAnnotations().length !== 1;
     }
 
     async function exportSelectedAnnotation() {

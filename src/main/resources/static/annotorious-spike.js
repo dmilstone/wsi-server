@@ -6,14 +6,16 @@
  */
 class AnnotoriousSpike {
 
-    constructor(viewer, toggleButton, getCurrentImageId, timingCallbacks = {}) {
+    constructor(viewer, toggleButton, visibilityButton, getCurrentImageId, timingCallbacks = {}) {
         this.viewer = viewer;
         this.toggleButton = toggleButton;
+        this.visibilityButton = visibilityButton;
         this.getCurrentImageId = getCurrentImageId;
         this.timingCallbacks = timingCallbacks;
         this.annotator = null;
         this.adapter = null;
         this.drawingEnabled = false;
+        this.annotationsVisible = true;
 
         this.initialize();
     }
@@ -99,9 +101,14 @@ class AnnotoriousSpike {
         });
 
         this.toggleButton.disabled = false;
+        this.visibilityButton.disabled = false;
 
         this.toggleButton.addEventListener("click", () => {
             this.setDrawingEnabled(!this.drawingEnabled);
+        });
+
+        this.visibilityButton.addEventListener("click", () => {
+            this.setAnnotationsVisible(!this.annotationsVisible);
         });
 
         this.installKeyboardShortcuts();
@@ -163,6 +170,8 @@ class AnnotoriousSpike {
 
     installKeyboardShortcuts() {
         document.addEventListener("keydown", event => {
+            if (!this.annotationsVisible) return;
+
             if (event.key !== "Delete" && event.key !== "Backspace") {
                 return;
             }
@@ -197,7 +206,7 @@ class AnnotoriousSpike {
             return;
         }
 
-        this.drawingEnabled = Boolean(enabled);
+        this.drawingEnabled = Boolean(enabled) && this.annotationsVisible;
         this.annotator.setDrawingEnabled(this.drawingEnabled);
 
         this.toggleButton.setAttribute(
@@ -213,5 +222,24 @@ class AnnotoriousSpike {
             "aria-label",
             this.toggleButton.title
         );
+    }
+
+    setAnnotationsVisible(visible) {
+        this.annotationsVisible = Boolean(visible);
+
+        // This is deliberately a presentation-only switch. Do not remove,
+        // replace, or mutate annotations through Annotorious or AnnotationStore.
+        // Keeping the live annotator intact also makes showing the layer instant.
+        this.viewer.element.classList.toggle("annotations-hidden", !this.annotationsVisible);
+
+        if (!this.annotationsVisible) this.setDrawingEnabled(false);
+        this.toggleButton.disabled = !this.annotationsVisible;
+        this.visibilityButton.setAttribute("aria-pressed", String(!this.annotationsVisible));
+        this.visibilityButton.textContent = this.annotationsVisible
+            ? "Hide annotations"
+            : "Show annotations";
+        this.visibilityButton.title = this.visibilityButton.textContent;
+        this.visibilityButton.setAttribute("aria-label", this.visibilityButton.textContent);
+        this.notifySelectionChanged();
     }
 }
