@@ -105,7 +105,7 @@ class AnnotationStore {
         } catch (error) {
             if (generation !== this.loadGeneration) return;
             this.setSaveState("error");
-            console.error(`AnnotationStore: unable to load annotations for image ${nextImageId}`, error);
+            console.error("AnnotationStore: unable to load annotations", error);
         }
     }
 
@@ -187,14 +187,14 @@ class AnnotationStore {
                         });
                     }
                 }
-                console.info(`AnnotationStore: saved ${savedCollection.annotations?.length || 0} annotations`, savedCollection);
+                console.info(`AnnotationStore: saved ${savedCollection.annotations?.length || 0} annotations`);
             } catch (error) {
                 if (generation === this.loadGeneration && imageId === this.currentImageId) {
                     this.saveRequested = true;
                     this.dirty = true;
                     this.setSaveState("error");
                 }
-                console.error(`AnnotationStore: unable to save annotations for image ${imageId}`, error);
+                console.error("AnnotationStore: unable to save annotations", error);
             } finally {
                 this.activeSavePromise = null;
                 if (generation === this.loadGeneration && imageId === this.currentImageId && this.hasUnsavedChanges()) {

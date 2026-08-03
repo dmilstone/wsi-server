@@ -51,24 +51,43 @@ class AnnotationAdapter {
 
     annotationCreated(annotation) {
         if (this.suppressEvents) return;
-        console.info("AnnotationAdapter: annotation created", annotation);
         this.collectionEdited();
     }
 
     annotationUpdated(annotation, previous) {
         if (this.suppressEvents) return;
-        console.info("AnnotationAdapter: annotation updated", { annotation, previous });
         this.collectionEdited();
     }
 
     annotationDeleted(annotation) {
         if (this.suppressEvents) return;
-        console.info("AnnotationAdapter: annotation deleted", annotation);
         this.collectionEdited();
     }
 
     collectionEdited() {
         this.store.updateCollection(this.toBackendCollection());
+    }
+
+    getAnnotationName(clientId) {
+        const value = this.metadataById.get(clientId)?.name;
+        return typeof value === "string" ? value : "";
+    }
+
+    setAnnotationName(clientId, value) {
+        const existing = this.metadataById.get(clientId);
+        if (!existing) return false;
+        const name = value === null || value === undefined ? null : String(value).trim() || null;
+        const previous = typeof existing.name === "string" && existing.name.length > 0
+            ? existing.name
+            : null;
+        if (name === previous) return false;
+
+        const updated = { ...existing, name };
+        this.metadataById.set(clientId, updated);
+        const backendId = this.backendIdByClientId.get(clientId);
+        if (backendId) this.metadataById.set(backendId, updated);
+        this.collectionEdited();
+        return true;
     }
 
     async applyBackendCollection(collection) {
@@ -215,14 +234,14 @@ class AnnotationAdapter {
         const selectorType = String(annotation?.target?.selector?.type || "RECTANGLE").toUpperCase();
         const type = selectorType === "ELLIPSE" ? "ellipse" : "rectangle";
 
-        return {
+        const backend = {
             ...existing,
             // Annotorious-generated IDs are not guaranteed to be UUIDs. Sending
             // null lets the backend assign a canonical UUID.
             id: this.backendIdByClientId.get(annotation.id) ||
                 (this.isUuid(annotation.id) ? annotation.id : null),
             type,
-            name: existing?.name || "Annotation",
+            name: typeof existing?.name === "string" && existing.name.length > 0 ? existing.name : null,
             visible: existing?.visible !== false,
             locked: existing?.locked === true,
             color: existing?.color || "#ffd54a",
@@ -238,6 +257,10 @@ class AnnotationAdapter {
                 ? annotation.bodies.filter(body => body && typeof body === "object")
                 : (Array.isArray(existing?.bodies) ? existing.bodies : [])
         };
+        // Keep metadata for a freshly drawn client ID so it can be named before
+        // the first debounced server response assigns a canonical UUID.
+        if (annotation?.id) this.metadataById.set(annotation.id, backend);
+        return backend;
     }
 
     toAnnotorious(annotation) {
@@ -247,7 +270,7 @@ class AnnotationAdapter {
         const height = Number(annotation.height);
 
         if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
-            console.warn(`AnnotationAdapter: preserved annotation ${annotation?.id || "without an ID"}; invalid geometry was not displayed`);
+            console.warn("AnnotationAdapter: preserved an annotation whose invalid geometry was not displayed");
             return null;
         }
 

@@ -16,6 +16,8 @@ import java.util.UUID;
 @Service
 public class AnnotationService {
     private static final String DEFAULT_COLOR = "#ff3b30";
+    /** Maximum annotation name length, measured in Unicode code points. */
+    public static final int MAX_NAME_LENGTH = 200;
 
     private final ImageRegistry imageRegistry;
     private final AnnotationStorage storage;
@@ -105,8 +107,11 @@ public class AnnotationService {
         String id = value.id() == null || value.id().isBlank()
                 ? UUID.randomUUID().toString()
                 : validateUuid(value.id());
-        String name = value.name() == null || value.name().isBlank() ? "Annotation" : value.name().trim();
-        if (name.length() > 256) throw new IllegalArgumentException("Annotation name must be at most 256 characters.");
+        String name = value.name() == null ? null : value.name().trim();
+        if (name != null && name.isEmpty()) name = null;
+        if (name != null && name.codePointCount(0, name.length()) > MAX_NAME_LENGTH) {
+            throw new IllegalArgumentException("Annotation name must be at most 200 Unicode characters.");
+        }
         String color = value.color() == null || value.color().isBlank() ? DEFAULT_COLOR : value.color().trim();
         if (!color.matches("#[0-9A-Fa-f]{6}")) {
             throw new IllegalArgumentException("Annotation color must use #RRGGBB format.");

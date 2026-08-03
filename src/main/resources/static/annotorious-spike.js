@@ -6,10 +6,11 @@
  */
 class AnnotoriousSpike {
 
-    constructor(viewer, toggleButton, visibilityButton, getCurrentImageId, timingCallbacks = {}) {
+    constructor(viewer, toggleButton, visibilityButton, nameInput, getCurrentImageId, timingCallbacks = {}) {
         this.viewer = viewer;
         this.toggleButton = toggleButton;
         this.visibilityButton = visibilityButton;
+        this.nameInput = nameInput;
         this.getCurrentImageId = getCurrentImageId;
         this.timingCallbacks = timingCallbacks;
         this.annotator = null;
@@ -42,7 +43,10 @@ class AnnotoriousSpike {
         const imageId = this.getCurrentImageId?.();
         this.timingCallbacks.open?.(imageId);
         this.setDrawingEnabled(false);
-        this.notifySelectionChanged();
+        // Cancel any draft before the old Annotorious selection can outlive an
+        // image switch. Loading will publish the new image's actual selection.
+        this.nameEditor?.setSelection([], this.annotationsVisible);
+        this.timingCallbacks.selectionChanged?.([]);
         // Annotorious' own OSD open handler runs before this handler, but its
         // overlay/store commit completes during the next paint. Do not let a
         // cached annotation response overtake that commit on the first image.
@@ -77,6 +81,7 @@ class AnnotoriousSpike {
                 this.notifySelectionChanged();
             }
         });
+        this.nameEditor = new AnnotationNameEditor(this.nameInput, this.adapter);
 
         this.annotator.on("createAnnotation", annotation => {
             this.adapter.annotationCreated(annotation);
@@ -122,7 +127,9 @@ class AnnotoriousSpike {
     }
 
     notifySelectionChanged() {
-        this.timingCallbacks.selectionChanged?.(this.getSelectedAnnotations());
+        const selected = this.getSelectedAnnotations();
+        this.nameEditor?.setSelection(selected, this.annotationsVisible);
+        this.timingCallbacks.selectionChanged?.(selected);
     }
 
     getAnnotationBounds(annotation) {
