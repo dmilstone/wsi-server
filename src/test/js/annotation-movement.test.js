@@ -101,12 +101,13 @@ const at = (x, y) => ({ id: "moved", target: { selector: { geometry: {
 } } } });
 const beforeMove = at(10, 20);
 const committed = at(80, 90);
-annotator.annotations = [beforeMove];
+const other = { ...at(160, 170), id: "other" };
+annotator.annotations = [beforeMove, other];
 annotator.selected = [beforeMove];
 
 // Model the observed browser ordering: select, drag, and release produce no
 // updateAnnotation from Annotorious itself. Pointer finalization uses the public
-// selection lifecycle, which commits once and restores the effective selection.
+// selection lifecycle, which commits once and leaves a clean deselection.
 pendingCommitted = committed;
 pointerHandlers.get("pointerdown")({ button: 0, pointerId: 7, clientX: 15, clientY: 25 });
 pointerHandlers.get("pointermove")({ pointerId: 7, clientX: 45, clientY: 55 });
@@ -118,7 +119,17 @@ animationFrames.shift()();
 assert.equal(labelUpdates, 1);
 assert.equal(lastLabelAnnotation, committed, "post-commit geometry is re-read by ID");
 assert.equal(annotator.annotations.length, 1, "movement neither replaces nor duplicates annotations");
-assert.deepEqual(annotator.selected, [committed], "moved annotation remains selected");
+assert.deepEqual(annotator.selected, [], "moved annotation is cleanly deselected");
+
+// Ordinary selection remains usable: either annotation can be selected, and an
+// outside click can clear selection for normal image interaction.
+await annotator.setSelected("moved");
+assert.deepEqual(annotator.selected, [committed]);
+annotator.annotations.push(other);
+await annotator.setSelected("other");
+assert.deepEqual(annotator.selected, [other]);
+await annotator.setSelected();
+assert.deepEqual(annotator.selected, []);
 
 // Panning outside the selected geometry, drawing mode, and cancellation do not
 // finalize an annotation or produce persistence activity.
@@ -136,30 +147,44 @@ pointerHandlers.get("pointerup")({ pointerId: 10, clientX: 100, clientY: 110 });
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(persistenceUpdates, 1);
 
+// A complete second select/move/finalize cycle also ends cleanly rather than
+// accumulating a stuck editing selection.
+await annotator.setSelected("moved");
+const movedAgain = at(120, 130);
+pendingCommitted = movedAgain;
+pointerHandlers.get("pointerdown")({ button: 0, pointerId: 11, clientX: 85, clientY: 95 });
+pointerHandlers.get("pointermove")({ pointerId: 11, clientX: 120, clientY: 130 });
+pointerHandlers.get("pointerup")({ pointerId: 11, clientX: 120, clientY: 130 });
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(annotator.selected, []);
+assert.equal(persistenceUpdates, 2);
+animationFrames.shift()();
+assert.equal(lastLabelAnnotation, movedAgain);
+
 // Consecutive moves coalesce label work to the latest committed collection.
-eventHandlers.get("updateAnnotation")(committed, beforeMove);
-eventHandlers.get("updateAnnotation")(committed, beforeMove);
+eventHandlers.get("updateAnnotation")(movedAgain, committed);
+eventHandlers.get("updateAnnotation")(movedAgain, committed);
 assert.equal(animationFrames.length, 2);
 annotator.annotations = [at(120, 130)];
 animationFrames.shift()();
-assert.equal(labelUpdates, 1, "superseded move cannot refresh the label");
+assert.equal(labelUpdates, 2, "superseded move cannot refresh the label");
 animationFrames.shift()();
-assert.equal(labelUpdates, 2);
+assert.equal(labelUpdates, 3);
 assert.equal(lastLabelAnnotation, annotator.annotations[0]);
-assert.equal(persistenceUpdates, 3, "label scheduling adds no persistence calls");
+assert.equal(persistenceUpdates, 4, "label scheduling adds no persistence calls");
 
 // Image changes and deletion invalidate already queued post-commit callbacks.
 eventHandlers.get("updateAnnotation")(annotator.annotations[0], committed);
 spike.beginLabelImage("image-two");
 animationFrames.shift()();
-assert.equal(labelUpdates, 2, "an old image callback is rejected");
+assert.equal(labelUpdates, 3, "an old image callback is rejected");
 
 spike.getCurrentImageId = () => "image-two";
 eventHandlers.get("updateAnnotation")(annotator.annotations[0], committed);
 eventHandlers.get("deleteAnnotation")(annotator.annotations[0]);
 annotator.annotations = [];
 animationFrames.shift()();
-assert.equal(labelUpdates, 2, "a deleted annotation cannot be restored by deferred work");
+assert.equal(labelUpdates, 3, "a deleted annotation cannot be restored by deferred work");
 assert.equal(annotator.annotations.length, 0);
 
 console.log("annotation committed movement checks passed");

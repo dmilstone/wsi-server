@@ -201,14 +201,10 @@ class AnnotoriousSpike {
             edit.imageId !== this.getCurrentImageId?.() ||
             !this.annotator.getAnnotations().some(annotation => annotation?.id === edit.annotationId)) return;
 
-        // In this Annotorious lifecycle, changing selection is the public action
-        // that commits an active transform. Clear and restore the same selection
-        // so updateAnnotation is emitted at pointer release, not on a later click.
+        // In this Annotorious lifecycle, clearing selection is the public action
+        // that commits an active transform. Leave it cleared: programmatic
+        // reselection traps the editor in its just-finished interaction state.
         await this.annotator.setSelected();
-        if (edit.generation !== this.labelGeneration ||
-            edit.imageId !== this.getCurrentImageId?.() ||
-            !this.annotator.getAnnotations().some(annotation => annotation?.id === edit.annotationId)) return;
-        await this.annotator.setSelected(edit.annotationId);
     }
 
     beginLabelImage(imageId) {
