@@ -13,6 +13,23 @@ Reference documents:
 - `render_cheatsheet.py` regenerates the PDF from the version-controlled
   operational content.
 
+The renderer's only required Python package is
+[`ReportLab`](https://pypi.org/project/reportlab/). It uses ReportLab's bundled
+Vera fonts when present and safely falls back to its built-in Helvetica,
+Helvetica-Bold, and Courier fonts, so no operating-system font path is needed.
+For an isolated local setup:
+
+```bash
+python3 -m venv .venv-release-docs
+source .venv-release-docs/bin/activate
+python -m pip install ReportLab
+python ops/tests/test_renderer.py
+python ops/render_cheatsheet.py
+```
+
+The final command always writes `ops/WSI-Release-Cheat-Sheet.pdf`. Visually
+inspect both pages before committing a regenerated PDF.
+
 ## Commands
 
 `wsi` controls a running environment:

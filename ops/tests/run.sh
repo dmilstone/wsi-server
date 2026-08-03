@@ -30,6 +30,15 @@ bash -n "$RELEASE" "$OPS_DIR/wsi-release-cycle.sh"
 if command -v zsh >/dev/null 2>&1; then zsh -n "$CONTROL"; else bash -n "$CONTROL"; fi
 pass "shell syntax"
 
+PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache" \
+    python3 -m py_compile "$OPS_DIR/render_cheatsheet.py" "$OPS_DIR/tests/test_renderer.py"
+if python3 -c 'import reportlab' >/dev/null 2>&1; then
+    python3 "$OPS_DIR/tests/test_renderer.py"
+    pass "portable renderer preflight"
+else
+    echo "SKIP: portable renderer preflight (install the documented ReportLab package)"
+fi
+
 expect_failure "unknown command is rejected" "$RELEASE" unknown
 expect_failure "verify requires a target" "$RELEASE" verify
 expect_failure "unknown option is rejected" "$RELEASE" status --unsafe-option
@@ -77,6 +86,8 @@ grep -q 'expected gate: PROMOTE' "$TEST_ROOT/cycle-dry-run"
 grep -q 'verified complete backup BEFORE stopping only production' "$TEST_ROOT/cycle-dry-run"
 grep -q 'expected gate: PRODUCTION-PASS' "$TEST_ROOT/cycle-dry-run"
 grep -q 'expected optional tag prompt: TAG or SKIP' "$TEST_ROOT/cycle-dry-run"
+grep -q 'PASS read-only preflight report complete (no remote contact)' "$TEST_ROOT/cycle-dry-run"
+grep -q 'remote feature commit (local tracking ref; no network)' "$TEST_ROOT/cycle-dry-run"
 pass "cycle dry-run is mutation-free and preserves complete safe phase ordering"
 
 expect_failure "cycle rejects an unknown option" "$RELEASE" cycle --not-a-mode

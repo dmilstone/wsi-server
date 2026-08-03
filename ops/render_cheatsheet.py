@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Render the versioned WSI release cheat sheet as a two-page Letter PDF."""
 
+import argparse
 from pathlib import Path
+import reportlab
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.pdfmetrics import Font
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     BaseDocTemplate, Frame, KeepTogether, PageBreak, PageTemplate, Paragraph,
@@ -28,9 +31,47 @@ LIGHT_AMBER = colors.HexColor("#FFF7E4")
 LIGHT_RED = colors.HexColor("#FFF0F0")
 LINE = colors.HexColor("#CBD7E2")
 
-pdfmetrics.registerFont(TTFont("DVSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-pdfmetrics.registerFont(TTFont("DVSans-Bold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
-pdfmetrics.registerFont(TTFont("DVMono", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
+FONT_ALIASES = ("DVSans", "DVSans-Bold", "DVMono")
+
+
+def register_fonts(selected=None):
+    """Register portable fonts while retaining the renderer's stable aliases."""
+    if selected:
+        paths = tuple(Path(path).expanduser().resolve() for path in selected)
+        missing = [str(path) for path in paths if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(
+                "Explicitly selected font file does not exist: " + ", ".join(missing)
+            )
+    else:
+        font_dir = Path(reportlab.__file__).resolve().parent / "fonts"
+        paths = tuple(font_dir / name for name in ("Vera.ttf", "VeraBd.ttf", "VeraMono.ttf"))
+        if not all(path.is_file() for path in paths):
+            paths = ()
+
+    if paths:
+        for alias, path in zip(FONT_ALIASES, paths):
+            pdfmetrics.registerFont(TTFont(alias, str(path)))
+    else:
+        for alias, built_in in zip(FONT_ALIASES, ("Helvetica", "Helvetica-Bold", "Courier")):
+            pdfmetrics.registerFont(Font(alias, built_in, "WinAnsiEncoding"))
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=OUTPUT,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--font-regular", type=Path)
+    parser.add_argument("--font-bold", type=Path)
+    parser.add_argument("--font-mono", type=Path)
+    args = parser.parse_args()
+    selected = (args.font_regular, args.font_bold, args.font_mono)
+    if any(selected) and not all(selected):
+        parser.error("--font-regular, --font-bold and --font-mono must be supplied together")
+    return args, selected if all(selected) else None
+
+
+register_fonts()
 
 
 def footer(canvas, doc):
@@ -170,8 +211,9 @@ def page_two():
             Spacer(1, 4), P("Exactly one environment marker must exist. A missing, multiple or cross-environment marker prevents startup before the server accepts requests.", small)]
 
 
-def build():
-    doc = BaseDocTemplate(str(OUTPUT), pagesize=letter,
+def build(output=OUTPUT):
+    output = Path(output)
+    doc = BaseDocTemplate(str(output), pagesize=letter,
                           leftMargin=.43*inch, rightMargin=.43*inch,
                           topMargin=.38*inch, bottomMargin=.42*inch,
                           title="WSI Viewer Release Cheat Sheet",
@@ -180,8 +222,11 @@ def build():
     doc.addPageTemplates(PageTemplate(id="sheet", frames=[frame], onPage=footer))
     story = page_one() + [PageBreak()] + page_two()
     doc.build(story)
-    print(OUTPUT)
+    print(output)
 
 
 if __name__ == "__main__":
-    build()
+    arguments, explicit_fonts = parse_args()
+    if explicit_fonts:
+        register_fonts(explicit_fonts)
+    build(arguments.output)

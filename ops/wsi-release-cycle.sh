@@ -92,6 +92,37 @@ cycle_gate() {
 }
 cycle_phase() { CYCLE_PHASE="$2"; cycle_say "PHASE $1 — $2"; }
 cycle_identity() { local root="$1"; printf '%s|%s|%s' "$(cat "$root/app/BUILD_COMMIT.txt" 2>/dev/null || :)" "$(cat "$root/app/BUILD_TAG.txt" 2>/dev/null || :)" "$(cycle_hash_file "$root/app/wsi-server.jar")"; }
+cycle_dry_preflight() {
+    local branch remote root label config environment port image annotations markers
+    branch="$(git -C "$REPO" branch --show-current 2>/dev/null || printf unavailable)"
+    remote="$(git -C "$REPO" rev-parse --verify -q "refs/remotes/$CYCLE_REMOTE/$CYCLE_BRANCH" 2>/dev/null || printf unavailable)"
+    cycle_say "  branch: $branch"
+    cycle_say "  HEAD: $CYCLE_HEAD"
+    cycle_say "  remote feature commit (local tracking ref; no network): $remote"
+    cycle_say "  tracked tree: $(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null | sed -n '1p' || printf unavailable)"
+    cycle_say "  available disk KiB: $(df -Pk "$REPO" 2>/dev/null | awk 'NR==2 {print $4}' || printf unavailable)"
+    for label in development staging rehearsal production; do
+        case "$label" in
+            development) root="$CYCLE_RUNTIME"; environment=development; port=8081 ;;
+            staging) root="$STAGING"; environment=staging; port=8082 ;;
+            rehearsal) root="$REHEARSAL"; environment=production; port=8083 ;;
+            production) root="$PRODUCTION"; environment=production; port=8080 ;;
+        esac
+        config="$root/config/application.properties"
+        image="$(property_value "$config" wsi.image-directory 2>/dev/null || :)"
+        annotations="$(property_value "$config" wsi.annotations.directory 2>/dev/null || :)"
+        if [[ -n "$image" && -d "$image" ]]; then
+            markers="$(find "$image" -maxdepth 1 -name '.wsi-environment-*' -print 2>/dev/null | paste -sd, -)"
+        else
+            markers=""
+        fi
+        cycle_say "  $label: root=$root config=$config expected-mode=$environment port=$port"
+        cycle_say "  $label: images=${image:-unavailable} markers=${markers:-unavailable} annotations=${annotations:-unavailable}"
+        cycle_say "  $label identity: $(cycle_identity "$root")"
+    done
+    cycle_say "  production listener PID: $(listener_pid 8080 || printf unavailable)"
+    cycle_say "  PASS read-only preflight report complete (no remote contact)"
+}
 cycle_validate_config() {
     local label="$1" expected="$2" root="$3" port="$4" annotation image
     validate_environment_config "$expected" "$root/config/application.properties" "$port" >>"$CYCLE_LOG"
@@ -135,6 +166,7 @@ cycle_release() {
     fi
     cycle_phase 1 "repository preflight"
     cycle_say "  repository: $(cd "$REPO" && pwd -P)"; cycle_say "  required branch: $CYCLE_BRANCH"
+    $DRY_RUN && cycle_dry_preflight
     $DRY_RUN && CYCLE_COMPLETED=0 || {
         if $RESUME; then cycle_resume_load; cycle_say "  PASS resumable assumptions verified; completed phase $CYCLE_COMPLETED"; else
             branch="$(git -C "$REPO" branch --show-current)"; [[ "$branch" = "$CYCLE_BRANCH" ]] || cycle_fail "Required branch is $CYCLE_BRANCH; found $branch."
