@@ -9,7 +9,6 @@ class AnnotationLabelLayer {
         this.storage = storage;
         this.currentImageId = null;
         this.labels = new Map();
-        this.temporaryDisplacements = new Map();
         this.namesVisible = this.readPreference();
         this.annotationsVisible = true;
         this.layer = document.createElement("div");
@@ -35,7 +34,6 @@ class AnnotationLabelLayer {
 
     setNamesVisible(visible) {
         this.namesVisible = Boolean(visible);
-        if (!this.namesVisible) this.clearTemporaryDisplacements();
         try {
             this.storage?.setItem(AnnotationLabelLayer.PREFERENCE_KEY, String(this.namesVisible));
         } catch (_) {
@@ -46,7 +44,6 @@ class AnnotationLabelLayer {
 
     setAnnotationsVisible(visible) {
         this.annotationsVisible = Boolean(visible);
-        if (!this.annotationsVisible) this.clearTemporaryDisplacements();
         this.updateVisibility();
     }
 
@@ -99,18 +96,14 @@ class AnnotationLabelLayer {
 
     position(entry) {
         const geometry = entry.annotation?.target?.selector?.geometry;
-        // Annotorious updates x/y as the live shape moves. In the committed
-        // updateAnnotation payload, bounds can briefly retain the pre-drag
-        // values, so prefer the same canonical x/y fields used for persistence.
-        const x = Number(geometry?.x ?? geometry?.bounds?.minX);
-        const y = Number(geometry?.y ?? geometry?.bounds?.minY);
+        const x = Number(geometry?.bounds?.minX ?? geometry?.x);
+        const y = Number(geometry?.bounds?.minY ?? geometry?.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
             entry.element.hidden = true;
             return;
         }
-        const displacement = this.temporaryDisplacements.get(entry.annotation.id) || { x: 0, y: 0 };
         const point = this.viewer.viewport.imageToViewerElementCoordinates(
-            new OpenSeadragon.Point(x + displacement.x, y + displacement.y));
+            new OpenSeadragon.Point(x, y));
         entry.element.hidden = false;
         entry.element.style.transform = `translate(${Math.round(point.x + 6)}px, ${Math.round(point.y + 6)}px)`;
     }
@@ -119,37 +112,14 @@ class AnnotationLabelLayer {
         for (const entry of this.labels.values()) this.position(entry);
     }
 
-    setTemporaryDisplacement(id, x, y) {
-        const entry = this.labels.get(id);
-        if (!entry || !this.namesVisible || !this.annotationsVisible ||
-            !Number.isFinite(x) || !Number.isFinite(y)) return;
-        this.temporaryDisplacements.set(id, { x, y });
-        this.position(entry);
-    }
-
-    getTemporaryDisplacement(id) {
-        return this.temporaryDisplacements.get(id) || { x: 0, y: 0 };
-    }
-
-    clearTemporaryDisplacement(id) {
-        this.temporaryDisplacements.delete(id);
-    }
-
-    clearTemporaryDisplacements() {
-        this.temporaryDisplacements.clear();
-        this.updatePositions();
-    }
-
     remove(id) {
         const entry = this.labels.get(id);
         if (!entry) return;
         entry.element.remove();
         this.labels.delete(id);
-        this.temporaryDisplacements.delete(id);
     }
 
     clear() {
-        this.temporaryDisplacements.clear();
         for (const id of [...this.labels.keys()]) this.remove(id);
     }
 

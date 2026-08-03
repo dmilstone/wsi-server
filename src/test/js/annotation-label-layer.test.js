@@ -73,24 +73,15 @@ assert.equal(layer.labels.get("one").element.children.length, 0, "name is never 
 assert.equal(layer.labels.get("two").element.title, "界".repeat(200), "full bounded name remains available");
 assert.equal(layer.labels.get("one").element.style.transform, "translate(16px, 26px)");
 
-// Annotorious' committed movement payload updates canonical x/y before its
-// derived bounds. The label must use that live geometry immediately rather
-// than waiting for a later click/redraw to refresh the stale bounds object.
-first.target.selector.geometry.x = 12;
-first.target.selector.geometry.y = 24;
+// Geometry changes and viewport pan/zoom events reposition existing elements.
+first.target.selector.geometry.bounds.minX = 12;
+first.target.selector.geometry.bounds.minY = 24;
 layer.syncAnnotation(first);
 assert.equal(layer.labels.get("one").element.style.transform, "translate(18px, 30px)");
-layer.setTemporaryDisplacement("one", 3, 4);
-assert.equal(layer.labels.get("one").element.style.transform, "translate(21px, 34px)",
-    "temporary movement is applied without changing annotation geometry");
 scale = 2;
 handlers.get("animation")();
-assert.equal(layer.labels.get("one").element.style.transform, "translate(36px, 62px)",
-    "image-coordinate displacement remains anchored during zoom");
-handlers.get("viewport-change")();
-layer.clearTemporaryDisplacement("one");
-layer.updatePositions();
 assert.equal(layer.labels.get("one").element.style.transform, "translate(30px, 54px)");
+handlers.get("viewport-change")();
 
 // Rename and clearing update in place; deletion removes without replacing annotations.
 const originalElement = layer.labels.get("one").element;
