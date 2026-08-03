@@ -18,6 +18,9 @@ ASSUME_YES=false
 COMMAND=""
 TARGET=""
 TAG_NAME=""
+RESUME=false
+RESUME_OPTION=false
+CYCLE_TAG_OPTION=false
 
 fail() {
     printf '\nERROR: %s\n' "$1" >&2
@@ -27,6 +30,7 @@ fail() {
 usage() {
     cat <<'EOF'
 Usage:
+  wsi-release cycle [--step] [--dry-run] [--verbose] [--resume] [--tag TAG_NAME]
   wsi-release status
   wsi-release verify {staging|rehearsal|production}
   wsi-release stage [--step] [--dry-run] [--verbose] [--yes]
@@ -364,6 +368,9 @@ backup_production() {
     cp -p "$PRODUCTION/app/wsi-server.jar" "$destination/app/wsi-server.jar"
     cp -p "$PRODUCTION/app/BUILD_TAG.txt" "$destination/app/BUILD_TAG.txt"
     cp -p "$PRODUCTION/app/BUILD_COMMIT.txt" "$destination/app/BUILD_COMMIT.txt"
+    if [[ -f "$PRODUCTION/app/SHA256.txt" ]]; then
+        cp -p "$PRODUCTION/app/SHA256.txt" "$destination/app/SHA256.txt"
+    fi
     cp -p "$PRODUCTION/config/application.properties" "$destination/config/application.properties"
     if [[ -d "$PRODUCTION_ANNOTATIONS" ]]; then
         cp -R "$PRODUCTION_ANNOTATIONS/." "$destination/annotations/"
@@ -548,6 +555,13 @@ while [[ $# -gt 0 ]]; do
         --dry-run) DRY_RUN=true ;;
         --verbose) VERBOSE=true ;;
         --yes) ASSUME_YES=true ;;
+        --resume) RESUME=true; RESUME_OPTION=true ;;
+        --tag)
+            [[ $# -ge 2 ]] || fail "--tag requires a tag name."
+            TAG_NAME="$2"
+            CYCLE_TAG_OPTION=true
+            shift
+            ;;
         -h|--help) usage ;;
         --*) fail "Unknown option: $1" ;;
         *) POSITIONAL+=("$1") ;;
@@ -555,8 +569,20 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+if [[ "$COMMAND" != cycle ]] && { $RESUME_OPTION || $CYCLE_TAG_OPTION; }; then
+    fail "--resume and --tag are cycle options."
+fi
+
 case "$COMMAND" in
-    status) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; show_status ;;
+    cycle)
+        [[ ${#POSITIONAL[@]} -eq 0 ]] || usage
+        $ASSUME_YES && fail "cycle does not accept --yes; human gates cannot be bypassed."
+        $DRY_RUN && $RESUME && fail "cycle --dry-run and --resume are contradictory."
+        # shellcheck source=ops/wsi-release-cycle.sh
+        source "$(cd "$(dirname "$0")" && pwd)/wsi-release-cycle.sh"
+        cycle_release
+        ;;
+    status) ! $RESUME_OPTION && ! $CYCLE_TAG_OPTION || usage; [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; show_status ;;
     verify) [[ ${#POSITIONAL[@]} -eq 1 ]] || usage; verify_runtime "${POSITIONAL[0]}" ;;
     stage) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; stage_release ;;
     rehearse) [[ ${#POSITIONAL[@]} -eq 0 ]] || usage; rehearse_release ;;

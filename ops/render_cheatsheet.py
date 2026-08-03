@@ -106,22 +106,18 @@ def environment_table():
 
 def page_one():
     left = [
-        P("1. Development gate", h3),
-        codebox(["cd /Users/dm026/Downloads/wsi-server_works", "git status --short", "./mvnw clean test", "node --test src/test/js/*.test.js", "./ops/tests/run.sh", "git push origin feature/multichannel-viewer"]),
-        callout("<b>STOP:</b> Git must be clean and every required test must pass.", RED, LIGHT_RED),
-        P("2. Build and install staging", h3),
-        codebox(["./ops/wsi-release stage --dry-run", "./ops/wsi-release stage --step", "./ops/wsi-release verify staging", "wsi staging status"]),
-        callout("<b>Browser 8082:</b> yellow banner; deidentified slides; viewer, channels, annotations and exports; no 403, 500 or unhandled JavaScript errors."),
+        P("One-command monitored workflow", h3),
+        codebox(["./ops/wsi-release cycle --step", "./ops/wsi-release cycle", "./ops/wsi-release cycle --dry-run", "./ops/wsi-release cycle --resume --step"]),
+        callout("<b>Recommended:</b> cycle --step displays every material action. Enter runs, p repeats, and q stops safely."),
+        P("Automated phases", h3),
+        P("1. Repository/environment/production preflight<br/>2. Development tests, restart and verification<br/>3. Publish tested feature commit<br/>4. Build/install/verify staging<br/>5. Copy exact JAR to isolated rehearsal<br/>6. Final identity, health and backup-space preflight<br/>7. Verified backup then production promotion<br/>8. Production QC and optional tag", small),
     ]
     right = [
-        P("3. Rehearse production mode", h3),
-        codebox(["./ops/wsi-release rehearse --dry-run", "./ops/wsi-release rehearse --step", "./ops/wsi-release verify rehearsal", "wsi rehearsal status"]),
-        callout("<b>Browser 8083:</b> no banner; production layout; exact staging artifact; deidentified rehearsal data only. Port 8080 remains available."),
-        P("4. Promote exact rehearsed candidate", h3),
-        codebox(["./ops/wsi-release verify staging", "./ops/wsi-release verify rehearsal", "./ops/wsi-release promote --dry-run", "./ops/wsi-release promote --step", "./ops/wsi-release verify production"]),
-        callout("Type <b>PROMOTE</b> only when staging and rehearsal commit/SHA-256 match and the rollback backup verifies.", AMBER, LIGHT_AMBER),
-        P("5. Tag after production validation", h3),
-        codebox(["./ops/wsi-release tag production-YYYY-MM-DD-description"]),
+        P("Exact human gates", h3),
+        codebox(["DEVELOPMENT-PASS", "STAGING-PASS", "REHEARSAL-PASS", "PROMOTE", "PRODUCTION-PASS", "TAG  (or SKIP)"]),
+        callout("Browser success is never inferred. Production is not stopped until its complete backup verifies. Failure prints exact rollback guidance; rollback is never automatic.", AMBER, LIGHT_AMBER),
+        P("State and detailed log", h3),
+        codebox([".runtime/run/release-cycle.state", ".runtime/log/cycle-<id>.log"]),
     ]
     columns = Table([[left, right]], colWidths=[3.68*inch, 3.68*inch], hAlign="LEFT")
     columns.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -134,7 +130,7 @@ def page_one():
             P("Environments", h2), environment_table(),
             P("Normal release", h2), columns,
             Spacer(1, 5),
-            callout("<b>Browser 8080:</b> normal production layout/title; authorized slides; viewer, channels, annotations and exports; no security, layout or persistence regression; other environments remain isolated.")]
+            callout("<b>Every browser gate:</b> banner/title, login, image discovery/open/switch, tiles/pan/zoom, channel/display controls, full annotation naming/edit/delete/persistence and global Show/Hide, exports, isolated annotations, clean console/network, and no sustained delay.")]
 
 
 def page_two():
@@ -147,7 +143,7 @@ def page_two():
             codebox(["./ops/wsi-release history", "./ops/wsi-release rollback --step", "./ops/wsi-release verify production"]),
             callout("Rollback restores the prior JAR, metadata, checksum and configuration. It <b>never restores or overwrites annotations</b>.", AMBER, LIGHT_AMBER)]
     right = [P("Troubleshooting modes", h2),
-             codebox(["./ops/wsi-release stage --dry-run", "./ops/wsi-release stage --step --verbose", "./ops/wsi-release rehearse --dry-run", "./ops/wsi-release promote --dry-run", "./ops/wsi-release history"]),
+             codebox(["./ops/wsi-release cycle --resume --verbose", "./ops/wsi-release stage --dry-run", "./ops/wsi-release stage --step --verbose", "./ops/wsi-release rehearse --dry-run", "./ops/wsi-release promote --dry-run", "./ops/wsi-release history"]),
              P("<b>--dry-run</b>: plan only. <b>--step</b>: Enter runs, p repeats, q exits safely. Use ./ops/wsi-release if the installed command is missing. Never bypass PROMOTE or ROLLBACK.", small),
              P("Stop conditions", h2),
              P("- Dirty Git tree or failed required test<br/>- Git HEAD differs from staging commit<br/>- Recorded/calculated SHA-256 differ<br/>- Staging and rehearsal differ<br/>- Environment identity, marker, root or port mismatch<br/>- Production backup validation fails<br/>- New 403, 500, unhandled JavaScript error, lost annotation, blank image or routine delay", small),

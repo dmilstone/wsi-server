@@ -36,7 +36,7 @@ case "$ENVIRONMENT" in
         MODE="jar"
         ;;
     rehearsal)
-        NAME="Production Rehearsal"
+        NAME="Rehearsal"
         PORT="8083"
         BASE="${WSI_REHEARSAL_ROOT:-/Users/dm026/wsi-production-rehearsal}"
         CONFIG_DIR="$BASE/config"
@@ -77,6 +77,10 @@ show_status() {
     else
         echo "$NAME is STOPPED"
         echo "Port: $PORT"
+    fi
+
+    if [[ "$ENVIRONMENT" = "rehearsal" ]]; then
+        echo "Application mode: production"
     fi
 
     if [[ "$MODE" = "jar" && -f "$BASE/app/BUILD_TAG.txt" ]]; then

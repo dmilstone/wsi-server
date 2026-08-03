@@ -14,7 +14,24 @@
 Rehearsal binds to `127.0.0.1` and is not user accessible. Production source
 edits do not affect users until an explicitly rehearsed artifact is promoted.
 
-## Normal release
+## Normal monitored release
+
+```bash
+./ops/wsi-release cycle --step   # recommended: inspect every material action
+./ops/wsi-release cycle          # faster concise monitored mode
+./ops/wsi-release cycle --dry-run
+./ops/wsi-release cycle --resume [--step|--verbose]
+```
+
+One initial command runs repository/environment preflight, all development
+tests, candidate publication, staging, exact-artifact rehearsal, promotion
+preflight, verified production backup/promotion, and optional tagging. It pauses
+for the exact tokens `DEVELOPMENT-PASS`, `STAGING-PASS`, `REHEARSAL-PASS`,
+`PROMOTE`, `PRODUCTION-PASS`, and `TAG` (or `SKIP`). Browser success is never
+inferred. State is `.runtime/run/release-cycle.state`; detailed non-sensitive
+logs are `.runtime/log/cycle-*.log`.
+
+## Manual / troubleshooting workflow
 
 ### 1. Development gate
 

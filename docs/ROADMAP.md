@@ -1,5 +1,12 @@
 # WSI Viewer Roadmap
 
+## Release operations
+
+The established development-to-production validation is consolidated under
+`./ops/wsi-release cycle --step`. Individual `stage`, `rehearse`, `promote`,
+`verify`, `status`, `history`, `rollback`, and `tag` commands remain available
+for diagnosis and controlled partial reruns.
+
 ## Immediate priorities
 
 1. Global annotation visibility control.

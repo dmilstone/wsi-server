@@ -27,6 +27,10 @@ wsi development logs
 `wsi-release` manages immutable artifacts:
 
 ```bash
+wsi-release cycle --step
+wsi-release cycle
+wsi-release cycle --dry-run
+wsi-release cycle --resume
 wsi-release status
 wsi-release verify staging
 wsi-release stage
@@ -39,8 +43,50 @@ wsi-release history
 wsi-release rollback
 ```
 
-Production is never automatically advanced from source to deployment. The
-required workflow remains:
+## Normal monitored release
+
+The normal workflow is one command with explicit browser and promotion gates:
+
+```bash
+./ops/wsi-release cycle --step
+```
+
+Step mode shows every material command and accepts Enter to execute, `p` to
+repeat the action, or `q` to stop safely. `cycle` is the faster monitored mode,
+`--verbose` exposes underlying output, and `--dry-run` prints the entire plan
+without creating state/log files or changing Git, files, processes, backups,
+remotes, or tags. After an interruption, `cycle --resume` verifies every saved
+repository, artifact, configuration, marker, annotation, runtime, production,
+and backup assumption before continuing from the first safe incomplete phase.
+
+The cycle runs:
+
+1. Repository, remote, disk, environment and healthy-production preflight.
+2. Maven, JavaScript, operations, whitespace and tracked-status tests; restart
+   and verify development; require `DEVELOPMENT-PASS`.
+3. Publish and verify the tested feature commit (never before that gate).
+4. Build/install/verify staging; require `STAGING-PASS`.
+5. Copy the exact staging artifact to isolated production-mode rehearsal;
+   require `REHEARSAL-PASS`.
+6. Reverify all candidate/production assumptions and require `PROMOTE`.
+7. Verify a complete production backup before stopping only production, install
+   the exact rehearsed artifact, and perform automated production verification.
+8. Require `PRODUCTION-PASS`, then accept a tag name or `SKIP`; tagging retains
+   the exact `TAG` authorization and refuses existing tags.
+
+Human browser confirmations are never inferred. If production startup or
+verification fails, the cycle stops and prints the exact rollback command and
+backup path; it does not roll back automatically.
+
+Cycle state and non-sensitive detailed logs are git-ignored:
+
+```text
+.runtime/run/release-cycle.state
+.runtime/log/cycle-<timestamp-and-id>.log
+```
+
+The individual commands remain the diagnosis, partial-rerun, and manual
+workflow:
 
 1. `wsi-release stage`
 2. Manual staging browser validation
@@ -70,6 +116,8 @@ wsi-release stage --dry-run
 wsi-release stage --step --verbose
 wsi-release rehearse --step
 wsi-release promote --step
+wsi-release cycle --resume --step
+wsi-release cycle --step --verbose
 ```
 
 In step mode, press Enter to run the displayed action, `p` to display it again,

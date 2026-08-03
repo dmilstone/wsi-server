@@ -30,30 +30,21 @@ footer{margin-top:20px;border-top:1px solid var(--line);padding-top:8px;color:#6
 <tr><td>Rehearsal</td><td>8083</td><td>Exact staging JAR; production mode; loopback only</td><td>Deidentified production-marked images; rehearsal annotations</td></tr>
 <tr><td>Production</td><td>8080</td><td>Frozen validated JAR; no banner</td><td>Authorized clinical images and production annotations</td></tr>
 </tbody></table>
-<div class="grid"><section>
-<h2>1. Development gate</h2><pre>cd /Users/dm026/Downloads/wsi-server_works
-git status --short
-./mvnw clean test
-node --test src/test/js/*.test.js
-./ops/tests/run.sh
-git push origin feature/multichannel-viewer</pre><div class="gate stop">Stop if Git is dirty or any required test fails.</div>
-<h2>2. Stage</h2><pre>./ops/wsi-release stage --dry-run
-./ops/wsi-release stage --step
-./ops/wsi-release verify staging
-wsi staging status</pre><div class="gate"><b>Browser 8082:</b> yellow banner; deidentified slides; viewer, channels, annotations and exports; no 403, 500 or unhandled JavaScript errors. Reopen the browser and confirm annotations remain editable and persistent.</div>
-</section><section>
-<h2>3. Rehearse production mode</h2><pre>./ops/wsi-release rehearse --dry-run
-./ops/wsi-release rehearse --step
-./ops/wsi-release verify rehearsal
-wsi rehearsal status</pre><div class="gate"><b>Browser 8083:</b> no banner; production layout; exact staging artifact; deidentified rehearsal data only. Port 8080 remains available.</div>
-<h2>4. Promote</h2><pre>./ops/wsi-release verify staging
-./ops/wsi-release verify rehearsal
-./ops/wsi-release promote --dry-run
-./ops/wsi-release promote --step
-./ops/wsi-release verify production</pre><div class="gate warn">Type <b>PROMOTE</b> only when staging and rehearsal commit/SHA-256 match and the production rollback backup verifies.</div>
-<h2>5. Tag after browser validation</h2><pre>./ops/wsi-release tag production-YYYY-MM-DD-description</pre>
-</section></div>
-<div class="gate"><b>Browser 8080:</b> normal production layout/title; authorized slides; viewer, channels, annotations and exports; no security, layout or persistence regression; other environments remain isolated.</div>
+<h2>Normal monitored release</h2>
+<div class="grid"><section><pre>./ops/wsi-release cycle --step
+./ops/wsi-release cycle
+./ops/wsi-release cycle --dry-run
+./ops/wsi-release cycle --resume --step</pre>
+<div class="gate"><b>Recommended:</b> one <code>cycle --step</code> command displays each material action and runs the complete safe workflow.</div>
+<p>Cycle performs repository/environment preflight, all development tests, candidate publication, staging, exact-artifact rehearsal, final preflight, verified production backup/promotion, production QC and optional tagging.</p></section>
+<section><h2>Exact human gates</h2><pre>DEVELOPMENT-PASS
+STAGING-PASS
+REHEARSAL-PASS
+PROMOTE
+PRODUCTION-PASS
+TAG  (or SKIP)</pre>
+<div class="gate warn">Browser success is never inferred. Promotion cannot begin until the complete backup is verified. A failed production start prints rollback guidance and never rolls back silently.</div></section></div>
+<div class="gate"><b>Browser checklist at every environment:</b> banner/title, login, image discovery/open/switch, tiles/pan/zoom, channels/display, full annotation naming/edit/delete/persistence and global Show/Hide, exports, isolated annotation directory, clean console/network, and no sustained unexpected delay.</div>
 
 <section class="page2"><h1>Troubleshooting and Recovery</h1>
 <div class="grid"><div><h2>Status and verification</h2><pre>wsi production status
@@ -71,11 +62,12 @@ wsi development logs</pre><p>Press <code>Control-C</code> to stop following a lo
 <h2>Rollback</h2><pre>./ops/wsi-release history
 ./ops/wsi-release rollback --step
 ./ops/wsi-release verify production</pre><div class="gate warn">Rollback restores code/configuration but never restores, replaces or overwrites annotations.</div></div>
-<div><h2>Troubleshooting modes</h2><pre>./ops/wsi-release stage --dry-run
+<div><h2>Troubleshooting modes</h2><pre>./ops/wsi-release cycle --resume --verbose
+./ops/wsi-release stage --dry-run
 ./ops/wsi-release stage --step --verbose
 ./ops/wsi-release rehearse --dry-run
 ./ops/wsi-release promote --dry-run
-./ops/wsi-release history</pre><ul><li><code>--dry-run</code>: plan only.</li><li><code>--step</code>: Enter runs; <code>p</code> repeats; <code>q</code> exits safely.</li><li>Use <code>./ops/wsi-release</code> if the installed command is not found.</li><li>Never bypass PROMOTE or ROLLBACK.</li></ul>
+./ops/wsi-release history</pre><ul><li>State: <code>.runtime/run/release-cycle.state</code>.</li><li>Logs: <code>.runtime/log/cycle-*.log</code>.</li><li><code>--dry-run</code>: plan only.</li><li><code>--step</code>: Enter runs; <code>p</code> repeats; <code>q</code> exits safely.</li><li>Individual commands are retained for diagnosis and partial reruns.</li></ul>
 <h2>Environment markers</h2><table><thead><tr><th>Identity</th><th>Required marker</th></tr></thead><tbody><tr><td>development</td><td><code>.wsi-environment-development</code></td></tr><tr><td>staging</td><td><code>.wsi-environment-staging</code></td></tr><tr><td>production / rehearsal</td><td><code>.wsi-environment-production</code></td></tr></tbody></table></div></div>
 <h2>Stop conditions</h2><div class="grid"><ul><li>Dirty Git tree or failed required test</li><li>Git HEAD differs from staging commit</li><li>Recorded/calculated SHA-256 differ</li><li>Staging and rehearsal differ</li><li>Production backup validation fails</li></ul><ul><li>Environment identity, marker, root or port mismatch</li><li>Expected port does not bind</li><li>New 403, 500 or unhandled JavaScript error</li><li>Lost annotation or browser regression</li><li>New/routine delay, blank image or timeout</li></ul></div>
 <div class="gate warn"><b>Timing:</b> the image-switch total ends at OpenSeadragon open and may not include completion of all visible tiles. Use browser Network timing and server logs for repeatable delays.</div>

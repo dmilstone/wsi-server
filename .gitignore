@@ -11,3 +11,6 @@ target/
 # Gradle
 .gradle/
 build/
+
+# Local WSI process, release-cycle state and logs
+.runtime/
