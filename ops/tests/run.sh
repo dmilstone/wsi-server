@@ -43,7 +43,13 @@ expect_failure "unknown command is rejected" "$RELEASE" unknown
 expect_failure "verify requires a target" "$RELEASE" verify
 expect_failure "unknown option is rejected" "$RELEASE" status --unsafe-option
 
-mkdir -p "$TEST_ROOT/repo/.git" "$TEST_ROOT/staging/app" "$TEST_ROOT/staging/config" "$TEST_ROOT/rehearsal/app" "$TEST_ROOT/rehearsal/config" "$TEST_ROOT/production/app" "$TEST_ROOT/production/config" "$TEST_ROOT/production/logs"
+mkdir -p "$TEST_ROOT/repo" "$TEST_ROOT/staging/app" "$TEST_ROOT/staging/config" "$TEST_ROOT/rehearsal/app" "$TEST_ROOT/rehearsal/config" "$TEST_ROOT/production/app" "$TEST_ROOT/production/config" "$TEST_ROOT/production/logs"
+git -C "$TEST_ROOT/repo" init -q
+git -C "$TEST_ROOT/repo" config user.name "WSI operations test"
+git -C "$TEST_ROOT/repo" config user.email "wsi-operations-test@example.invalid"
+printf 'fixture\n' > "$TEST_ROOT/repo/tracked.txt"
+git -C "$TEST_ROOT/repo" add tracked.txt
+git -C "$TEST_ROOT/repo" commit -q -m fixture
 
 if grep -Eq 'eval |rm -rf|git reset --hard|git checkout --' "$RELEASE"; then
     echo "FAIL: prohibited destructive or eval construct found"
@@ -88,6 +94,9 @@ grep -q 'expected gate: PRODUCTION-PASS' "$TEST_ROOT/cycle-dry-run"
 grep -q 'expected optional tag prompt: TAG or SKIP' "$TEST_ROOT/cycle-dry-run"
 grep -q 'PASS read-only preflight report complete (no remote contact)' "$TEST_ROOT/cycle-dry-run"
 grep -q 'remote feature commit (local tracking ref; no network)' "$TEST_ROOT/cycle-dry-run"
+grep -q 'tracked tree: clean' "$TEST_ROOT/cycle-dry-run"
+grep -q 'local/remote synchronization:' "$TEST_ROOT/cycle-dry-run"
+grep -q 'candidate JAR: not built' "$TEST_ROOT/cycle-dry-run"
 pass "cycle dry-run is mutation-free and preserves complete safe phase ordering"
 
 expect_failure "cycle rejects an unknown option" "$RELEASE" cycle --not-a-mode
@@ -106,14 +115,6 @@ pass "cycle has no eval or broad destructive operation"
 
 # Build a small, non-running fixture and prove that stage --dry-run traverses
 # preflight without producing a candidate or invoking process control.
-rmdir "$TEST_ROOT/repo/.git"
-git -C "$TEST_ROOT/repo" init -q
-git -C "$TEST_ROOT/repo" config user.name "WSI operations test"
-git -C "$TEST_ROOT/repo" config user.email "wsi-operations-test@example.invalid"
-printf 'fixture\n' > "$TEST_ROOT/repo/tracked.txt"
-git -C "$TEST_ROOT/repo" add tracked.txt
-git -C "$TEST_ROOT/repo" commit -q -m fixture
-
 mkdir -p "$TEST_ROOT/staging-images"
 touch "$TEST_ROOT/staging-images/.wsi-environment-staging"
 cat > "$TEST_ROOT/staging/config/application.properties" <<EOF

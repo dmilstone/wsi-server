@@ -93,13 +93,33 @@ cycle_gate() {
 cycle_phase() { CYCLE_PHASE="$2"; cycle_say "PHASE $1 — $2"; }
 cycle_identity() { local root="$1"; printf '%s|%s|%s' "$(cat "$root/app/BUILD_COMMIT.txt" 2>/dev/null || :)" "$(cat "$root/app/BUILD_TAG.txt" 2>/dev/null || :)" "$(cycle_hash_file "$root/app/wsi-server.jar")"; }
 cycle_dry_preflight() {
-    local branch remote root label config environment port image annotations markers
+    local branch remote root label config environment port image annotations markers tracked sync candidate candidate_sha
     branch="$(git -C "$REPO" branch --show-current 2>/dev/null || printf unavailable)"
     remote="$(git -C "$REPO" rev-parse --verify -q "refs/remotes/$CYCLE_REMOTE/$CYCLE_BRANCH" 2>/dev/null || printf unavailable)"
+    tracked="$(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null | sed -n '1p' || printf unavailable)"
+    if [[ -z "$tracked" ]]; then tracked=clean; fi
+    if [[ "$CYCLE_HEAD" = unavailable || "$remote" = unavailable ]]; then
+        sync="unavailable"
+    elif [[ "$CYCLE_HEAD" = "$remote" ]]; then
+        sync="synchronized"
+    elif git -C "$REPO" merge-base --is-ancestor "$remote" "$CYCLE_HEAD" 2>/dev/null; then
+        sync="local ahead of remote"
+    else
+        sync="not synchronized"
+    fi
+    candidate="$REPO/target/$JAR_NAME"
     cycle_say "  branch: $branch"
     cycle_say "  HEAD: $CYCLE_HEAD"
     cycle_say "  remote feature commit (local tracking ref; no network): $remote"
-    cycle_say "  tracked tree: $(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null | sed -n '1p' || printf unavailable)"
+    cycle_say "  tracked tree: $tracked"
+    cycle_say "  local/remote synchronization: $sync"
+    if [[ -f "$candidate" ]]; then
+        candidate_sha="$(sha256 "$candidate")"
+        cycle_say "  candidate JAR: $candidate"
+        cycle_say "  candidate SHA-256: $candidate_sha"
+    else
+        cycle_say "  candidate JAR: not built"
+    fi
     cycle_say "  available disk KiB: $(df -Pk "$REPO" 2>/dev/null | awk 'NR==2 {print $4}' || printf unavailable)"
     for label in development staging rehearsal production; do
         case "$label" in

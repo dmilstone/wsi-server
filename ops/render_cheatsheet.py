@@ -56,6 +56,24 @@ def register_fonts(selected=None):
         for alias, built_in in zip(FONT_ALIASES, ("Helvetica", "Helvetica-Bold", "Courier")):
             pdfmetrics.registerFont(Font(alias, built_in, "WinAnsiEncoding"))
 
+    # Paragraph's inline <b>/<i> handling resolves faces through ReportLab's
+    # family map; registering aliases alone is not sufficient. Vera italic and
+    # bold-italic files are not required, so use the nearest supported face.
+    pdfmetrics.registerFontFamily(
+        "DVSans",
+        normal="DVSans",
+        bold="DVSans-Bold",
+        italic="DVSans",
+        boldItalic="DVSans-Bold",
+    )
+    pdfmetrics.registerFontFamily(
+        "DVMono",
+        normal="DVMono",
+        bold="DVMono",
+        italic="DVMono",
+        boldItalic="DVMono",
+    )
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
