@@ -96,8 +96,11 @@ class AnnotationLabelLayer {
 
     position(entry) {
         const geometry = entry.annotation?.target?.selector?.geometry;
-        const x = Number(geometry?.bounds?.minX ?? geometry?.x);
-        const y = Number(geometry?.bounds?.minY ?? geometry?.y);
+        // Annotorious updates x/y as the live shape moves. In the committed
+        // updateAnnotation payload, bounds can briefly retain the pre-drag
+        // values, so prefer the same canonical x/y fields used for persistence.
+        const x = Number(geometry?.x ?? geometry?.bounds?.minX);
+        const y = Number(geometry?.y ?? geometry?.bounds?.minY);
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
             entry.element.hidden = true;
             return;
