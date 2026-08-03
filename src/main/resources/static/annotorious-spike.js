@@ -18,6 +18,9 @@ class AnnotoriousSpike {
         this.adapter = null;
         this.drawingEnabled = false;
         this.annotationsVisible = true;
+        this.labelGeneration = 0;
+        this.labelRefreshVersions = new Map();
+        this.annotationPointerEdit = null;
 
         this.initialize();
     }
@@ -42,7 +45,7 @@ class AnnotoriousSpike {
 
     async handleViewerOpen() {
         const imageId = this.getCurrentImageId?.();
-        this.labelLayer?.beginImage(imageId);
+        this.beginLabelImage(imageId);
         this.timingCallbacks.open?.(imageId);
         this.setDrawingEnabled(false);
         // Cancel any draft before the old Annotorious selection can outlive an
@@ -99,10 +102,14 @@ class AnnotoriousSpike {
 
         this.annotator.on("updateAnnotation", (annotation, previous) => {
             this.adapter.annotationUpdated(annotation, previous);
-            this.labelLayer.syncAnnotation(annotation);
+            this.scheduleCommittedLabelRefresh(annotation?.id);
         });
 
         this.annotator.on("deleteAnnotation", annotation => {
+            if (this.annotationPointerEdit?.annotationId === annotation?.id) {
+                this.annotationPointerEdit = null;
+            }
+            this.cancelCommittedLabelRefresh(annotation?.id);
             this.adapter.annotationDeleted(annotation);
             this.labelLayer.remove(annotation.id);
             // Annotorious updates its canonical selection after dispatching the
@@ -112,6 +119,12 @@ class AnnotoriousSpike {
 
         this.annotator.on("selectionChanged", () => {
             const annotation = this.getSelectedAnnotations()[0];
+            if (this.annotationPointerEdit &&
+                annotation?.id !== this.annotationPointerEdit.annotationId) {
+                this.labelLayer.clearTemporaryDisplacement(this.annotationPointerEdit.annotationId);
+                this.labelLayer.updatePositions();
+                this.annotationPointerEdit = null;
+            }
             this.adapter.store.setSelectedAnnotationId(annotation?.id || null);
             this.notifySelectionChanged();
         });
@@ -129,12 +142,117 @@ class AnnotoriousSpike {
             this.setAnnotationsVisible(!this.annotationsVisible);
         });
         this.namesButton.addEventListener("click", () => {
-            this.labelLayer.setNamesVisible(!this.labelLayer.namesVisible);
+            const visible = !this.labelLayer.namesVisible;
+            if (!visible) this.annotationPointerEdit = null;
+            this.labelLayer.setNamesVisible(visible);
             this.updateNamesButton();
         });
 
         this.installKeyboardShortcuts();
+        this.installAnnotationLabelMovement();
 
+    }
+
+    installAnnotationLabelMovement() {
+        const element = this.viewer.element;
+        element.addEventListener("pointerdown", event => {
+            this.annotationPointerEdit = null;
+            if (this.drawingEnabled || event.button !== 0) return;
+            const selected = this.getSelectedAnnotations();
+            if (selected.length !== 1 || !this.annotationContainsClientPoint(selected[0], event)) return;
+            const point = this.clientToImagePoint(event);
+            const displacement = this.labelLayer.getTemporaryDisplacement(selected[0].id);
+            this.annotationPointerEdit = {
+                pointerId: event.pointerId,
+                annotationId: selected[0].id,
+                startX: event.clientX,
+                startY: event.clientY,
+                startImageX: point.x,
+                startImageY: point.y,
+                startDisplacementX: displacement.x,
+                startDisplacementY: displacement.y
+            };
+        }, true);
+        element.addEventListener("pointermove", event => {
+            const edit = this.annotationPointerEdit;
+            if (!edit || edit.pointerId !== event.pointerId) return;
+            if (Math.hypot(event.clientX - edit.startX, event.clientY - edit.startY) >= 3) {
+                const point = this.clientToImagePoint(event);
+                this.labelLayer.setTemporaryDisplacement(
+                    edit.annotationId,
+                    edit.startDisplacementX + point.x - edit.startImageX,
+                    edit.startDisplacementY + point.y - edit.startImageY);
+            }
+        }, true);
+        element.addEventListener("pointerup", event => {
+            if (this.annotationPointerEdit?.pointerId !== event.pointerId) return;
+            this.annotationPointerEdit = null;
+            // Keep the presentation-only displacement until Annotorious emits
+            // its native committed update. Never alter its selection lifecycle.
+        }, true);
+        element.addEventListener("pointercancel", event => {
+            if (this.annotationPointerEdit?.pointerId !== event.pointerId) return;
+            if (this.annotationPointerEdit?.annotationId) {
+                this.labelLayer.clearTemporaryDisplacement(this.annotationPointerEdit.annotationId);
+                this.labelLayer.updatePositions();
+            }
+            this.annotationPointerEdit = null;
+        }, true);
+    }
+
+    clientToImagePoint(event) {
+        const rect = this.viewer.element.getBoundingClientRect();
+        return this.viewer.viewport.viewerElementToImageCoordinates(
+            new OpenSeadragon.Point(event.clientX - rect.left, event.clientY - rect.top));
+    }
+
+    annotationContainsClientPoint(annotation, event) {
+        const geometry = annotation?.target?.selector?.geometry;
+        const x = Number(geometry?.x ?? geometry?.bounds?.minX);
+        const y = Number(geometry?.y ?? geometry?.bounds?.minY);
+        const width = Number(geometry?.w ?? geometry?.width ??
+            (geometry?.bounds?.maxX - geometry?.bounds?.minX));
+        const height = Number(geometry?.h ?? geometry?.height ??
+            (geometry?.bounds?.maxY - geometry?.bounds?.minY));
+        if (![x, y, width, height].every(Number.isFinite)) return false;
+        const point = this.clientToImagePoint(event);
+        return point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height;
+    }
+
+    beginLabelImage(imageId) {
+        this.annotationPointerEdit = null;
+        this.labelGeneration += 1;
+        this.labelRefreshVersions.clear();
+        this.labelLayer?.beginImage(imageId);
+    }
+
+    scheduleCommittedLabelRefresh(annotationId) {
+        if (!annotationId) return;
+        const generation = this.labelGeneration;
+        const imageId = this.getCurrentImageId?.();
+        const version = (this.labelRefreshVersions.get(annotationId) || 0) + 1;
+        this.labelRefreshVersions.set(annotationId, version);
+
+        // Annotorious dispatches updateAnnotation while its public collection
+        // can still expose the pre-drag object. The next paint is its supported
+        // post-event boundary: re-read by ID rather than trusting the payload.
+        window.requestAnimationFrame(() => {
+            if (generation !== this.labelGeneration ||
+                imageId !== this.getCurrentImageId?.() ||
+                this.labelRefreshVersions.get(annotationId) !== version) return;
+            const committed = this.annotator.getAnnotations()
+                .find(annotation => annotation?.id === annotationId);
+            if (committed) {
+                this.labelLayer.clearTemporaryDisplacement(annotationId);
+                this.labelLayer.syncAnnotation(committed);
+            }
+        });
+    }
+
+    cancelCommittedLabelRefresh(annotationId) {
+        if (!annotationId) return;
+        this.labelRefreshVersions.set(
+            annotationId, (this.labelRefreshVersions.get(annotationId) || 0) + 1);
     }
 
     updateNamesButton() {
@@ -239,6 +357,10 @@ class AnnotoriousSpike {
         }
 
         this.drawingEnabled = Boolean(enabled) && this.annotationsVisible;
+        if (this.drawingEnabled) {
+            this.annotationPointerEdit = null;
+            this.labelLayer?.clearTemporaryDisplacements();
+        }
         this.annotator.setDrawingEnabled(this.drawingEnabled);
 
         this.toggleButton.setAttribute(
@@ -263,6 +385,10 @@ class AnnotoriousSpike {
         // replace, or mutate annotations through Annotorious or AnnotationStore.
         // Keeping the live annotator intact also makes showing the layer instant.
         this.viewer.element.classList.toggle("annotations-hidden", !this.annotationsVisible);
+        if (!this.annotationsVisible) {
+            this.annotationPointerEdit = null;
+            this.labelLayer?.clearTemporaryDisplacements();
+        }
         this.labelLayer?.setAnnotationsVisible(this.annotationsVisible);
 
         if (!this.annotationsVisible) this.setDrawingEnabled(false);
