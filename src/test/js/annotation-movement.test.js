@@ -9,6 +9,7 @@ const eventHandlers = new Map();
 let persistenceUpdates = 0;
 let labelUpdates = 0;
 let lastLabelAnnotation = null;
+const animationFrames = [];
 const annotator = {
     annotations: [],
     setDrawingTool() {},
@@ -27,6 +28,7 @@ class FakeAdapter {
 class FakeLabelLayer {
     constructor() { this.namesVisible = true; }
     syncAnnotation(annotation) { labelUpdates += 1; lastLabelAnnotation = annotation; }
+    beginImage() {}
     remove() {}
     setAnnotationsVisible() {}
 }
@@ -40,7 +42,10 @@ const context = vm.createContext({
     console,
     queueMicrotask,
     document: { addEventListener() {} },
-    window: { AnnotoriousOSD: { createOSDAnnotator: () => annotator } },
+    window: {
+        AnnotoriousOSD: { createOSDAnnotator: () => annotator },
+        requestAnimationFrame(callback) { animationFrames.push(callback); }
+    },
     AnnotationAdapter: FakeAdapter,
     AnnotationLabelLayer: FakeLabelLayer,
     AnnotationNameEditor: FakeNameEditor
@@ -58,23 +63,57 @@ spike.nameInput = {};
 spike.timingCallbacks = {};
 spike.annotationsVisible = true;
 spike.drawingEnabled = false;
+spike.getCurrentImageId = () => "image-one";
+spike.labelGeneration = 0;
+spike.labelRefreshVersions = new Map();
 spike.installKeyboardShortcuts = () => {};
 spike.createAnnotator();
 
-const moved = { id: "moved", target: { selector: { geometry: {
-    x: 80, y: 90, w: 20, h: 30,
-    // This is the stale pre-drag derived value observed in the update payload.
-    bounds: { minX: 10, minY: 20, maxX: 30, maxY: 50 }
-} } } };
-annotator.annotations = [moved];
+const at = (x, y) => ({ id: "moved", target: { selector: { geometry: {
+    x, y, w: 20, h: 30,
+    bounds: { minX: x, minY: y, maxX: x + 20, maxY: y + 30 }
+} } } });
+const beforeMove = at(10, 20);
+const eventPayload = at(10, 20);
+const committed = at(80, 90);
+annotator.annotations = [beforeMove];
 
-// Annotorious exposes updateAnnotation as the public committed movement event.
-// Firing it must synchronously send the same live annotation to the label layer;
-// no click, selection, viewport, or redraw event is involved.
-eventHandlers.get("updateAnnotation")(moved, null);
+// Model the browser ordering: updateAnnotation fires while both its payload and
+// getAnnotations still expose pre-drag geometry, then the collection commits.
+eventHandlers.get("updateAnnotation")(eventPayload, beforeMove);
+assert.equal(labelUpdates, 0, "stale event geometry is not rendered");
+assert.equal(animationFrames.length, 1);
+annotator.annotations = [committed];
+animationFrames.shift()();
 assert.equal(labelUpdates, 1);
-assert.equal(lastLabelAnnotation, moved);
+assert.equal(lastLabelAnnotation, committed, "post-commit geometry is re-read by ID");
 assert.equal(persistenceUpdates, 1, "only the existing geometry persistence path runs");
 assert.equal(annotator.annotations.length, 1, "movement neither replaces nor duplicates annotations");
+
+// Consecutive moves coalesce label work to the latest committed collection.
+eventHandlers.get("updateAnnotation")(committed, beforeMove);
+eventHandlers.get("updateAnnotation")(committed, beforeMove);
+assert.equal(animationFrames.length, 2);
+annotator.annotations = [at(120, 130)];
+animationFrames.shift()();
+assert.equal(labelUpdates, 1, "superseded move cannot refresh the label");
+animationFrames.shift()();
+assert.equal(labelUpdates, 2);
+assert.equal(lastLabelAnnotation, annotator.annotations[0]);
+assert.equal(persistenceUpdates, 3, "label scheduling adds no persistence calls");
+
+// Image changes and deletion invalidate already queued post-commit callbacks.
+eventHandlers.get("updateAnnotation")(annotator.annotations[0], committed);
+spike.beginLabelImage("image-two");
+animationFrames.shift()();
+assert.equal(labelUpdates, 2, "an old image callback is rejected");
+
+spike.getCurrentImageId = () => "image-two";
+eventHandlers.get("updateAnnotation")(annotator.annotations[0], committed);
+eventHandlers.get("deleteAnnotation")(annotator.annotations[0]);
+annotator.annotations = [];
+animationFrames.shift()();
+assert.equal(labelUpdates, 2, "a deleted annotation cannot be restored by deferred work");
+assert.equal(annotator.annotations.length, 0);
 
 console.log("annotation committed movement checks passed");

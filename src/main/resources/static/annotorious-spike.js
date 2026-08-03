@@ -18,6 +18,8 @@ class AnnotoriousSpike {
         this.adapter = null;
         this.drawingEnabled = false;
         this.annotationsVisible = true;
+        this.labelGeneration = 0;
+        this.labelRefreshVersions = new Map();
 
         this.initialize();
     }
@@ -42,7 +44,7 @@ class AnnotoriousSpike {
 
     async handleViewerOpen() {
         const imageId = this.getCurrentImageId?.();
-        this.labelLayer?.beginImage(imageId);
+        this.beginLabelImage(imageId);
         this.timingCallbacks.open?.(imageId);
         this.setDrawingEnabled(false);
         // Cancel any draft before the old Annotorious selection can outlive an
@@ -99,10 +101,11 @@ class AnnotoriousSpike {
 
         this.annotator.on("updateAnnotation", (annotation, previous) => {
             this.adapter.annotationUpdated(annotation, previous);
-            this.labelLayer.syncAnnotation(annotation);
+            this.scheduleCommittedLabelRefresh(annotation?.id);
         });
 
         this.annotator.on("deleteAnnotation", annotation => {
+            this.cancelCommittedLabelRefresh(annotation?.id);
             this.adapter.annotationDeleted(annotation);
             this.labelLayer.remove(annotation.id);
             // Annotorious updates its canonical selection after dispatching the
@@ -135,6 +138,38 @@ class AnnotoriousSpike {
 
         this.installKeyboardShortcuts();
 
+    }
+
+    beginLabelImage(imageId) {
+        this.labelGeneration += 1;
+        this.labelRefreshVersions.clear();
+        this.labelLayer?.beginImage(imageId);
+    }
+
+    scheduleCommittedLabelRefresh(annotationId) {
+        if (!annotationId) return;
+        const generation = this.labelGeneration;
+        const imageId = this.getCurrentImageId?.();
+        const version = (this.labelRefreshVersions.get(annotationId) || 0) + 1;
+        this.labelRefreshVersions.set(annotationId, version);
+
+        // Annotorious dispatches updateAnnotation while its public collection
+        // can still expose the pre-drag object. The next paint is its supported
+        // post-event boundary: re-read by ID rather than trusting the payload.
+        window.requestAnimationFrame(() => {
+            if (generation !== this.labelGeneration ||
+                imageId !== this.getCurrentImageId?.() ||
+                this.labelRefreshVersions.get(annotationId) !== version) return;
+            const committed = this.annotator.getAnnotations()
+                .find(annotation => annotation?.id === annotationId);
+            if (committed) this.labelLayer.syncAnnotation(committed);
+        });
+    }
+
+    cancelCommittedLabelRefresh(annotationId) {
+        if (!annotationId) return;
+        this.labelRefreshVersions.set(
+            annotationId, (this.labelRefreshVersions.get(annotationId) || 0) + 1);
     }
 
     updateNamesButton() {
