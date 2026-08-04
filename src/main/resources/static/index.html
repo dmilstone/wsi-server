@@ -60,7 +60,7 @@
         }
         .environment-banner[hidden] { display: none !important; }
         button, input, select { font: inherit; }
-        button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, .help-link:focus-visible {
+        button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
             outline: 3px solid rgba(77, 148, 216, .45);
             outline-offset: 2px;
         }
@@ -308,6 +308,10 @@
             white-space: nowrap;
         }
         .help-link:hover { color: var(--text); background: var(--surface-hover); }
+        .help-link:focus-visible {
+            outline: 3px solid rgba(77, 148, 216, .45);
+            outline-offset: 2px;
+        }
         .help-link-symbol {
             display: inline-grid;
             place-items: center;
