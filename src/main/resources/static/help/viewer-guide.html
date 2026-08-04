@@ -13,11 +13,11 @@ h2{font-size:15px;color:#2f80c8;margin:0 0 7px}ul{margin:0;padding-left:19px}li{
 .warning{margin-top:12px;padding:10px 12px;background:#fff4d6;border:1px solid #e3b341;font-size:13px}.foot{font-size:12px;color:#526579;margin:8px 0 0}
 @media(max-width:720px){body{padding:0}.page{border:0;padding:18px}.grid{grid-template-columns:1fr}}
 @media print{@page{size:letter;margin:.4in}body{background:#fff;padding:0}.page{max-width:none;border:0;box-shadow:none;padding:0}h1{font-size:20px}.sub{font-size:11px;margin-bottom:10px}.grid{gap:8px}.card{padding:7px 9px}h2{font-size:11px}li{font-size:8.5px;margin:2px 0}.warning{font-size:8px;padding:6px}.foot{font-size:7.5px}}
-.guide-actions{display:flex;justify-content:center;gap:10px;margin:0 0 16px}.guide-actions a{display:inline-flex;align-items:center;min-height:40px;padding:8px 12px;border:1px solid #2f80c8;border-radius:7px;color:#155f9d;text-decoration:none;font-weight:700}.guide-actions a:hover,.guide-actions a:focus-visible{background:#e7f2fc;outline:3px solid #2f80c855;outline-offset:2px}
+.guide-actions{display:flex;justify-content:center;gap:10px;margin:0 0 16px}.guide-actions a,.guide-actions button{display:inline-flex;align-items:center;min-height:40px;padding:8px 12px;border:1px solid #2f80c8;border-radius:7px;color:#155f9d;background:#fff;text-decoration:none;font:700 14px Arial,Helvetica,sans-serif;cursor:pointer}.guide-actions a:hover,.guide-actions a:focus-visible,.guide-actions button:hover,.guide-actions button:focus-visible{background:#e7f2fc;outline:3px solid #2f80c855;outline-offset:2px}
 </style>
 </head>
 <body><main class="page">
-<nav class="guide-actions" aria-label="Guide actions"><a href="/" aria-label="Return to WSI Viewer">Back to viewer</a><a href="/help/WSI-Viewer-Quick-Guide.pdf" target="_blank" rel="noopener" aria-label="Open printable PDF quick guide">Printable PDF</a></nav>
+<nav class="guide-actions" aria-label="Guide actions"><button id="close-guide" type="button" aria-label="Close guide and return to the existing viewer tab">Close guide</button><a href="/help/WSI-Viewer-Quick-Guide.pdf" target="_blank" rel="noopener" aria-label="Open printable PDF quick guide">Printable PDF</a></nav>
 <h1>WSI Viewer Quick Guide</h1><p class="sub">Initial viewing, channel display, annotations, and export</p>
 <div class="grid">
 <section class="card"><h2>1. Open and navigate</h2><ul><li>Choose an image in <b>Sample images</b>.</li><li>Drag to pan; scroll or pinch to zoom.</li><li>Use viewer controls to reset or enter fullscreen.</li><li>Collapse side panels for more image space.</li></ul></section>
@@ -29,4 +29,13 @@ h2{font-size:15px;color:#2f80c8;margin:0 0 7px}ul{margin:0;padding-left:19px}li{
 </div>
 <p class="warning"><b>Report:</b> blank/distorted images, missing or changed annotations, failed exports, login errors, or unusual delays. Report the image name and approximate time; do not send sensitive image data outside the approved support process.</p>
 <p class="foot">Before reporting a display problem, try one normal refresh - but never refresh while a recent annotation change may still be saving.</p>
-</main></body></html>
+</main>
+<script>
+document.getElementById("close-guide").addEventListener("click", () => {
+    window.close();
+    window.setTimeout(() => {
+        if (!window.closed) window.location.assign("/");
+    }, 100);
+});
+</script>
+</body></html>
