@@ -71,3 +71,80 @@ assert.match(app, /generation !== this\.generation/,
 assert.match(overlay, /destroy\(\)[\s\S]*removeHandler[\s\S]*canvas\.dispose/,
     "overlay removes OSD/Fabric listeners and disposes its canvas");
 console.log("fabric spike isolation, coordinate, serialization, and lifecycle checks passed");
+
+// Regression: completing the custom mouse lifecycle leaves Fabric idle and deselected.
+const {FabricSpikeDrawing} = require("../../main/resources/static/fabric-spike-drawing.js");
+class FakeRect {
+    constructor(options) { Object.assign(this, options); }
+    set(options) { Object.assign(this, options); return this; }
+}
+class FakeCanvas {
+    constructor() { this.handlers = new Map(); this.objects = []; this.activeObject = null; this.renders = 0; }
+    on(name, handler) { this.handlers.set(name, handler); }
+    off(name, handler) { if (this.handlers.get(name) === handler) this.handlers.delete(name); }
+    emit(name, event = {}) { this.handlers.get(name)?.(event); }
+    getPointer(event) { return {x: event.x, y: event.y}; }
+    add(object) { this.objects.push(object); }
+    remove(object) { this.objects = this.objects.filter(candidate => candidate !== object); }
+    discardActiveObject() { this.activeObject = null; }
+    getActiveObject() { return this.activeObject; }
+    requestRenderAll() { this.renders++; }
+}
+const drawingCanvas = new FakeCanvas();
+const drawingOverlay = {withSync(callback) { callback(); }};
+const created = [];
+let commits = 0;
+let toolbarClicks = 0;
+let drawPressed = false;
+const drawing = new FabricSpikeDrawing(
+    drawingCanvas, {Rect: FakeRect}, drawingOverlay,
+    preview => ({x: preview.left, y: preview.top, width: preview.width, height: preview.height}),
+    {
+        modeChanged(active) { drawPressed = active; },
+        created(geometry) {
+            created.push(geometry);
+            commits++;
+            drawingCanvas.add({spikeType: "rectangle", geometry});
+        }
+    }
+);
+const clickDraw = () => { toolbarClicks++; drawingCanvas.discardActiveObject(); drawing.setActive(!drawing.active); };
+clickDraw();
+assert.equal(drawPressed, true);
+drawingCanvas.emit("mouse:down", {e: {x: 10, y: 20}});
+drawingCanvas.emit("mouse:move", {e: {x: 50, y: 70}});
+drawingCanvas.emit("mouse:up", {e: {x: 50, y: 70}});
+assert.deepEqual(created, [{x: 10, y: 20, width: 40, height: 50}]);
+assert.equal(drawingCanvas.objects.filter(object => object.spikeType === "rectangle").length, 1);
+assert.equal(drawing.active, false);
+assert.equal(drawPressed, false, "Draw visibly leaves drawing mode");
+assert.equal(drawing.origin, null); assert.equal(drawing.preview, null);
+assert.equal(drawingCanvas.getActiveObject(), null, "creation remains cleanly deselected");
+assert.equal(commits, 1);
+
+// An unpressed movement is inert, while an unrelated toolbar action and later
+// ordinary Fabric selection remain immediately usable.
+const snapshot = JSON.stringify(created);
+drawingCanvas.emit("mouse:move", {e: {x: 90, y: 100, buttons: 0}});
+assert.equal(JSON.stringify(created), snapshot);
+toolbarClicks++;
+assert.equal(toolbarClicks, 2, "toolbar remains usable after release");
+const firstRectangle = drawingCanvas.objects.find(object => object.spikeType === "rectangle");
+drawingCanvas.activeObject = firstRectangle; // Fabric's later ordinary hit selection.
+assert.equal(drawingCanvas.getActiveObject(), firstRectangle);
+
+// No second object can start until Draw is deliberately activated again.
+drawingCanvas.emit("mouse:down", {e: {x: 1, y: 1}});
+drawingCanvas.emit("mouse:move", {e: {x: 20, y: 20}});
+drawingCanvas.emit("mouse:up", {e: {x: 20, y: 20}});
+assert.equal(created.length, 1); assert.equal(commits, 1);
+clickDraw();
+drawingCanvas.emit("mouse:down", {e: {x: 5, y: 5}});
+drawingCanvas.emit("mouse:move", {e: {x: 25, y: 35}});
+drawingCanvas.emit("mouse:up", {e: {x: 25, y: 35}});
+assert.equal(created.length, 2); assert.equal(commits, 2);
+assert.equal(drawingCanvas.objects.filter(object => object.spikeType === "rectangle").length, 2);
+assert.equal(drawingCanvas.getActiveObject(), null);
+drawing.destroy();
+assert.equal(drawingCanvas.handlers.size, 0);
+console.log("fabric drawing mouse lifecycle regression checks passed");

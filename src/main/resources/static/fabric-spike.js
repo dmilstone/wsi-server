@@ -93,38 +93,26 @@
             this.updateSelection();
         }
         bindDrawing() {
-            let origin = null, preview = null;
-            this.canvas.on("mouse:down", event => {
-                if (!this.drawing || event.target) return;
-                origin = this.canvas.getPointer(event.e);
-                preview = new fabric.Rect({left: origin.x, top: origin.y, width: 0, height: 0, fill: "rgba(255,205,0,.08)", stroke: "#ffcd00", strokeWidth: 2, selectable: false});
-                this.overlay.withSync(() => this.canvas.add(preview));
-            });
-            this.canvas.on("mouse:move", event => {
-                if (!origin || !preview) return;
-                const point = this.canvas.getPointer(event.e);
-                preview.set({left: Math.min(origin.x, point.x), top: Math.min(origin.y, point.y), width: Math.abs(point.x - origin.x), height: Math.abs(point.y - origin.y)});
-                this.canvas.requestRenderAll();
-            });
-            this.canvas.on("mouse:up", () => {
-                if (!origin || !preview) return;
-                const geometry = FabricOsdCoordinates.canvasRectToImage(this.viewer, preview);
-                this.overlay.withSync(() => this.canvas.remove(preview));
-                origin = preview = null;
-                if (geometry.width < 2 || geometry.height < 2) return;
-                const now = new Date().toISOString();
-                this.currentRecords().push({id: `fabric-${++this.sequence}`, name: null, geometry, bodies: [], created: now, updated: now, visible: true, locked: null, original: {}});
-                this.count("object:added");
-                this.count("logical:commit");
-                this.drawing = false;
-                document.getElementById("draw").setAttribute("aria-pressed", "false");
-                this.viewer.setMouseNavEnabled(true);
-                this.render();
-                const rectangle = this.rectangle(this.currentRecords().at(-1));
-                this.canvas.setActiveObject(rectangle);
-                this.canvas.requestRenderAll();
-                this.updateSelection();
-            });
+            this.drawingLifecycle = new FabricSpikeDrawing(
+                this.canvas,
+                fabric,
+                this.overlay,
+                preview => FabricOsdCoordinates.canvasRectToImage(this.viewer, preview),
+                {
+                    modeChanged: active => {
+                        this.drawing = active;
+                        document.getElementById("draw").setAttribute("aria-pressed", String(active));
+                        this.viewer.setMouseNavEnabled(!active);
+                    },
+                    created: geometry => {
+                        const now = new Date().toISOString();
+                        this.currentRecords().push({id: `fabric-${++this.sequence}`, name: null, geometry, bodies: [], created: now, updated: now, visible: true, locked: null, original: {}});
+                        this.count("object:added");
+                        this.count("logical:commit");
+                        this.render();
+                    }
+                }
+            );
         }
         updateSelection() {
             const object = this.canvas.getActiveObject();
@@ -139,8 +127,8 @@
             this.canvas.on("selection:updated", () => this.updateSelection());
             this.canvas.on("selection:cleared", () => this.updateSelection());
             document.getElementById("draw").addEventListener("click", event => {
-                this.drawing = !this.drawing; event.currentTarget.setAttribute("aria-pressed", String(this.drawing));
-                this.canvas.discardActiveObject(); this.viewer.setMouseNavEnabled(!this.drawing);
+                this.canvas.discardActiveObject();
+                this.drawingLifecycle.setActive(!this.drawingLifecycle.active);
             });
             document.getElementById("delete").addEventListener("click", () => {
                 const object = this.canvas.getActiveObject(); if (!object) return;
@@ -185,7 +173,7 @@
                 getTileUrl: (level, x, y) => `/tile/${encodeURIComponent(image.id)}/composite/${level}/${x}/${y}.png`});
             this.viewer.addOnceHandler("open", () => { if (generation === this.generation) { this.render(); this.status("Ready — annotations exist only in this tab"); } });
         }
-        destroy() { this.generation++; this.overlay.destroy(); this.viewer.destroy(); }
+        destroy() { this.generation++; this.drawingLifecycle.destroy(); this.overlay.destroy(); this.viewer.destroy(); }
     }
     window.addEventListener("DOMContentLoaded", () => { window.fabricAnnotationSpike = new FabricSpike(); });
 })();

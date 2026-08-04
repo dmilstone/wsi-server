@@ -44,3 +44,9 @@ Automated results do not fill this table. A human tester must record observation
 | Reload clears all annotations | Not run | Not run | |
 
 **Success gate:** do not recommend migration unless every row passes in real Chrome and Safari on an actual WSI.
+
+## Drawing lifecycle correction
+
+Chrome validation of the initial implementation found that it called Fabric's public `setActiveObject()` for the newly rebuilt rectangle from inside the same `mouse:up` dispatch that completed the custom preview. Fabric 5.3.0 had not yet finished its pointer transform processing, so the new active object could inherit that completed interaction and remain attached to later pointer movement.
+
+The corrected sequence clears the preview references, disables Draw, removes the preview, calls `discardActiveObject()`, restores OpenSeadragon mouse navigation, and only then creates/rebuilds the canonical rectangle. It deliberately does **not** select the new object. The new rectangle must remain deselected until a later ordinary Fabric click selects it. This uses only public Fabric lifecycle methods and does not synthesize events or inspect Fabric internals.
