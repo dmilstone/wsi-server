@@ -101,6 +101,10 @@ assert.match(rule(".annotation-name-control"), /min-width:\s*240px/);
 const nameInput = rule(".annotation-name-control input");
 assert.match(nameInput, /flex:\s*1 1 180px/);
 assert.match(nameInput, /min-width:\s*180px/);
+assert.match(rule(".annotation-save-feedback"), /flex:\s*0 0 132px/);
+assert.match(rule(".annotation-save-feedback"), /min-width:\s*132px/);
+assert.match(html, /id="annotation-save-status"[^>]*role="status"[^>]*aria-live="polite"/);
+assert.match(html, /id="annotation-save-retry"[^>]*aria-label="Retry saving annotations"/);
 assert.match(rule(".presentation-mode .workspace"), /grid-template-columns:\s*0 0 minmax\(0,1fr\) 0 0/);
 
 // Semantic groups, stable compact labels, dynamic action labels/pressed state,

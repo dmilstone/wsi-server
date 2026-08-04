@@ -10,6 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@latest/dist/annotorious-openseadragon.js"></script>
     <script src="/csrf.js"></script>
     <script src="/annotation-store.js"></script>
+    <script src="/annotation-save-state-feedback.js"></script>
     <script src="/annotation-adapter.js"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
@@ -382,6 +383,12 @@
         .annotation-name-control { display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-width: 240px; color: rgba(255,255,255,.72); font-size: 11px; font-weight: 700; white-space: nowrap; }
         .annotation-name-control input { flex: 1 1 180px; width: 100%; min-width: 180px; height: 40px; box-sizing: border-box; padding: 5px 8px; color: white; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.18); border-radius: 6px; }
         .annotation-name-control input:disabled { opacity: .55; }
+        .annotation-save-feedback { display: flex; flex: 0 0 132px; align-items: center; gap: 4px; min-width: 132px; }
+        .annotation-save-status { flex: 1 1 auto; white-space: nowrap; color: rgba(255,255,255,.76); font-size: 11px; font-weight: 750; text-align: center; }
+        .annotation-save-status[data-state="unsaved"], .annotation-save-status[data-state="failed"] { color: #ffcb66; }
+        .annotation-save-status[data-state="saving"], .annotation-save-status[data-state="loading"] { color: #a8ccef; }
+        .annotation-save-status[data-state="saved"] { color: #8fdda9; }
+        .annotation-save-retry { min-width: 40px; height: 40px; padding-inline: 7px; }
         @media (max-width: 820px) {
             .viewer-toolbar { right: 16px; width: auto; }
         }
@@ -631,6 +638,10 @@
                         <input id="annotation-name" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Select one annotation" disabled>
                     </label>
                 </div>
+                <div class="toolbar-group annotation-save-feedback" role="group" aria-label="Annotation save status">
+                    <span id="annotation-save-status" class="annotation-save-status" role="status" aria-live="polite" aria-atomic="true" hidden></span>
+                    <button id="annotation-save-retry" class="toolbar-button annotation-save-retry" type="button" aria-label="Retry saving annotations" hidden>Retry</button>
+                </div>
             </div>
         </div>
         <section id="slide-overview" class="slide-overview" hidden aria-label="Slide label and thumbnail overview">
@@ -701,6 +712,8 @@
     let display;
     let updateTimer;
     let updateSequence = 0;
+    let imageSelectionGeneration = 0;
+    let annotationSaveFeedback;
     const STORAGE_PREFIX = "wsi.viewer.v1";
     const DISPLAY_CALIBRATION_VERSION = 3;
 
@@ -858,6 +871,17 @@
     }
 
     async function selectImage(image) {
+        const selectionGeneration = ++imageSelectionGeneration;
+        if (annotationSpike && selectedImage?.id !== image.id) {
+            try {
+                await annotationSpike.flushPendingSave();
+            } catch {
+                statusElement.textContent = "Save failed. Retry before opening another image.";
+                return;
+            }
+            if (selectionGeneration !== imageSelectionGeneration) return;
+        }
+
         startImageSwitchTiming(image);
         try {
             statusElement.textContent = `Opening ${image.name}…`;
@@ -870,8 +894,8 @@
             // Start annotation I/O alongside metadata/display loading. The store
             // retains the result so the viewer-open handler does not issue another GET.
             markImageSwitchTiming(image.id, "prefetch started");
-            void AnnotationStore.prefetchImage(image.id).catch(error =>
-                console.warn("Unable to prefetch annotations", error)
+            void AnnotationStore.prefetchImage(image.id).catch(() =>
+                console.warn("Unable to prefetch annotations")
             );
             clearPixelReadout();
             document.querySelectorAll(".image-button").forEach(button =>
@@ -1061,7 +1085,14 @@
                     open: imageId => markImageSwitchTiming(imageId, "OSD open event"),
                     annotationsLoaded: imageId => markImageSwitchTiming(imageId, "annotations loaded"),
                     annotationsRendered: imageId => markImageSwitchTiming(imageId, "annotations shown"),
-                    selectionChanged: updateSelectedAnnotationExportState
+                    selectionChanged: updateSelectedAnnotationExportState,
+                    storeReady: store => {
+                        annotationSaveFeedback = new AnnotationSaveStateFeedback(
+                            store,
+                            document.getElementById("annotation-save-status"),
+                            document.getElementById("annotation-save-retry")
+                        );
+                    }
                 }
             );
             // Use native pointer events here rather than OpenSeadragon's canvas-move
