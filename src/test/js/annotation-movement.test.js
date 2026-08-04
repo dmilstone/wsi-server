@@ -10,6 +10,7 @@ const pointerHandlers = new Map();
 const animationFrames = [];
 let persistenceUpdates = 0;
 let setSelectedCalls = 0;
+let publicUpdateCalls = 0;
 
 const annotator = {
     annotations: [],
@@ -19,7 +20,15 @@ const annotator = {
     setSelected() { setSelectedCalls += 1; },
     on(event, handler) { eventHandlers.set(event, handler); },
     getAnnotations() { return this.annotations; },
-    getSelected() { return this.selected; }
+    getSelected() { return this.selected; },
+    updateAnnotation(annotation) {
+        publicUpdateCalls += 1;
+        const index = this.annotations.findIndex(candidate => candidate.id === annotation.id);
+        const previous = this.annotations[index];
+        this.annotations[index] = annotation;
+        this.selected = this.selected.map(candidate => candidate.id === annotation.id ? annotation : candidate);
+        eventHandlers.get("updateAnnotation")(annotation, previous);
+    }
 };
 
 class FakeAdapter {
@@ -103,55 +112,59 @@ const other = at("other", 160, 170);
 annotator.annotations = [moved, other];
 annotator.selected = [moved];
 
-// Match the browser lifecycle: dragging and releasing emits no update event.
-// The label follows a presentation-only image-coordinate displacement and the
-// integration never asks Annotorious to alter or finalize its selection.
+// Match the browser lifecycle: movement itself emits no native update event.
+// The label follows immediately; the viewer's bubble-phase release handler then
+// invokes the supported public single-annotation commit without any click-away.
 pointerHandlers.get("pointerdown")({ button: 0, pointerId: 7, clientX: 15, clientY: 25 });
 pointerHandlers.get("pointermove")({ pointerId: 7, clientX: 45, clientY: 55 });
 assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 30, y: 30 });
+assert.equal(persistenceUpdates, 0, "movement precedes the release commit");
+const releasedDraft = at("moved", 40, 50);
+annotator.selected = [releasedDraft];
+assert.deepEqual(annotator.annotations[0], moved,
+    "canonical collection remains old while live selection has released geometry");
 pointerHandlers.get("pointerup")({ pointerId: 7, clientX: 45, clientY: 55 });
-assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 30, y: 30 },
-    "release retains the visual move until the native commit");
-assert.equal(setSelectedCalls, 0, "label movement never manipulates selection");
-assert.equal(persistenceUpdates, 0, "presentation movement never persists");
-assert.deepEqual(annotator.selected, [moved], "native selection state is untouched");
-
-// A later native commit follows the one existing persistence path. Its guarded
-// post-commit read reconciles the label and removes the temporary displacement.
-const committed = at("moved", 40, 50);
-annotator.annotations = [committed, other];
-eventHandlers.get("updateAnnotation")(committed, moved);
+const committed = annotator.annotations[0];
+assert.equal(publicUpdateCalls, 1);
 assert.equal(persistenceUpdates, 1);
+assert.equal(setSelectedCalls, 0, "movement commit never manipulates selection");
+assert.deepEqual(annotator.selected, [committed], "usable selection remains active");
+annotator.selected = [other];
+eventHandlers.get("selectionChanged")();
+assert.deepEqual(annotator.selected, [other], "another annotation is selectable immediately");
 assert.equal(animationFrames.length, 1);
 animationFrames.shift()();
+assert.equal(committed.target.selector.geometry.x, 40);
+assert.equal(committed.target.selector.geometry.y, 50);
 assert.equal(spike.labelLayer.displacements.has("moved"), false);
 assert.equal(spike.labelLayer.synced.at(-1), committed);
 assert.equal(annotator.annotations.length, 2, "annotations are neither replaced nor duplicated");
 
 // Native selection remains entirely usable after movement. This models clicks
 // performed by Annotorious itself; no integration setSelected call is involved.
-annotator.selected = [other];
-eventHandlers.get("selectionChanged")();
-assert.deepEqual(annotator.selected, [other]);
 annotator.selected = [committed];
 eventHandlers.get("selectionChanged")();
 assert.deepEqual(annotator.selected, [committed]);
 assert.equal(setSelectedCalls, 0);
 
-// Repeated moves accumulate from the retained displacement and respect current
-// viewport conversion (e.g. after zoom), while producing no extra saves.
+// Repeated moves respect current viewport conversion (e.g. after zoom) and
+// produce one additional canonical update each.
 viewportScale = 2;
 pointerHandlers.get("pointerdown")({ button: 0, pointerId: 8, clientX: 85, clientY: 105 });
 pointerHandlers.get("pointermove")({ pointerId: 8, clientX: 105, clientY: 125 });
 pointerHandlers.get("pointerup")({ pointerId: 8, clientX: 105, clientY: 125 });
 assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 10, y: 10 });
-assert.equal(persistenceUpdates, 1);
+animationFrames.shift()();
+assert.equal(persistenceUpdates, 2);
+assert.equal(publicUpdateCalls, 2);
+assert.equal(annotator.annotations[0].target.selector.geometry.x, 50);
+assert.equal(annotator.annotations[0].target.selector.geometry.y, 60);
 assert.equal(setSelectedCalls, 0);
 
 // Pointer cancellation, drawing, and an outside-image pan do not retain label
 // motion or invoke persistence/selection APIs.
-pointerHandlers.get("pointerdown")({ button: 0, pointerId: 9, clientX: 85, clientY: 105 });
-pointerHandlers.get("pointermove")({ pointerId: 9, clientX: 125, clientY: 145 });
+pointerHandlers.get("pointerdown")({ button: 0, pointerId: 9, clientX: 105, clientY: 125 });
+pointerHandlers.get("pointermove")({ pointerId: 9, clientX: 145, clientY: 165 });
 pointerHandlers.get("pointercancel")({ pointerId: 9 });
 assert.equal(spike.labelLayer.displacements.has("moved"), false);
 assert.equal(spike.labelLayer.positionUpdates, 1);
@@ -164,7 +177,7 @@ pointerHandlers.get("pointerdown")({ button: 0, pointerId: 11, clientX: 2, clien
 pointerHandlers.get("pointermove")({ pointerId: 11, clientX: 20, clientY: 20 });
 pointerHandlers.get("pointerup")({ pointerId: 11 });
 assert.equal(spike.labelLayer.displacements.size, 0);
-assert.equal(persistenceUpdates, 1);
+assert.equal(persistenceUpdates, 2);
 assert.equal(setSelectedCalls, 0);
 
 // Deletion, visibility changes, and image switches clear transient presentation
@@ -172,15 +185,19 @@ assert.equal(setSelectedCalls, 0);
 spike.labelLayer.setTemporaryDisplacement("moved", 4, 5);
 eventHandlers.get("deleteAnnotation")(committed);
 assert.equal(spike.labelLayer.displacements.size, 0);
+const syncCountBeforeStaleCommit = spike.labelLayer.synced.length;
 eventHandlers.get("updateAnnotation")(committed, moved);
 spike.beginLabelImage("image-two");
 animationFrames.shift()();
-assert.equal(spike.labelLayer.synced.length, 1);
+assert.equal(spike.labelLayer.synced.length, syncCountBeforeStaleCommit);
 spike.labelLayer.setTemporaryDisplacement("other", 2, 3);
 spike.setAnnotationsVisible(false);
 assert.equal(spike.labelLayer.displacements.size, 0);
 assert.equal(setSelectedCalls, 0);
 
-assert(!source.includes("finalizeAnnotationPointerEdit"));
+assert(source.includes("annotator.updateAnnotation(moved)"));
 assert(!/setSelected\s*\(/.test(source), "movement integration contains no setSelected call");
+assert(!/MutationObserver|dispatchEvent|querySelector/.test(
+    source.match(/commitReleasedAnnotationMove\(edit\) \{([\s\S]*?)\n    \}/)?.[1] || ""),
+"release commit uses no private DOM, observer, or synthetic-event fallback");
 console.log("annotation presentation-only movement checks passed");

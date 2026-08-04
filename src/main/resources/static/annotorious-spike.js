@@ -170,12 +170,17 @@ class AnnotoriousSpike {
             this.annotationPointerEdit = {
                 pointerId: event.pointerId,
                 annotationId: selected[0].id,
+                generation: this.labelGeneration,
+                imageId: this.getCurrentImageId?.(),
                 startX: event.clientX,
                 startY: event.clientY,
                 startImageX: point.x,
                 startImageY: point.y,
                 startDisplacementX: displacement.x,
-                startDisplacementY: displacement.y
+                startDisplacementY: displacement.y,
+                deltaX: 0,
+                deltaY: 0,
+                moved: false
             };
         }, true);
         element.addEventListener("pointermove", event => {
@@ -183,18 +188,26 @@ class AnnotoriousSpike {
             if (!edit || edit.pointerId !== event.pointerId) return;
             if (Math.hypot(event.clientX - edit.startX, event.clientY - edit.startY) >= 3) {
                 const point = this.clientToImagePoint(event);
+                edit.deltaX = point.x - edit.startImageX;
+                edit.deltaY = point.y - edit.startImageY;
+                edit.moved = true;
                 this.labelLayer.setTemporaryDisplacement(
                     edit.annotationId,
-                    edit.startDisplacementX + point.x - edit.startImageX,
-                    edit.startDisplacementY + point.y - edit.startImageY);
+                    edit.startDisplacementX + edit.deltaX,
+                    edit.startDisplacementY + edit.deltaY);
             }
         }, true);
         element.addEventListener("pointerup", event => {
-            if (this.annotationPointerEdit?.pointerId !== event.pointerId) return;
+            const edit = this.annotationPointerEdit;
+            if (edit?.pointerId !== event.pointerId) return;
             this.annotationPointerEdit = null;
-            // Keep the presentation-only displacement until Annotorious emits
-            // its native committed update. Never alter its selection lifecycle.
-        }, true);
+            if (edit.moved) {
+                // This listener runs in the bubble phase, after Annotorious'
+                // editor handles release. updateAnnotation is its public
+                // single-annotation commit API and preserves active selection.
+                this.commitReleasedAnnotationMove(edit);
+            }
+        });
         element.addEventListener("pointercancel", event => {
             if (this.annotationPointerEdit?.pointerId !== event.pointerId) return;
             if (this.annotationPointerEdit?.annotationId) {
@@ -203,6 +216,66 @@ class AnnotoriousSpike {
             }
             this.annotationPointerEdit = null;
         }, true);
+    }
+
+    commitReleasedAnnotationMove(edit) {
+        if (edit.generation !== this.labelGeneration ||
+            edit.imageId !== this.getCurrentImageId?.() ||
+            !Number.isFinite(edit.deltaX) || !Number.isFinite(edit.deltaY)) return;
+        const annotation = this.annotator.getAnnotations()
+            .find(candidate => candidate?.id === edit.annotationId);
+        if (!annotation || typeof this.annotator.updateAnnotation !== "function") {
+            this.labelLayer.clearTemporaryDisplacement(edit.annotationId);
+            this.labelLayer.updatePositions();
+            return;
+        }
+
+        const released = this.getSelectedAnnotations()
+            .find(candidate => candidate?.id === edit.annotationId);
+        const releasedGeometry = released?.target?.selector?.geometry;
+        const geometry = annotation?.target?.selector?.geometry;
+        const x = Number(geometry?.x);
+        const y = Number(geometry?.y);
+        if (![x, y].every(Number.isFinite)) return;
+        const bounds = geometry.bounds ? {
+            ...geometry.bounds,
+            minX: Number(geometry.bounds.minX) + edit.deltaX,
+            minY: Number(geometry.bounds.minY) + edit.deltaY,
+            maxX: Number(geometry.bounds.maxX) + edit.deltaX,
+            maxY: Number(geometry.bounds.maxY) + edit.deltaY
+        } : geometry.bounds;
+        const translated = {
+            ...annotation,
+            target: {
+                ...annotation.target,
+                selector: {
+                    ...annotation.target.selector,
+                    geometry: { ...geometry, x: x + edit.deltaX, y: y + edit.deltaY, bounds }
+                }
+            }
+        };
+        // getSelected is the public accessor for the live editor selection. At
+        // release it normally contains the exact transformed draft even though
+        // getAnnotations still contains the last commit. Retain the calculated
+        // translation as a safe fallback for integrations that expose only the
+        // canonical selection object.
+        const releasedHasChangedGeometry = releasedGeometry &&
+            (Number(releasedGeometry.x) !== x || Number(releasedGeometry.y) !== y ||
+             Number(releasedGeometry.w) !== Number(geometry.w) ||
+             Number(releasedGeometry.h) !== Number(geometry.h));
+        const moved = releasedHasChangedGeometry ? {
+            ...annotation,
+            target: {
+                ...annotation.target,
+                selector: { ...annotation.target.selector, geometry: releasedGeometry }
+            }
+        } : translated;
+
+        void Promise.resolve(this.annotator.updateAnnotation(moved)).catch(() => {
+            this.labelLayer.clearTemporaryDisplacement(edit.annotationId);
+            this.labelLayer.updatePositions();
+            console.error("Annotorious: unable to commit released annotation movement");
+        });
     }
 
     clientToImagePoint(event) {
