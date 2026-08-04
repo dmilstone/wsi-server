@@ -87,7 +87,6 @@ class AnnotoriousSpike {
                 this.notifySelectionChanged();
             }
         });
-        this.timingCallbacks.storeReady?.(this.adapter.store);
         this.labelLayer = new AnnotationLabelLayer(
             this.viewer, this.annotator, id => this.adapter.getAnnotationName(id));
         this.nameEditor = new AnnotationNameEditor(this.nameInput, this.adapter, id => {
@@ -152,10 +151,6 @@ class AnnotoriousSpike {
         this.installKeyboardShortcuts();
         this.installAnnotationLabelMovement();
 
-    }
-
-    async flushPendingSave() {
-        await this.adapter?.store.flushSave();
     }
 
     installAnnotationLabelMovement() {

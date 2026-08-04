@@ -104,8 +104,8 @@ class AnnotationStore {
             await this.emit("collectionChanged", { collection, reason: "loaded" });
         } catch (error) {
             if (generation !== this.loadGeneration) return;
-            this.setSaveState("loadError");
-            console.error("AnnotationStore: unable to load annotations");
+            this.setSaveState("error");
+            console.error("AnnotationStore: unable to load annotations", error);
         }
     }
 
@@ -135,19 +135,11 @@ class AnnotationStore {
 
     async flushSave() {
         this.cancelSaveTimer();
-        if (this.activeSavePromise && await this.activeSavePromise === false) {
-            throw new Error("Annotation changes could not be saved");
-        }
+        if (this.activeSavePromise) await this.activeSavePromise;
         while (this.hasUnsavedChanges()) {
-            if (await this.save() === false) {
-                throw new Error("Annotation changes could not be saved");
-            }
+            await this.save();
+            if (this.activeSavePromise) await this.activeSavePromise;
         }
-    }
-
-    async retrySave() {
-        this.cancelSaveTimer();
-        return this.save();
     }
 
     async save() {
@@ -195,28 +187,25 @@ class AnnotationStore {
                         });
                     }
                 }
-                return true;
+                console.info(`AnnotationStore: saved ${savedCollection.annotations?.length || 0} annotations`);
             } catch (error) {
                 if (generation === this.loadGeneration && imageId === this.currentImageId) {
                     this.saveRequested = true;
                     this.dirty = true;
                     this.setSaveState("error");
                 }
-                console.error("AnnotationStore: unable to save annotations");
-                return false;
+                console.error("AnnotationStore: unable to save annotations", error);
             } finally {
                 this.activeSavePromise = null;
                 if (generation === this.loadGeneration && imageId === this.currentImageId && this.hasUnsavedChanges()) {
-                    if (this.saveState !== "error") {
-                        this.setSaveState("dirty");
-                        this.cancelSaveTimer();
-                        this.saveTimer = window.setTimeout(() => {
-                            this.saveTimer = null;
-                            void this.save();
-                        }, this.saveDelayMs);
-                    }
+                    if (this.saveState !== "error") this.setSaveState("dirty");
+                    this.cancelSaveTimer();
+                    this.saveTimer = window.setTimeout(() => {
+                        this.saveTimer = null;
+                        void this.save();
+                    }, this.saveDelayMs);
                 } else if (generation === this.loadGeneration && imageId === this.currentImageId) {
-                    this.setSaveState("saved");
+                    this.setSaveState("idle");
                 }
             }
         })();
