@@ -50,7 +50,10 @@ public class ImageRegistry {
         this(configuredPath, recursive, refreshInterval, stabilityWindow, Clock.systemUTC());
     }
 
-    ImageRegistry(String configuredPath, boolean recursive) throws Exception {
+    /**
+     * Compatibility constructor for existing callers. Uses documented live-discovery defaults.
+     */
+    public ImageRegistry(String configuredPath, boolean recursive) throws Exception {
         this(configuredPath, recursive, Duration.ofSeconds(30), Duration.ofSeconds(10), Clock.systemUTC());
     }
 
