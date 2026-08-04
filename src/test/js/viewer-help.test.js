@@ -20,11 +20,11 @@ assert.match(index, /\.help-link:focus-visible/);
 
 assert.match(guide, /<title>WSI Viewer Quick Guide<\/title>/);
 assert.match(guide, /id="close-guide"/);
-assert.match(guide, />Close guide<\\/button>/);
+assert.ok(guide.includes(">Close guide</button>"));
 assert.match(guide, /window\\.close\\(\\)/);
-assert.match(guide, /if \\(!window\\.closed\\) window\\.location\\.assign\\("\\/"\\)/);
-assert.match(guide, /href="\\/help\\/WSI-Viewer-Quick-Guide\\.pdf"/);
-assert.match(guide, />Printable PDF<\\/a>/);
+assert.ok(guide.includes('if (!window.closed) window.location.assign("/")'));
+assert.ok(guide.includes('href="/help/WSI-Viewer-Quick-Guide.pdf"'));
+assert.ok(guide.includes(">Printable PDF</a>"));
 assert.doesNotMatch(guide, /https?:\/\//);
 assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
 assert.ok(pdf.length > 1000, "packaged PDF must be nonempty");
