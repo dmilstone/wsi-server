@@ -258,7 +258,7 @@ class AnnotoriousSpike {
     updateNamesButton() {
         const shown = this.labelLayer.namesVisible;
         this.namesButton.setAttribute("aria-pressed", String(shown));
-        this.namesButton.textContent = shown ? "Hide names" : "Show names";
+        this.namesButton.textContent = "Names";
         this.namesButton.title = shown ? "Hide annotation names" : "Show annotation names";
         this.namesButton.setAttribute("aria-label", this.namesButton.title);
     }
@@ -394,11 +394,10 @@ class AnnotoriousSpike {
         if (!this.annotationsVisible) this.setDrawingEnabled(false);
         this.toggleButton.disabled = !this.annotationsVisible;
         this.visibilityButton.setAttribute("aria-pressed", String(!this.annotationsVisible));
-        this.visibilityButton.textContent = this.annotationsVisible
-            ? "Hide annotations"
-            : "Show annotations";
-        this.visibilityButton.title = this.visibilityButton.textContent;
-        this.visibilityButton.setAttribute("aria-label", this.visibilityButton.textContent);
+        this.visibilityButton.textContent = "Annotations";
+        const visibilityAction = this.annotationsVisible ? "Hide annotations" : "Show annotations";
+        this.visibilityButton.title = visibilityAction;
+        this.visibilityButton.setAttribute("aria-label", visibilityAction);
         this.notifySelectionChanged();
     }
 }
