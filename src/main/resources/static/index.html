@@ -60,7 +60,7 @@
         }
         .environment-banner[hidden] { display: none !important; }
         button, input, select { font: inherit; }
-        button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+        button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, .help-link:focus-visible {
             outline: 3px solid rgba(77, 148, 216, .45);
             outline-offset: 2px;
         }
@@ -290,6 +290,34 @@
 
 
         .header-actions { display: flex; align-items: center; gap: 8px; }
+        .help-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-width: 40px;
+            min-height: 36px;
+            padding: 7px 10px;
+            color: var(--text-secondary);
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 750;
+            white-space: nowrap;
+        }
+        .help-link:hover { color: var(--text); background: var(--surface-hover); }
+        .help-link-symbol {
+            display: inline-grid;
+            place-items: center;
+            width: 18px;
+            height: 18px;
+            border: 1px solid currentColor;
+            border-radius: 50%;
+            font-size: 12px;
+            line-height: 1;
+        }
         .icon-button, .toolbar-button, .panel-toggle {
             display: inline-grid; place-items: center; min-width: 38px; min-height: 36px;
             padding: 7px 10px; color: var(--text-secondary); background: var(--surface-raised);
@@ -539,6 +567,7 @@
         <div id="selected-name">No image selected</div>
     </div>
     <div class="header-actions">
+        <a id="viewer-help" class="help-link" href="/help/viewer-guide.html" target="_blank" rel="noopener" title="Open WSI Viewer quick guide in a new tab" aria-label="Open WSI Viewer quick guide in a new tab"><span class="help-link-symbol" aria-hidden="true">?</span><span>Help</span></a>
         <button id="toggle-left" class="icon-button" title="Show or hide image browser" aria-label="Show or hide image browser">☰</button>
         <button id="toggle-right" class="icon-button" title="Show or hide display controls" aria-label="Show or hide display controls">☷</button>
         <button id="presentation" class="icon-button" title="Presentation mode" aria-label="Enter presentation mode">⛶</button>
