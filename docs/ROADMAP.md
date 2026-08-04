@@ -19,7 +19,7 @@ available for diagnosis and controlled partial reruns.
 ## Immediate priorities
 
 1. Safe live discovery of newly added images and directories without restarting
-   the server.
+   the server remains the current immediate priority.
 2. Improve cold Bio-Formats metadata and embedded label/thumbnail performance.
    Embedded metadata images must never be synthesized from diagnostic pixels.
 3. Add Z-stack navigation and playback for supported images.
@@ -31,17 +31,16 @@ moved annotation when editing is finalized by clicking away. Attempts to force
 a commit directly on pointer release caused geometry, label, selection, or
 persistence regressions and must not be restored without real-browser evidence.
 
+The custom Fabric 5 overlay and maintained Fabric 7 overlay experiments were
+failed feasibility spikes. Annotation-editor replacement is deferred; the
+stable Annotorious click-away lifecycle remains unchanged.
+
 - Pin the exact Annotorious and OpenSeadragon integration versions instead of
   loading an unversioned `latest` build.
 - Add real-browser tests for pointer release, click-away commit, selection,
   persistence, image switching, and label synchronization.
 - Evaluate an explicit **Done editing** or **Save position** action as the
   lowest-risk Annotorious workflow.
-- Build an isolated Fabric.js/OpenSeadragon Fabric overlay proof of concept for
-  rectangle creation, selection, movement, resizing, deletion, labels, pan/zoom,
-  image switching, JSON round trips, and exactly one committed update per edit.
-- Consider replacing Annotorious only if that proof of concept passes in Safari
-  and Chrome without changing the production annotation data format.
 - Revisit automatic save-state feedback and the extra click before drawing
   another annotation only after the editor lifecycle is deterministic.
 

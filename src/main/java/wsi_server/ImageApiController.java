@@ -9,9 +9,27 @@ import wsi_server.api.*;
 @RequestMapping("/api/images")
 public class ImageApiController {
     private final BioFormatsTileService service;
-    public ImageApiController(BioFormatsTileService service) { this.service = service; }
+    private final ImageRegistry registry;
+    public ImageApiController(BioFormatsTileService service, ImageRegistry registry) {
+        this.service = service;
+        this.registry = registry;
+    }
 
-    @GetMapping public ImageListResponse images() { return service.listImages(); }
+    @GetMapping public ImageListResponse images() {
+        registry.requestRefresh(false);
+        return service.listImages();
+    }
+    @GetMapping("/discovery") public ImageDiscoveryStatus discovery() { return discoveryStatus(); }
+    @PostMapping("/refresh") public ImageDiscoveryStatus refresh() {
+        registry.requestRefresh(true);
+        return discoveryStatus();
+    }
+
+    private ImageDiscoveryStatus discoveryStatus() {
+        ImageRegistry.RefreshStatus current = registry.getStatus();
+        return new ImageDiscoveryStatus(current.running(), current.added(), current.unavailableOrPending(),
+                current.failureCategory(), registry.getRefreshInterval().toMillis());
+    }
     @GetMapping("/{imageId}")
     public ImageMetadataResponse metadata(@PathVariable String imageId, HttpSession session) throws Exception {
         return service.getMetadata(imageId, session);

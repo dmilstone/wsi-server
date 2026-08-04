@@ -554,6 +554,9 @@
         .image-lightbox-close:hover { background:rgba(255,255,255,.16); }
         .image-lightbox-stage { min-width:0; min-height:0; display:grid; place-items:center; overflow:auto; }
         .image-lightbox-image { display:block; max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain; background:#05070a; }
+        .discovery-controls { display:flex; align-items:center; gap:8px; margin-top:8px; }
+        .discovery-controls .action { padding:5px 9px; }
+        .discovery-status { font-size:11px; color:var(--muted); }
     </style>
 </head>
 <body>
@@ -583,6 +586,7 @@
             <div class="panel-kicker">Browse</div>
             <div class="panel-title-row"><h2>Sample images</h2><button class="panel-toggle" data-collapse="left" title="Hide image browser" aria-label="Hide image browser">‹</button></div>
             <div id="directory" class="muted"></div>
+            <div class="discovery-controls"><button id="refresh-images" class="action" type="button">Refresh images</button><span id="discovery-status" class="discovery-status" role="status" aria-live="polite"></span></div>
         </div>
         <details id="image-info" class="image-info" hidden>
             <summary>Image information</summary>
@@ -692,6 +696,7 @@
     <span class="status-group">Pixel <strong id="status-pixel" class="status-pixel-value">—</strong></span>
     <span class="status-help">Raw channel values · Display settings are saved in this browser</span>
 </footer>
+<script src="/live-image-discovery.js"></script>
 <script>
     const LUTS = ["BLUE", "GREEN", "RED", "MAGENTA", "CYAN", "GRAY", "YELLOW"];
     let viewer;
@@ -701,6 +706,7 @@
     let display;
     let updateTimer;
     let updateSequence = 0;
+    let liveDiscovery;
     const STORAGE_PREFIX = "wsi.viewer.v1";
     const DISPLAY_CALIBRATION_VERSION = 3;
 
@@ -818,6 +824,13 @@
             const lastId = localStorage.getItem(`${STORAGE_PREFIX}.selectedImage`);
             const initial = result.images.find(image => image.id === lastId) || result.images[0];
             if (initial) await selectImage(initial);
+            liveDiscovery = new LiveImageDiscovery({
+                document,
+                request,
+                applyImages: refreshRenderedImages,
+                status: message => document.getElementById("discovery-status").textContent = message
+            });
+            liveDiscovery.start();
         } catch (error) {
             showError(error);
         }
@@ -856,6 +869,26 @@
             imageListElement.append(details);
         }
     }
+
+    function refreshRenderedImages(images) {
+        const previousIds = new Set(Array.from(imageListElement.querySelectorAll(".image-button"), button => button.dataset.imageId));
+        const expanded = new Set(Array.from(imageListElement.querySelectorAll("details[open] summary"), summary => summary.textContent.replace(/ \(\d+\)$/, "")));
+        const scrollTop = document.getElementById("images-panel").scrollTop;
+        renderImageList(images);
+        for (const details of imageListElement.querySelectorAll("details")) {
+            const folder = details.querySelector("summary").textContent.replace(/ \(\d+\)$/, "");
+            if (expanded.has(folder)) details.open = true;
+        }
+        document.querySelectorAll(".image-button").forEach(button =>
+            button.classList.toggle("active", selectedImage && button.dataset.imageId === selectedImage.id));
+        document.getElementById("images-panel").scrollTop = scrollTop;
+        return images.filter(image => !previousIds.has(image.id)).length;
+    }
+
+    document.getElementById("refresh-images").addEventListener("click", () => {
+        if (liveDiscovery) void liveDiscovery.refresh(true);
+    });
+    window.addEventListener("pagehide", () => { if (liveDiscovery) liveDiscovery.stop(); }, {once:true});
 
     async function selectImage(image) {
         startImageSwitchTiming(image);
