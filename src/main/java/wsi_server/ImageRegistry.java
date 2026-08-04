@@ -42,6 +42,7 @@ public class ImageRegistry {
     private volatile Instant lastStarted = Instant.EPOCH;
     private volatile RefreshStatus status = new RefreshStatus(false, 0, 0, null);
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ImageRegistry(
             @Value("${wsi.image-directory:${wsi.slide-path:}}") String configuredPath,
             @Value("${wsi.scan-recursive:true}") boolean recursive,
