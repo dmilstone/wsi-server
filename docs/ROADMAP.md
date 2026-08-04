@@ -14,6 +14,7 @@ for diagnosis and controlled partial reruns.
 - Optional on-slide annotation name labels.
 - Compact, responsive viewer toolbar with separate viewer/export and annotation
   palettes.
+- Authenticated in-viewer Help guide with a printable PDF.
 
 ## Immediate priorities
 
@@ -32,7 +33,7 @@ for diagnosis and controlled partial reruns.
 - Show the proposed export dimensions and the configured 16-million-pixel limit
   before starting an export.
 - Display server export errors to the user instead of failing silently.
-- Investigate why some successful exports present a directory-selection prompt.
+- Document browser-dependent download and save-location behavior.
 - Later support a safe downsampled or tiled/streamed whole-slide export without
   bypassing the server's memory-safety limit.
 - Reject HTML or other unexpected response types instead of saving them with a
@@ -41,7 +42,6 @@ for diagnosis and controlled partial reruns.
 ## Interface and layout backlog
 
 - Make the development banner red while staging remains yellow.
-- Reduce the size of the Show/Hide Annotations control where space is limited.
 - Improve narrow-screen and mobile layouts.
 - Support movable panels across the full extended desktop.
 - Add user-specific layout preferences.
