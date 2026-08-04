@@ -25,12 +25,16 @@ assert.match(button, /height:\s*40px/);
 assert.match(button, /min-height:\s*40px/);
 assert.match(button, /white-space:\s*nowrap/);
 
-// The bar itself wraps groups, stays inside the viewer, and never introduces a
-// horizontal scrollbar. These constraints apply at all representative widths.
+// The unpainted toolbar stack stays inside the viewer, while each independently
+// bordered palette wraps complete groups. These constraints apply at all widths.
 const toolbar = rule(".viewer-toolbar");
-assert.match(toolbar, /flex-wrap:\s*wrap/);
+assert.match(toolbar, /flex-direction:\s*column/);
 assert.match(toolbar, /max-width:\s*calc\(100% - 32px\)/);
 assert.match(toolbar, /box-sizing:\s*border-box/);
+const palette = rule(".toolbar-palette");
+assert.match(palette, /flex-wrap:\s*wrap/);
+assert.match(palette, /border:\s*1px solid/);
+assert.match(palette, /max-width:\s*100%/);
 for (const width of [1440, 1024, 768]) {
     assert.ok(width - 32 > 0, `toolbar fits ${width}px viewer without overflow`);
 }
@@ -40,6 +44,13 @@ for (const width of [1440, 1024, 768]) {
 assert.match(rule(".toolbar-group"), /flex:\s*0 0 auto/);
 assert.match(rule(".annotation-name-group"), /flex:\s*1 1 280px/);
 assert.match(rule(".viewer-toolbar", "max-width:\\s*820px"), /right:\s*16px/);
+
+// Viewer/export actions form the upper floating palette; annotation drawing,
+// visibility, and naming controls form a separate lower palette.
+const viewerPalette = html.indexOf('class="toolbar-palette viewer-palette"');
+const annotationPalette = html.indexOf('class="toolbar-palette annotation-palette"');
+assert.ok(viewerPalette >= 0 && annotationPalette > viewerPalette);
+assert.match(rule(".annotation-palette"), /width:\s*100%/);
 
 // The editor has useful desktop space and can grow, while presentation mode
 // continues to expose the viewer at the full available width.
@@ -57,8 +68,9 @@ for (const label of [
 ]) {
     assert.match(html, new RegExp(`role="group" aria-label="${label}"`));
 }
-assert.match(html, /id="annotation-visibility"[^>]*aria-label="Hide annotations"[^>]*aria-pressed="false"[^>]*>Annotations</);
+assert.match(html, /id="annotation-visibility"[^>]*aria-label="Hide annotations"[^>]*aria-pressed="true"[^>]*>Annotations</);
 assert.match(html, /id="annotation-names"[^>]*aria-label="Hide annotation names"[^>]*aria-pressed="true"[^>]*>Names</);
+assert.match(html, /\.toolbar-button\[aria-pressed="true"\][^{]*\{[^}]*background:\s*var\(--accent\)/);
 assert.match(rule("button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible"), /outline:\s*3px solid/);
 
 console.log("viewer toolbar layout checks passed at 1440px, 1024px, and 768px");

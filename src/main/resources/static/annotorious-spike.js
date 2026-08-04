@@ -393,7 +393,7 @@ class AnnotoriousSpike {
 
         if (!this.annotationsVisible) this.setDrawingEnabled(false);
         this.toggleButton.disabled = !this.annotationsVisible;
-        this.visibilityButton.setAttribute("aria-pressed", String(!this.annotationsVisible));
+        this.visibilityButton.setAttribute("aria-pressed", String(this.annotationsVisible));
         this.visibilityButton.textContent = "Annotations";
         const visibilityAction = this.annotationsVisible ? "Hide annotations" : "Show annotations";
         this.visibilityButton.title = visibilityAction;

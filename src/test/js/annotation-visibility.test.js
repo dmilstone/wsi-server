@@ -42,7 +42,7 @@ assert.equal(spike.annotationsVisible, false);
 assert(classes.has("annotations-hidden"));
 assert.equal(spike.toggleButton.disabled, true);
 assert.equal(spike.visibilityButton.textContent, "Annotations");
-assert.equal(spike.visibilityButton.attributes.get("aria-pressed"), "true");
+assert.equal(spike.visibilityButton.attributes.get("aria-pressed"), "false");
 assert.equal(spike.visibilityButton.attributes.get("aria-label"), "Show annotations");
 assert.deepEqual(spike.annotator.drawingCalls, [false]);
 
@@ -51,7 +51,7 @@ assert.equal(spike.annotationsVisible, true);
 assert(!classes.has("annotations-hidden"));
 assert.equal(spike.toggleButton.disabled, false);
 assert.equal(spike.visibilityButton.textContent, "Annotations");
-assert.equal(spike.visibilityButton.attributes.get("aria-pressed"), "false");
+assert.equal(spike.visibilityButton.attributes.get("aria-pressed"), "true");
 assert.equal(spike.visibilityButton.attributes.get("aria-label"), "Hide annotations");
 // Visibility changes never call annotation create/update/delete or store APIs;
 // only Annotorious drawing interaction is disabled while the overlay is hidden.

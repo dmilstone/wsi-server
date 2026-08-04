@@ -308,11 +308,17 @@
         .panel-header .panel-toggle { min-width: 32px; min-height: 32px; padding: 5px; }
         .viewer-toolbar {
             position: absolute; left: 16px; top: 16px; z-index: 16;
-            display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
+            display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
             width: max-content; max-width: calc(100% - 32px); box-sizing: border-box;
-            padding: 6px; overflow: visible; border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
+            overflow: visible;
+        }
+        .toolbar-palette {
+            display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
+            max-width: 100%; box-sizing: border-box; padding: 6px;
+            border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
             background: rgba(12,17,23,.84); backdrop-filter: blur(10px); box-shadow: var(--shadow);
         }
+        .annotation-palette { width: 100%; }
         .toolbar-group { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; min-width: 0; }
         .toolbar-group + .toolbar-group { padding-left: 6px; border-left: 1px solid rgba(255,255,255,.14); }
         .toolbar-button {
@@ -323,8 +329,8 @@
         .toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
         .visibility-group .toolbar-button { min-width: 40px; padding-inline: 8px; gap: 5px; font-size: 11px; font-weight: 750; }
         .annotation-visibility { gap: 7px; }
-        .annotation-visibility::before { content: "\25C9"; font-size: 15px; }
-        .annotation-visibility[aria-pressed="true"]::before { content: "\25CC"; }
+        .annotation-visibility::before { content: "\25CC"; font-size: 15px; }
+        .annotation-visibility[aria-pressed="true"]::before { content: "\25C9"; }
         .annotation-names { font-weight: 750; }
         .annotation-name-layer { position: absolute; inset: 0; z-index: 11; overflow: hidden; pointer-events: none; }
         .annotation-name-layer[hidden] { display: none; }
@@ -554,20 +560,9 @@
     <div id="left-resizer" class="resize-handle" role="separator" aria-label="Resize image browser"></div>
     <main aria-label="Whole-slide image viewer">
         <div id="viewer"></div>
-        <div class="viewer-toolbar" aria-label="Viewer tools">
-            <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
-                <button id="annotation-mode" class="toolbar-button" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>▱</button>
-            </div>
-            <div class="toolbar-group visibility-group" role="group" aria-label="Annotation visibility">
-                <button id="annotation-visibility" class="toolbar-button annotation-visibility" title="Hide annotations" aria-label="Hide annotations" aria-pressed="false" disabled>Annotations</button>
-                <button id="annotation-names" class="toolbar-button annotation-names" title="Hide annotation names" aria-label="Hide annotation names" aria-pressed="true" disabled>Names</button>
-            </div>
-            <div class="toolbar-group annotation-name-group" role="group" aria-label="Selected annotation name">
-                <label class="annotation-name-control"><span>Selected name</span>
-                    <input id="annotation-name" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Select one annotation" disabled>
-                </label>
-            </div>
-            <div class="toolbar-group viewer-actions-group" role="group" aria-label="Export and viewer actions">
+        <div class="viewer-toolbar" role="toolbar" aria-label="Viewer tools">
+            <div class="toolbar-palette viewer-palette" role="group" aria-label="Export and viewer actions">
+                <div class="toolbar-group viewer-actions-group">
                 <button id="home-view" class="toolbar-button" title="Home view" aria-label="Home view">⌂</button>
                 <button id="fit-view" class="toolbar-button" title="Fit image" aria-label="Fit image">□</button>
                 <button id="slide-overview-button" class="toolbar-button" title="Show slide label and thumbnail overview" aria-label="Show slide label and thumbnail overview" disabled>▣</button>
@@ -579,6 +574,21 @@
                     </div>
                 </details>
                 <button id="full-screen" class="toolbar-button" title="Browser full screen" aria-label="Browser full screen">⛶</button>
+                </div>
+            </div>
+            <div class="toolbar-palette annotation-palette" role="group" aria-label="Annotation controls">
+                <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
+                    <button id="annotation-mode" class="toolbar-button" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>▱</button>
+                </div>
+                <div class="toolbar-group visibility-group" role="group" aria-label="Annotation visibility">
+                    <button id="annotation-visibility" class="toolbar-button annotation-visibility" title="Hide annotations" aria-label="Hide annotations" aria-pressed="true" disabled>Annotations</button>
+                    <button id="annotation-names" class="toolbar-button annotation-names" title="Hide annotation names" aria-label="Hide annotation names" aria-pressed="true" disabled>Names</button>
+                </div>
+                <div class="toolbar-group annotation-name-group" role="group" aria-label="Selected annotation name">
+                    <label class="annotation-name-control"><span>Selected name</span>
+                        <input id="annotation-name" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Select one annotation" disabled>
+                    </label>
+                </div>
             </div>
         </div>
         <section id="slide-overview" class="slide-overview" hidden aria-label="Slide label and thumbnail overview">
