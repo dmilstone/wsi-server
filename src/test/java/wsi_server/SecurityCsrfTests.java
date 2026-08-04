@@ -94,6 +94,26 @@ class SecurityCsrfTests {
                 .andExpect(content().string("production"));
     }
 
+    @Test
+    void helpGuideRequiresAuthentication() throws Exception {
+        mockMvc.perform(get("/help/viewer-guide.html"))
+                .andExpect(status().is3xxRedirection());
+        mockMvc.perform(get("/help/WSI-Viewer-Quick-Guide.pdf"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    void authenticatedUserCanOpenHelpGuideAndPdf() throws Exception {
+        mockMvc.perform(get("/help/viewer-guide.html")
+                        .with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"));
+        mockMvc.perform(get("/help/WSI-Viewer-Quick-Guide.pdf")
+                        .with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("application/pdf"));
+    }
+
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder displayUpdate() {
         return put("/api/images/sample/display")
                 .contentType("application/json")
