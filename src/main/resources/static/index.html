@@ -310,15 +310,20 @@
             position: absolute; left: 16px; top: 16px; z-index: 16;
             display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
             width: max-content; max-width: calc(100% - 32px); box-sizing: border-box;
-            overflow: visible;
+            overflow: visible; isolation: isolate;
         }
         .toolbar-palette {
+            position: relative;
             display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
-            max-width: 100%; box-sizing: border-box; padding: 6px;
+            max-width: 100%; box-sizing: border-box; padding: 6px; overflow: visible;
             border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
             background: rgba(12,17,23,.84); backdrop-filter: blur(10px); box-shadow: var(--shadow);
         }
-        .annotation-palette { width: 100%; }
+        /* Each backdrop-filter creates a stacking context. Keep the earlier
+           viewer palette above the later annotation palette so its absolutely
+           positioned export menu cannot be painted underneath the lower row. */
+        .viewer-palette { z-index: 2; }
+        .annotation-palette { z-index: 1; width: 100%; }
         .toolbar-group { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; min-width: 0; }
         .toolbar-group + .toolbar-group { padding-left: 6px; border-left: 1px solid rgba(255,255,255,.14); }
         .toolbar-button {
@@ -361,14 +366,18 @@
             visibility: hidden !important;
             pointer-events: none !important;
         }
-        .export-menu { position: relative; }
+        .export-menu { position: relative; overflow: visible; }
+        .export-menu[open] { z-index: 3; }
         .export-menu > summary { list-style: none; }
         .export-menu > summary::-webkit-details-marker { display: none; }
         .export-menu-items {
-            position: absolute; top: calc(100% + 8px); left: 0; min-width: 170px; padding: 6px;
+            position: absolute; z-index: 4; top: calc(100% + 8px); right: 0; left: auto;
+            min-width: 190px; max-width: calc(100vw - 32px); padding: 6px;
+            overflow-x: hidden; overflow-y: auto; pointer-events: auto;
             border: 1px solid rgba(255,255,255,.16); border-radius: 9px;
             background: rgba(12,17,23,.96); box-shadow: var(--shadow);
         }
+        .export-menu[data-placement="above"] .export-menu-items { top: auto; bottom: calc(100% + 8px); }
         .export-menu-item { width: 100%; padding: 9px 10px; text-align: left; color: white; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
         .export-menu-item:hover:not(:disabled) { background: rgba(255,255,255,.10); }
         .export-menu-item:disabled { color: var(--text-muted); cursor: default; }
@@ -569,7 +578,7 @@
                 <details id="export-menu" class="export-menu">
                     <summary class="toolbar-button" aria-label="Export image region">Export ▾</summary>
                     <div class="export-menu-items">
-                        <button id="export-visible-region" class="export-menu-item" type="button" disabled>Visible Region</button>
+                        <button id="export-visible-region" class="export-menu-item" type="button" disabled>Entire view</button>
                         <button id="export-selected-annotation" class="export-menu-item" type="button" disabled>Selected Annotation</button>
                     </div>
                 </details>
@@ -668,6 +677,8 @@
     const resetButton = document.getElementById("reset");
     const recomputeAutoButton = document.getElementById("recompute-auto");
     const imageInfoElement = document.getElementById("image-info");
+    const exportMenu = document.getElementById("export-menu");
+    const exportMenuItems = exportMenu.querySelector(".export-menu-items");
     const exportVisibleRegionButton = document.getElementById("export-visible-region");
     const exportSelectedAnnotationButton = document.getElementById("export-selected-annotation");
     const annotationVisibilityButton = document.getElementById("annotation-visibility");
@@ -685,6 +696,26 @@
     const slideLabelImage = document.getElementById("slide-label-image");
     const slideThumbnailImage = document.getElementById("slide-thumbnail-image");
     const imageLightbox = document.getElementById("image-lightbox");
+
+    function positionExportMenu() {
+        if (!exportMenu.open) {
+            exportMenu.removeAttribute("data-placement");
+            exportMenuItems.style.removeProperty("max-height");
+            return;
+        }
+
+        const viewerBounds = document.querySelector("main").getBoundingClientRect();
+        const triggerBounds = exportMenu.querySelector("summary").getBoundingClientRect();
+        const gap = 8;
+        const spaceBelow = Math.max(0, viewerBounds.bottom - triggerBounds.bottom - gap);
+        const spaceAbove = Math.max(0, triggerBounds.top - viewerBounds.top - gap);
+        const placeAbove = exportMenuItems.scrollHeight > spaceBelow && spaceAbove > spaceBelow;
+        exportMenu.dataset.placement = placeAbove ? "above" : "below";
+        exportMenuItems.style.maxHeight = `${Math.floor(placeAbove ? spaceAbove : spaceBelow)}px`;
+    }
+
+    exportMenu.addEventListener("toggle", () => requestAnimationFrame(positionExportMenu));
+    window.addEventListener("resize", () => requestAnimationFrame(positionExportMenu));
     const imageLightboxImage = document.getElementById("image-lightbox-image");
     const imageLightboxTitle = document.getElementById("image-lightbox-title");
     let imageLightboxReturnFocus = null;
@@ -1555,7 +1586,10 @@
         if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
         else await document.exitFullscreen();
     });
-    document.addEventListener("fullscreenchange", () => document.getElementById("full-screen").setAttribute("aria-pressed", String(Boolean(document.fullscreenElement))));
+    document.addEventListener("fullscreenchange", () => {
+        document.getElementById("full-screen").setAttribute("aria-pressed", String(Boolean(document.fullscreenElement)));
+        requestAnimationFrame(positionExportMenu);
+    });
 
     function setPresentationMode(enabled) {
         document.body.classList.toggle("presentation-mode", enabled);
