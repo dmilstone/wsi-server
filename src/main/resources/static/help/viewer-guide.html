@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WSI Viewer Quick Guide</title>
+<style>
+:root{font-family:Arial,Helvetica,sans-serif;color:#0e1b2a;background:#eef3f8}*{box-sizing:border-box}
+body{margin:0;padding:24px}.page{max-width:980px;margin:auto;background:#fff;padding:28px 32px;border:1px solid #c9d5e2;box-shadow:0 8px 28px #17324d22}
+h1{text-align:center;margin:0;color:#0e1b2a;font-size:26px}.sub{text-align:center;color:#526579;margin:5px 0 20px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.card{border:1px solid #c9d5e2;padding:12px 14px;break-inside:avoid}
+h2{font-size:15px;color:#2f80c8;margin:0 0 7px}ul{margin:0;padding-left:19px}li{margin:4px 0;line-height:1.3}
+.warning{margin-top:12px;padding:10px 12px;background:#fff4d6;border:1px solid #e3b341;font-size:13px}.foot{font-size:12px;color:#526579;margin:8px 0 0}
+@media(max-width:720px){body{padding:0}.page{border:0;padding:18px}.grid{grid-template-columns:1fr}}
+@media print{@page{size:letter;margin:.4in}body{background:#fff;padding:0}.page{max-width:none;border:0;box-shadow:none;padding:0}h1{font-size:20px}.sub{font-size:11px;margin-bottom:10px}.grid{gap:8px}.card{padding:7px 9px}h2{font-size:11px}li{font-size:8.5px;margin:2px 0}.warning{font-size:8px;padding:6px}.foot{font-size:7.5px}}
+.guide-actions{display:flex;justify-content:center;gap:10px;margin:0 0 16px}.guide-actions a{display:inline-flex;align-items:center;min-height:40px;padding:8px 12px;border:1px solid #2f80c8;border-radius:7px;color:#155f9d;text-decoration:none;font-weight:700}.guide-actions a:hover,.guide-actions a:focus-visible{background:#e7f2fc;outline:3px solid #2f80c855;outline-offset:2px}
+</style>
+</head>
+<body><main class="page">
+<nav class="guide-actions" aria-label="Guide actions"><a href="/" aria-label="Return to WSI Viewer">Back to viewer</a><a href="/help/WSI-Viewer-Quick-Guide.pdf" target="_blank" rel="noopener" aria-label="Open printable PDF quick guide">Printable PDF</a></nav>
+<h1>WSI Viewer Quick Guide</h1><p class="sub">Initial viewing, channel display, annotations, and export</p>
+<div class="grid">
+<section class="card"><h2>1. Open and navigate</h2><ul><li>Choose an image in <b>Sample images</b>.</li><li>Drag to pan; scroll or pinch to zoom.</li><li>Use viewer controls to reset or enter fullscreen.</li><li>Collapse side panels for more image space.</li></ul></section>
+<section class="card"><h2>2. Adjust channels</h2><ul><li>Channel controls change presentation only, not source pixels.</li><li>Use checkboxes to show or hide channels.</li><li>Choose LUT color and adjust opacity.</li><li>Use <b>Reset display</b> or <b>Recompute auto</b>.</li></ul></section>
+<section class="card"><h2>3. Work with annotations</h2><ul><li>Use <b>Annotations</b> and <b>Names</b> to show or hide overlays.</li><li>Select one annotation to view or edit its name.</li><li>Enter or leave the name field to commit; Escape cancels a draft.</li><li>Use drawing tools to create annotations and the available delete control to remove one.</li></ul></section>
+<section class="card"><h2>4. Protect recent annotation work</h2><ul><li>Saving is asynchronous and currently has no visible Saved indicator.</li><li>After creating, moving, renaming, or deleting, pause several seconds before switching images, refreshing, or closing.</li><li>For important work, return to the image to confirm persistence.</li></ul></section>
+<section class="card"><h2>5. Export</h2><ul><li><b>Selected annotation</b> exports the selected region.</li><li><b>Entire View</b> currently means the visible region, not necessarily the whole native slide.</li><li>Native exports are limited to <b>16,000,000 pixels</b>. Zoom in and retry if no file appears.</li><li>A save-location prompt may appear. Confirm the PNG opens.</li></ul></section>
+<section class="card"><h2>6. Environment and safety</h2><ul><li>Production normally has no warning banner.</li><li>DEVELOPMENT or STAGING means validation only and not clinical use.</li><li>Use only images appropriate for the assigned environment.</li><li>Never copy sensitive production material into development or staging.</li></ul></section>
+</div>
+<p class="warning"><b>Report:</b> blank/distorted images, missing or changed annotations, failed exports, login errors, or unusual delays. Report the image name and approximate time; do not send sensitive image data outside the approved support process.</p>
+<p class="foot">Before reporting a display problem, try one normal refresh - but never refresh while a recent annotation change may still be saving.</p>
+</main></body></html>
