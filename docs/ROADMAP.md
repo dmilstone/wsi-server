@@ -4,8 +4,8 @@
 
 The established development-to-production validation is consolidated under
 `./ops/wsi-release cycle --step`. Individual `stage`, `rehearse`, `promote`,
-`verify`, `status`, `history`, `rollback`, and `tag` commands remain available
-for diagnosis and controlled partial reruns.
+`verify`, `status`, `history`, `rollback`, and `tag` commands remain
+available for diagnosis and controlled partial reruns.
 
 ## Completed viewer features
 
@@ -18,13 +18,47 @@ for diagnosis and controlled partial reruns.
 
 ## Immediate priorities
 
-1. Annotation save-state reliability and visible Saving/Saved/Failed feedback,
-   including protection against leaving while changes remain pending.
-2. Safe live discovery of newly added images and directories without restarting
+1. Safe live discovery of newly added images and directories without restarting
    the server.
-3. Improve cold Bio-Formats metadata and embedded label/thumbnail performance.
+2. Improve cold Bio-Formats metadata and embedded label/thumbnail performance.
    Embedded metadata images must never be synthesized from diagnostic pixels.
-4. Remove the extra image click required before drawing another annotation.
+3. Add Z-stack navigation and playback for supported images.
+
+## Annotation editor investigation
+
+The current production behavior is the stable baseline: Annotorious commits a
+moved annotation when editing is finalized by clicking away. Attempts to force
+a commit directly on pointer release caused geometry, label, selection, or
+persistence regressions and must not be restored without real-browser evidence.
+
+- Pin the exact Annotorious and OpenSeadragon integration versions instead of
+  loading an unversioned `latest` build.
+- Add real-browser tests for pointer release, click-away commit, selection,
+  persistence, image switching, and label synchronization.
+- Evaluate an explicit **Done editing** or **Save position** action as the
+  lowest-risk Annotorious workflow.
+- Build an isolated Fabric.js/OpenSeadragon Fabric overlay proof of concept for
+  rectangle creation, selection, movement, resizing, deletion, labels, pan/zoom,
+  image switching, JSON round trips, and exactly one committed update per edit.
+- Consider replacing Annotorious only if that proof of concept passes in Safari
+  and Chrome without changing the production annotation data format.
+- Revisit automatic save-state feedback and the extra click before drawing
+  another annotation only after the editor lifecycle is deterministic.
+
+## Z-stack navigation and playback
+
+- Show the current Z level and total number of levels.
+- Provide previous/next single-level controls.
+- Provide play/pause and adjustable playback speed.
+- Support ping-pong playback: top to bottom to top.
+- Support forward looping: top to bottom, then restart at the top.
+- Support reverse looping: bottom to top, then restart at the bottom.
+- Preserve pan, zoom, channels, and display settings while changing levels.
+- Use bounded adjacent-level prefetching and stop safely on image switches or
+  unavailable levels.
+- Decide and clearly communicate whether annotations apply to one Z level or
+  the complete stack.
+- Ensure exports identify and preserve the selected Z level.
 
 ## Export follow-ups
 
