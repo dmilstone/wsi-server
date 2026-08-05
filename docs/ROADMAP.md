@@ -7,7 +7,7 @@ The established development-to-production validation is consolidated under
 `verify`, `status`, `history`, `rollback`, and `tag` commands remain
 available for diagnosis and controlled partial reruns.
 
-## Completed viewer features
+## Completed features and operations
 
 - Global annotation visibility.
 - Persistent user-editable annotation names.
@@ -15,14 +15,37 @@ available for diagnosis and controlled partial reruns.
 - Compact, responsive viewer toolbar with separate viewer/export and annotation
   palettes.
 - Authenticated in-viewer Help guide with a printable PDF.
-- Safe live discovery of newly added images and directories without restarting the server.
+- Safe live discovery of newly added images and directories without restarting
+  the server.
+- Scanner-independent, manually authorized, crash-safe atomic promotion of
+  complete staged WSI dataset directories into production.
+- Resumable release operations that preserve environment fingerprints and
+  requested production tags across interrupted human gates.
 
 ## Immediate priorities
 
-1. Manual atomic staged WSI ingestion is the current immediate priority.
-2. Improve cold Bio-Formats metadata and embedded label/thumbnail performance.
+1. Improve cold Bio-Formats metadata and embedded label/thumbnail performance.
    Embedded metadata images must never be synthesized from diagnostic pixels.
-3. Add Z-stack navigation and playback for supported images.
+2. Add Z-stack navigation and playback for supported images.
+
+## WSI ingestion operations
+
+The scanner-agnostic ingestion workflow has passed real macOS validation with a
+17.4 GB dated batch containing four compound VSI acquisitions. The complete
+batch was atomically promoted without overwrite, file loss, channel loss, or a
+viewer restart. Production live discovery subsequently exposed all four images
+with their expected channels.
+
+A top-level dataset directory is an indivisible promotion unit. After a dated
+directory is promoted, another directory with the same name cannot be appended
+or merged into it. Routine acquisition must therefore use either:
+
+- one end-of-day promotion after imaging for that date is complete; or
+- uniquely named batches such as `2026-08-05_batch-01`.
+
+This constraint preserves atomic no-overwrite behavior. A future ingestion
+design may support a different batching model, but it must not weaken that
+safety guarantee.
 
 ## Annotation editor investigation
 
