@@ -50,6 +50,12 @@ EOF
     exit 2
 }
 
+validate_tag_name() {
+    local tag_name="$1"
+    [[ -n "$tag_name" ]] || fail "Tag name must not be empty."
+    git -C "$REPO" check-ref-format "refs/tags/$tag_name" || fail "Invalid tag name: $tag_name"
+}
+
 quote_command() {
     local rendered="" item
     for item in "$@"; do
@@ -514,6 +520,7 @@ tag_release() {
     current_commit="$(git -C "$REPO" rev-parse HEAD)"
     [[ "$production_commit" = "$current_commit" ]] || fail "Production commit does not match repository HEAD."
     TAG_NAME="${TAG_NAME:-production-$(date +%Y-%m-%d-%H%M%S)}"
+    validate_tag_name "$TAG_NAME"
     git -C "$REPO" rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null 2>&1 && fail "Tag already exists: $TAG_NAME"
 
     echo "Production commit: $production_commit"
@@ -558,6 +565,7 @@ while [[ $# -gt 0 ]]; do
         --resume) RESUME=true; RESUME_OPTION=true ;;
         --tag)
             [[ $# -ge 2 ]] || fail "--tag requires a tag name."
+            validate_tag_name "$2"
             TAG_NAME="$2"
             CYCLE_TAG_OPTION=true
             shift

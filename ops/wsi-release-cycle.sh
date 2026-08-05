@@ -38,6 +38,7 @@ sha256_stream() { shasum -a 256 | awk '{print $1}'; }
 cycle_state_get() { awk -F= -v key="$1" '$1==key {sub(/^[^=]*=/,""); print; exit}' "$CYCLE_STATE"; }
 cycle_save() {
     local tmp="$CYCLE_STATE.tmp"
+    [[ -z "${TAG_NAME:-}" ]] || validate_tag_name "$TAG_NAME"
     mkdir -p "$CYCLE_RUN"
     umask 077
     cat >"$tmp" <<EOF
@@ -55,6 +56,7 @@ rehearsal_identity=${CYCLE_REHEARSAL_ID:-}
 production_identity=${CYCLE_PRODUCTION_ID:-}
 human_gates=${CYCLE_GATES:-}
 production_backup=${CYCLE_BACKUP:-}
+requested_tag=${TAG_NAME:-}
 development_fingerprint=${CYCLE_DEV_FP:-}
 staging_fingerprint=${CYCLE_STAGING_FP:-}
 rehearsal_fingerprint=${CYCLE_REHEARSAL_FP:-}
@@ -160,6 +162,16 @@ cycle_resume_load() {
     CYCLE_REMOTE_COMMIT="$(cycle_state_get remote_commit)"; CYCLE_JAR="$(cycle_state_get candidate_jar)"; CYCLE_SHA="$(cycle_state_get candidate_sha)"
     CYCLE_STAGING_ID="$(cycle_state_get staging_identity)"; CYCLE_REHEARSAL_ID="$(cycle_state_get rehearsal_identity)"; CYCLE_PRODUCTION_ID="$(cycle_state_get production_identity)"
     CYCLE_GATES="$(cycle_state_get human_gates)"; CYCLE_BACKUP="$(cycle_state_get production_backup)"
+    local saved_tag; saved_tag="$(cycle_state_get requested_tag)"
+    if [[ -n "$saved_tag" ]]; then
+        validate_tag_name "$saved_tag"
+        if [[ -n "${TAG_NAME:-}" && "$TAG_NAME" != "$saved_tag" ]]; then
+            cycle_fail "Resume tag conflicts with saved requested tag: saved $saved_tag, requested $TAG_NAME."
+        fi
+        TAG_NAME="$saved_tag"
+    elif [[ -n "${TAG_NAME:-}" ]]; then
+        validate_tag_name "$TAG_NAME"
+    fi
     CYCLE_DEV_FP="$(cycle_state_get development_fingerprint)"
     CYCLE_STAGING_FP="$(cycle_state_get staging_fingerprint)"
     CYCLE_REHEARSAL_FP="$(cycle_state_get rehearsal_fingerprint)"

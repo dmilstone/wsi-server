@@ -238,6 +238,7 @@ OPS_CYCLE_SCRIPT="$OPS_DIR/wsi-release-cycle.sh" \
 bash <<'EOF'
 set -euo pipefail
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+validate_tag_name() { git -C "$REPO" check-ref-format "refs/tags/$1"; }
 property_value() { awk -F= -v key="$2" '$1==key {sub(/^[^=]*=/,""); print; exit}' "$1"; }
 listener_pid() { [[ "$1" = 8080 ]] && printf '4242\n'; }
 source "$OPS_CYCLE_SCRIPT"
@@ -288,6 +289,142 @@ EOF
 [[ ! -d "$fingerprint_production/failed-releases" ]]
 [[ ! -e "$fingerprint_repo/.git/refs/tags/fixture-unused" ]]
 pass "cycle resume restores and preserves fingerprints while rejecting invalid or changed state"
+
+
+# Regression: release-cycle state persists the requested production tag across
+# resumes without performing real pushes, service operations, deployment,
+# backup, rollback, or tag creation.
+tag_fixture="$TEST_ROOT/cycle-tag-resume"
+tag_repo="$tag_fixture/repo"
+mkdir -p "$tag_repo"
+git -C "$tag_repo" init -q
+git -C "$tag_repo" config user.name "WSI operations test"
+git -C "$tag_repo" config user.email "wsi-operations-test@example.invalid"
+printf 'tag fixture\n' >"$tag_repo/tracked.txt"
+git -C "$tag_repo" add tracked.txt
+git -C "$tag_repo" commit -q -m tag-fixture
+git -C "$tag_repo" switch -q -c fixture-release-cycle
+
+tag_runtime="$tag_fixture/development"
+tag_staging="$tag_fixture/staging"
+tag_rehearsal="$tag_fixture/rehearsal"
+tag_production="$tag_fixture/production"
+write_cycle_config "$tag_runtime" development 8081
+write_cycle_config "$tag_staging" staging 8082
+write_cycle_config "$tag_rehearsal" production 8083
+write_cycle_config "$tag_production" production 8080
+for root in "$tag_staging" "$tag_rehearsal" "$tag_production"; do
+    mkdir -p "$root/app"
+    printf 'production fixture jar\n' >"$root/app/wsi-server.jar"
+    printf 'fixture-build\n' >"$root/app/BUILD_TAG.txt"
+    git -C "$tag_repo" rev-parse HEAD >"$root/app/BUILD_COMMIT.txt"
+done
+
+REPO="$tag_repo" \
+STAGING="$tag_staging" \
+REHEARSAL="$tag_rehearsal" \
+PRODUCTION="$tag_production" \
+WSI_CYCLE_RUNTIME="$tag_runtime" \
+WSI_CYCLE_BRANCH=fixture-release-cycle \
+OPS_CYCLE_SCRIPT="$OPS_DIR/wsi-release-cycle.sh" \
+bash <<'EOF'
+set -euo pipefail
+sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+property_value() { awk -F= -v key="$2" '$1==key {sub(/^[^=]*=/,""); print; exit}' "$1"; }
+listener_pid() { case "$1" in 8080|8082|8083) printf '4242\n';; esac; }
+validate_tag_name() { git -C "$REPO" check-ref-format "refs/tags/$1"; }
+tag_release() { printf 'TAG_RELEASE:%s\n' "$TAG_NAME"; }
+source "$OPS_CYCLE_SCRIPT"
+CYCLE_LOG="$CYCLE_RUNTIME/tag-regression.log"
+: >"$CYCLE_LOG"
+seed_state() {
+    TAG_NAME="${1:-}"
+    CYCLE_ID=tag-regression
+    CYCLE_HEAD="$(git -C "$REPO" rev-parse HEAD)"
+    CYCLE_REMOTE_COMMIT=unpublished
+    CYCLE_JAR=""
+    CYCLE_SHA=""
+    CYCLE_COMPLETED="${2:-8}"
+    CYCLE_STAGING_ID="$(cycle_identity "$STAGING")"
+    CYCLE_REHEARSAL_ID="$(cycle_identity "$REHEARSAL")"
+    CYCLE_PRODUCTION_ID="$(cycle_identity "$PRODUCTION")"
+    CYCLE_GATES=""
+    CYCLE_BACKUP=""
+    CYCLE_DEV_FP="$(cycle_hash_config "$CYCLE_RUNTIME")"
+    CYCLE_STAGING_FP="$(cycle_hash_config "$STAGING")"
+    CYCLE_REHEARSAL_FP="$(cycle_hash_config "$REHEARSAL")"
+    CYCLE_PROD_FP="$(cycle_hash_config "$PRODUCTION")"
+    cycle_save
+}
+run_phase8_resume() {
+    local answer="$1" tag_answer
+    read() {
+        local prompt="" var=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in -r) shift;; -p) prompt="$2"; shift 2;; *) var="$1"; shift;; esac
+        done
+        printf 'PROMPT:%s\n' "$prompt"
+        printf -v "$var" '%s' "$answer"
+    }
+    cycle_resume_load
+    if [[ -z "$TAG_NAME" ]]; then read -r -p "Tag name, or SKIP: " TAG_NAME; fi
+    if [[ "$TAG_NAME" = SKIP ]]; then
+        cycle_say "Tagging skipped; use ./ops/wsi-release tag later."
+    else
+        read -r -p "Type TAG to create and publish $TAG_NAME: " tag_answer
+        [[ "$tag_answer" = TAG ]] || cycle_fail "TAG was not entered exactly."
+        tag_release
+    fi
+}
+
+
+seed_state production-2026-08-05-live-image-discovery 8
+unset TAG_NAME
+cycle_resume_load
+[[ "$TAG_NAME" = production-2026-08-05-live-image-discovery ]]
+CYCLE_COMPLETED=5
+cycle_save
+unset TAG_NAME
+cycle_resume_load
+[[ "$TAG_NAME" = production-2026-08-05-live-image-discovery ]]
+CYCLE_COMPLETED=6
+cycle_save
+unset TAG_NAME
+cycle_resume_load
+[[ "$TAG_NAME" = production-2026-08-05-live-image-discovery ]]
+
+run_phase8_resume TAG >"$CYCLE_RUNTIME/restored-phase8.out" 2>&1
+grep -q 'PROMPT:Type TAG to create and publish production-2026-08-05-live-image-discovery:' "$CYCLE_RUNTIME/restored-phase8.out"
+! grep -q 'Tag name, or SKIP' "$CYCLE_RUNTIME/restored-phase8.out"
+grep -q 'TAG_RELEASE:production-2026-08-05-live-image-discovery' "$CYCLE_RUNTIME/restored-phase8.out"
+
+TAG_NAME=production-2026-08-05-live-image-discovery
+cycle_resume_load
+[[ "$TAG_NAME" = production-2026-08-05-live-image-discovery ]]
+TAG_NAME=production-2026-08-05-conflict
+if ( cycle_resume_load ) >"$CYCLE_RUNTIME/conflict.out" 2>&1; then exit 20; fi
+grep -q 'Resume tag conflicts with saved requested tag' "$CYCLE_RUNTIME/conflict.out"
+
+seed_state '' 8
+awk -F= '$1!="requested_tag" {print}' "$CYCLE_STATE" >"$CYCLE_STATE.old"
+mv "$CYCLE_STATE.old" "$CYCLE_STATE"
+unset TAG_NAME
+cycle_resume_load
+[[ "${TAG_NAME:-}" = "" ]]
+TAG_NAME=production-2026-08-05-supplied-on-resume
+cycle_resume_load
+[[ "$TAG_NAME" = production-2026-08-05-supplied-on-resume ]]
+
+TAG_NAME=""
+run_phase8_resume SKIP >"$CYCLE_RUNTIME/no-tag-phase8.out" 2>&1
+grep -q 'PROMPT:Tag name, or SKIP:' "$CYCLE_RUNTIME/no-tag-phase8.out"
+grep -q 'Tagging skipped' "$CYCLE_RUNTIME/no-tag-phase8.out"
+! grep -q 'TAG_RELEASE:' "$CYCLE_RUNTIME/no-tag-phase8.out"
+EOF
+[[ ! -d "$tag_production/releases" ]]
+[[ ! -d "$tag_production/failed-releases" ]]
+[[ ! -e "$tag_repo/.git/refs/tags/production-2026-08-05-live-image-discovery" ]]
+pass "cycle resume persists requested tags, handles conflicts and old state, and preserves SKIP prompts safely"
 
 # Build a small, non-running fixture and prove that stage --dry-run traverses
 # preflight without producing a candidate or invoking process control.
