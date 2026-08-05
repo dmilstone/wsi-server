@@ -17,7 +17,7 @@ class IngestTests(unittest.TestCase):
     def tearDown(self): self.t.cleanup()
     def invoke(self,*args,input=''):
         out=io.StringIO(); err=io.StringIO()
-        with mock.patch.dict(os.environ,self.env,clear=False), mock.patch('wsi_ingest.time.time',return_value=self.now), mock.patch('builtins.input',return_value=input.rstrip('\n')), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with mock.patch.dict(os.environ,self.env,clear=True), mock.patch('wsi_ingest.time.time',return_value=self.now), mock.patch('builtins.input',return_value=input.rstrip('\n')), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try: wi.main(list(args)); return Result(0,out.getvalue(),err.getvalue())
             except wi.Fail as e: print('FAIL',e.cat+':',str(e),file=err); return Result(1,out.getvalue(),err.getvalue())
             except SystemExit as e: return Result(e.code or 0,out.getvalue(),err.getvalue())
@@ -109,9 +109,9 @@ class IngestTests(unittest.TestCase):
     def test_history_uses_durable_journal_phases(self):
         self.ds(); self.assertEqual(self.invoke('seal','case',input='SEAL\n').returncode,0)
         self.assertIn(' sealed observations 1', self.invoke('history').stdout)
-        with mock.patch.dict(os.environ,self.env,clear=False): wi.journal(wi.cfg(),'case','prepared')
+        with mock.patch.dict(os.environ,self.env,clear=True): wi.journal(wi.cfg(),'case','prepared')
         self.assertIn(' prepared observations 1', self.invoke('history').stdout)
-        with mock.patch.dict(os.environ,self.env,clear=False): wi.journal(wi.cfg(),'case','moved')
+        with mock.patch.dict(os.environ,self.env,clear=True): wi.journal(wi.cfg(),'case','moved')
         self.assertIn(' moved observations 1', self.invoke('history').stdout)
 
     def test_status_counts_multiple_logical_pending_transactions_once_each(self):
