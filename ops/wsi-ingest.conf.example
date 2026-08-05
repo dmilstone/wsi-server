@@ -1,0 +1,10 @@
+# Copy to ops/wsi-ingest.conf for local operator notes only; the tool reads env vars.
+export WSI_INGEST_STAGING_ROOT="/path/to/staging-outside-production"
+export WSI_INGEST_PRODUCTION_ROOT="/path/to/production"
+export WSI_INGEST_REQUIRED_OBSERVATIONS=3
+export WSI_INGEST_OBSERVATION_INTERVAL_SECONDS=60
+export WSI_INGEST_MIN_QUIET_SECONDS=120
+# Intended local values (do not commit real config):
+# staging: /Users/dm026/wsi-ingest-staging
+# production: /Users/dm026/wsi-slides
+# quiet time: 120 seconds

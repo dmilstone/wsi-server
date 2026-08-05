@@ -15,11 +15,11 @@ available for diagnosis and controlled partial reruns.
 - Compact, responsive viewer toolbar with separate viewer/export and annotation
   palettes.
 - Authenticated in-viewer Help guide with a printable PDF.
+- Safe live discovery of newly added images and directories without restarting the server.
 
 ## Immediate priorities
 
-1. Safe live discovery of newly added images and directories without restarting
-   the server remains the current immediate priority.
+1. Manual atomic staged WSI ingestion is the current immediate priority.
 2. Improve cold Bio-Formats metadata and embedded label/thumbnail performance.
    Embedded metadata images must never be synthesized from diagnostic pixels.
 3. Add Z-stack navigation and playback for supported images.
@@ -81,8 +81,13 @@ stable Annotorious click-away lifecycle remains unchanged.
 
 ## Administration and access backlog
 
+- Add HTTPS/TLS before broader user-specific credentials.
 - Add user-specific credentials, authorization, annotation ownership, and
   preferences.
 - Add an administrative dashboard for environment health, releases, users, and
   audit information.
 - Add a user feedback and ticket workflow.
+
+## Optional acquisition readiness enhancements
+
+- Consider optional scanner-generated acquisition-complete marker adapters only as workflow strengthening. The core staged ingestion command must remain scanner-independent.

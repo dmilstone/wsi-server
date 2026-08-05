@@ -14,3 +14,8 @@ build/
 
 # Local WSI process, release-cycle state and logs
 .runtime/
+
+# Local WSI ingestion configuration/state
+ops/wsi-ingest.conf
+__pycache__/
+*.py[cod]
