@@ -4,7 +4,7 @@
 
 ## Configuration
 
-Set these environment variables in local shell state or in an untracked local file such as `ops/wsi-ingest.conf`:
+Set these environment variables in local shell state or in an untracked local file such as `ops/wsi-ingest.conf`, then run `source ops/wsi-ingest.conf`. The tool reads environment variables; it does not automatically load that file:
 
 ```sh
 export WSI_INGEST_STAGING_ROOT="/path/to/staging-outside-production"

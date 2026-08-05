@@ -7,7 +7,7 @@ WSI_EXTS={'.vsi','.svs','.ndpi','.czi','.lif','.ome.tif','.ome.tiff','.tif','.ti
 class Fail(Exception):
     def __init__(self,cat,msg): self.cat=cat; super().__init__(msg)
 
-def now(): return float(os.environ.get('WSI_INGEST_TEST_NOW', time.time()))
+def now(): return time.time()
 def cfg():
     s=os.environ.get('WSI_INGEST_STAGING_ROOT'); p=os.environ.get('WSI_INGEST_PRODUCTION_ROOT')
     if not s or not p: raise Fail('configuration','missing WSI_INGEST_STAGING_ROOT or WSI_INGEST_PRODUCTION_ROOT')
@@ -90,7 +90,7 @@ def lock(c,create=True):
     if create:
         *_,lp=state_files(c,'_'); f=open(lp,'a+')
     else:
-        *_,lp=state_paths(c,'_'); f=open(lp,'a+') if lp.exists() else open(c['staging'],'rb')
+        *_,lp=state_paths(c,'_'); f=open(lp,'a+') if lp.exists() else os.open(c['staging'], os.O_RDONLY)
     try: fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError: raise Fail('lock','another ingestion operation holds the lock')
     return f
@@ -137,8 +137,6 @@ def receipt(c,n,st):
     sf,mf,jf,rf,lf=state_files(c,n); atomic_write(rf,json.dumps({'dataset':n,'transaction_id':st['transaction_id'],'phase':'verified','time':now()},sort_keys=True)); os.chmod(rf,0o400)
 
 def atomic_rename_noreplace(src,dst):
-    if os.environ.get('WSI_INGEST_TEST_DEST_RACE'):
-        Path(dst).mkdir()
     system=platform.system()
     if system=='Linux':
         nr={'x86_64':316,'aarch64':276,'arm64':276}.get(platform.machine())
@@ -155,36 +153,49 @@ def atomic_rename_noreplace(src,dst):
         if e in (errno.EEXIST, errno.ENOTEMPTY): raise Fail('collision','destination already exists')
         raise Fail('filesystem',os.strerror(e))
 
+def close_lock(lf):
+    try:
+        fcntl.flock(lf, fcntl.LOCK_UN)
+    finally:
+        if hasattr(lf,'close'): lf.close()
+        else: os.close(lf)
+
 def cmd_promote(a):
-    c=cfg(); n=dataset_name(a.dataset); lf=lock(c,not a.dry_run); st,m,ds,dest,ag=recheck(c,n,create_state=not a.dry_run); readiness(c,st,ag)
-    print('transaction:',st['transaction_id']); print('regular_files:',ag['files']); print('total_bytes:',ag['bytes'])
-    if a.dry_run: print('dry_run: ok'); return
-    if input('Type PROMOTE: ')!='PROMOTE': raise Fail('confirmation','wrong confirmation token')
-    st,m,ds,dest,ag=recheck(c,n); readiness(c,st,ag); journal(c,n,'prepared')
-    if dest.exists(): raise Fail('collision','destination already exists')
-    if os.environ.get('WSI_INGEST_TEST_FAULT')=='before_rename': raise Fail('fault','injected before rename')
-    atomic_rename_noreplace(ds,dest); fsync_path(c['staging']); fsync_path(c['production']); journal(c,n,'moved')
-    if os.environ.get('WSI_INGEST_TEST_FAULT')=='after_rename': raise Fail('fault','injected after rename')
-    cur,dig,ag2=manifest(dest)
-    if cur!=m: raise Fail('manifest','destination differs after rename')
-    journal(c,n,'verified'); receipt(c,n,st); print('promoted transaction:',st['transaction_id'])
+    c=cfg(); n=dataset_name(a.dataset); lf=lock(c,not a.dry_run)
+    try:
+        st,m,ds,dest,ag=recheck(c,n,create_state=not a.dry_run); readiness(c,st,ag)
+        print('transaction:',st['transaction_id']); print('regular_files:',ag['files']); print('total_bytes:',ag['bytes'])
+        if a.dry_run: print('dry_run: ok'); return
+        if input('Type PROMOTE: ')!='PROMOTE': raise Fail('confirmation','wrong confirmation token')
+        st,m,ds,dest,ag=recheck(c,n); readiness(c,st,ag); journal(c,n,'prepared')
+        if dest.exists(): raise Fail('collision','destination already exists')
+        atomic_rename_noreplace(ds,dest); fsync_path(c['staging']); fsync_path(c['production']); journal(c,n,'moved')
+        cur,dig,ag2=manifest(dest)
+        if cur!=m: raise Fail('manifest','destination differs after rename')
+        journal(c,n,'verified'); receipt(c,n,st); print('promoted transaction:',st['transaction_id'])
+    finally:
+        close_lock(lf)
 def cmd_recover(a):
-    c=cfg(); lf=lock(c); cd=ensure_control(c); pending=[]
-    for jf in cd.glob('*.journal.json'):
-        j=json.load(open(jf)); n=j['dataset']; st,m,_=load(c,n)
-        rf=state_paths(c,n)[3]
-        if j.get('phase')!='verified' or not rf.exists(): pending.append((n,st['transaction_id']))
-    if not pending:
-        print('no pending journal'); return
-    if len(pending)>1:
-        print('multiple incomplete transactions:', ' '.join(tx for n,tx in pending)); raise Fail('manual_investigation','multiple incomplete transactions')
-    n,tx=pending[0]; st,m,j=load(c,n); src=c['staging']/n; dst=c['production']/n
-    if src.exists() and not dst.exists(): print('preserve source; promotion did not occur')
-    elif (not src.exists()) and dst.exists():
-        cur,dig,ag=manifest(dst)
-        if cur!=m: raise Fail('manual_investigation','destination differs from manifest')
-        journal(c,n,'verified'); receipt(c,n,st); print('recovered verified transaction:',tx)
-    else: raise Fail('manual_investigation','ambiguous recovery state')
+    c=cfg(); lf=lock(c)
+    try:
+        cd=ensure_control(c); pending=[]
+        for jf in cd.glob('*.journal.json'):
+            j=json.load(open(jf)); n=j['dataset']; st,m,_=load(c,n)
+            rf=state_paths(c,n)[3]
+            if j.get('phase')!='verified' or not rf.exists(): pending.append((n,st['transaction_id']))
+        if not pending:
+            print('no pending journal'); return
+        if len(pending)>1:
+            print('multiple incomplete transactions:', ' '.join(tx for n,tx in pending)); raise Fail('manual_investigation','multiple incomplete transactions')
+        n,tx=pending[0]; st,m,j=load(c,n); src=c['staging']/n; dst=c['production']/n
+        if src.exists() and not dst.exists(): print('preserve source; promotion did not occur')
+        elif (not src.exists()) and dst.exists():
+            cur,dig,ag=manifest(dst)
+            if cur!=m: raise Fail('manual_investigation','destination differs from manifest')
+            journal(c,n,'verified'); receipt(c,n,st); print('recovered verified transaction:',tx)
+        else: raise Fail('manual_investigation','ambiguous recovery state')
+    finally:
+        close_lock(lf)
 def cmd_history(a):
     c=cfg(); cd=ensure_control(c)
     for sf in sorted(cd.glob('*.json')):
