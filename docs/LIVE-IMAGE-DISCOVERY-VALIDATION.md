@@ -20,13 +20,28 @@ entry remains registered until server restart even if later scans cannot see
 it. Pending entries that disappear are discarded. Discovery never deletes or
 changes annotation documents.
 
+## Compound datasets and production ingestion
+
+An Olympus VSI may consist of a `.vsi` file plus a companion data directory.
+Treat the complete file and companion directory as one indivisible dataset.
+File stability alone does not prove that every companion file has finished
+copying.
+
+Stage a compound dataset outside the configured image root but on the same
+filesystem. After acquisition is complete and the entire dataset has remained
+unchanged for the required operator-controlled interval, atomically move the
+complete dataset directory into the image root. Never progressively copy a
+compound dataset inside a root being monitored by live discovery.
+
 ## Protocol
 
 1. Start the development instance on port `8081`, using only its validated
    development image root.
 2. Open the normal viewer and keep an existing image open.
-3. Copy a nonclinical test WSI into the development root under a temporary name,
-   or copy it slowly so its size continues to grow.
+3. For a single-file discovery test, copy a nonclinical WSI into the development
+   root under a temporary unsupported suffix, or copy it slowly so its size
+   continues to grow. Test complete compound VSI datasets separately by
+   atomically moving their containing directory into the development root.
 4. Use **Refresh images** and confirm that the incomplete file does not appear.
 5. Finish the copy and atomically rename it to a supported suffix if a temporary
    unsupported suffix was used.

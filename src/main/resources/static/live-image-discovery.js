@@ -10,8 +10,8 @@
             this.applyImages = applyImages;
             this.status = status;
             this.intervalMs = Math.max(5000, Math.min(intervalMs, 300000));
-            this.setIntervalFn = setIntervalFn || setInterval;
-            this.clearIntervalFn = clearIntervalFn || clearInterval;
+            this.setIntervalFn = setIntervalFn || globalThis.setInterval.bind(globalThis);
+            this.clearIntervalFn = clearIntervalFn || globalThis.clearInterval.bind(globalThis);
             this.running = false;
             this.timer = null;
             this.onVisibility = () => { if (!this.document.hidden) void this.refresh(false); };

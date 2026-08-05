@@ -9,6 +9,30 @@ function documentStub() {
     removeEventListener(name) { listeners.delete(name); }};
 }
 
+test("default browser timers retain their required global receiver", () => {
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  let cleared = false;
+  globalThis.setInterval = function () {
+    assert.equal(this, globalThis);
+    return 17;
+  };
+  globalThis.clearInterval = function (id) {
+    assert.equal(this, globalThis);
+    cleared = id === 17;
+  };
+  try {
+    const discovery = new LiveImageDiscovery({document:documentStub(),
+      request: async () => ({images:[]}), applyImages: () => 0, status: () => {}});
+    discovery.start();
+    discovery.stop();
+    assert.equal(cleared, true);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+  }
+});
+
 test("manual refresh posts, renders additions, and reports concise status", async () => {
   const calls = [], messages = [], doc = documentStub();
   const discovery = new LiveImageDiscovery({document:doc,
