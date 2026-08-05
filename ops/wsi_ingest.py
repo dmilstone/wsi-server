@@ -95,8 +95,41 @@ def lock(c,create=True):
     except BlockingIOError: raise Fail('lock','another ingestion operation holds the lock')
     return f
 
+
+def state_records(c):
+    cd=c['staging']/CONTROL
+    if not cd.exists(): return []
+    records=[]
+    for sf in sorted(cd.glob('*.json')):
+        if sf.name.endswith(('.manifest.json','.journal.json','.receipt.json')): continue
+        try:
+            st=json.load(open(sf)); n=st.get('dataset')
+            if n: records.append((n,st))
+        except (OSError,json.JSONDecodeError):
+            continue
+    return records
+
+def effective_phase(c,name,st):
+    s,m,jf,rf,lf=state_paths(c,name)
+    phase=st.get('phase','sealed')
+    if jf.exists():
+        try: phase=json.load(open(jf)).get('phase',phase)
+        except (OSError,json.JSONDecodeError): pass
+    if phase=='verified' and not rf.exists():
+        return 'moved'
+    if rf.exists():
+        try:
+            receipt_state=json.load(open(rf))
+            if receipt_state.get('transaction_id')==st.get('transaction_id') and receipt_state.get('phase')=='verified' and phase=='verified':
+                return 'verified'
+        except (OSError,json.JSONDecodeError): pass
+    return phase
+
+def pending_transactions(c):
+    return [(n,st) for n,st in state_records(c) if effective_phase(c,n,st)!='verified']
+
 def cmd_status(a):
-    c=cfg(); cd=c['staging']/CONTROL; pending=len(list(cd.glob('*.json'))) if cd.exists() else 0
+    c=cfg(); cd=c['staging']/CONTROL; pending=len(pending_transactions(c))
     print('roots_exist:', c['staging'].is_dir() and c['production'].is_dir()); print('canonical_disjoint: true')
     print('same_filesystem:', same_dev(c['staging'],c['production']) if c['staging'].exists() and c['production'].exists() else False)
     print('production_marker_exact:', prod_marker_ok(c['production']) if c['production'].exists() else False)
@@ -197,10 +230,9 @@ def cmd_recover(a):
     finally:
         close_lock(lf)
 def cmd_history(a):
-    c=cfg(); cd=ensure_control(c)
-    for sf in sorted(cd.glob('*.json')):
-        if sf.name.endswith(('.manifest.json','.journal.json','.receipt.json')): continue
-        st=json.load(open(sf)); print(st.get('transaction_id'), st.get('phase'), 'observations', len(st.get('observations',[])))
+    c=cfg()
+    for n,st in state_records(c):
+        print(st.get('transaction_id'), effective_phase(c,n,st), 'observations', len(st.get('observations',[])))
 
 def main(argv=None):
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest='cmd',required=True)

@@ -89,6 +89,39 @@ class IngestTests(unittest.TestCase):
         self.seal_obs('case2')
         with mock.patch('wsi_ingest.atomic_rename_noreplace',side_effect=wi.Fail('fault','before')): self.assertNotEqual(self.invoke('promote','--step','case2',input='PROMOTE\n').returncode,0)
         r=self.invoke('recover'); self.assertNotEqual(r.returncode,0); self.assertIn('multiple incomplete transactions:', r.stdout); self.assertNotIn('slide.vsi', r.stdout + r.stderr)
+
+    def test_status_counts_logical_pending_not_artifacts(self):
+        self.ds(); self.assertEqual(self.invoke('seal','case',input='SEAL\n').returncode,0)
+        status=self.invoke('status')
+        self.assertIn('sealed_pending_transactions: 1', status.stdout)
+        self.assertNotIn('case', status.stdout)
+        self.assertNotIn('slide.vsi', status.stdout)
+
+    def test_verified_transaction_is_not_pending_and_history_is_verified(self):
+        self.seal_obs(); self.assertEqual(self.invoke('promote','--step','case',input='PROMOTE\n').returncode,0)
+        status=self.invoke('status')
+        history=self.invoke('history')
+        self.assertIn('sealed_pending_transactions: 0', status.stdout)
+        self.assertIn(' verified observations 3', history.stdout)
+        self.assertNotIn('case', status.stdout + history.stdout)
+        self.assertNotIn('slide.vsi', status.stdout + history.stdout)
+
+    def test_history_uses_durable_journal_phases(self):
+        self.ds(); self.assertEqual(self.invoke('seal','case',input='SEAL\n').returncode,0)
+        self.assertIn(' sealed observations 1', self.invoke('history').stdout)
+        with mock.patch.dict(os.environ,self.env,clear=False): wi.journal(wi.cfg(),'case','prepared')
+        self.assertIn(' prepared observations 1', self.invoke('history').stdout)
+        with mock.patch.dict(os.environ,self.env,clear=False): wi.journal(wi.cfg(),'case','moved')
+        self.assertIn(' moved observations 1', self.invoke('history').stdout)
+
+    def test_status_counts_multiple_logical_pending_transactions_once_each(self):
+        self.ds('case1'); self.assertEqual(self.invoke('seal','case1',input='SEAL\n').returncode,0)
+        self.ds('case2'); self.assertEqual(self.invoke('seal','case2',input='SEAL\n').returncode,0)
+        status=self.invoke('status')
+        self.assertIn('sealed_pending_transactions: 2', status.stdout)
+        self.assertNotIn('case1', status.stdout)
+        self.assertNotIn('case2', status.stdout)
+
     def test_no_test_environment_hooks_in_production_source(self):
         text=Path(wi.__file__).read_text()
         for token in ['WSI_INGEST_TEST_','TEST_NOW','TEST_FAULT','TEST_DEST_RACE']: self.assertNotIn(token,text)
