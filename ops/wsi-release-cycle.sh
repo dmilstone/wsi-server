@@ -160,6 +160,14 @@ cycle_resume_load() {
     CYCLE_REMOTE_COMMIT="$(cycle_state_get remote_commit)"; CYCLE_JAR="$(cycle_state_get candidate_jar)"; CYCLE_SHA="$(cycle_state_get candidate_sha)"
     CYCLE_STAGING_ID="$(cycle_state_get staging_identity)"; CYCLE_REHEARSAL_ID="$(cycle_state_get rehearsal_identity)"; CYCLE_PRODUCTION_ID="$(cycle_state_get production_identity)"
     CYCLE_GATES="$(cycle_state_get human_gates)"; CYCLE_BACKUP="$(cycle_state_get production_backup)"
+    CYCLE_DEV_FP="$(cycle_state_get development_fingerprint)"
+    CYCLE_STAGING_FP="$(cycle_state_get staging_fingerprint)"
+    CYCLE_REHEARSAL_FP="$(cycle_state_get rehearsal_fingerprint)"
+    CYCLE_PROD_FP="$(cycle_state_get production_fingerprint)"
+    [[ -n "$CYCLE_DEV_FP" ]] || cycle_fail "Resume state is missing development fingerprint."
+    [[ -n "$CYCLE_STAGING_FP" ]] || cycle_fail "Resume state is missing staging fingerprint."
+    [[ -n "$CYCLE_REHEARSAL_FP" ]] || cycle_fail "Resume state is missing rehearsal fingerprint."
+    [[ -n "$CYCLE_PROD_FP" ]] || cycle_fail "Resume state is missing production fingerprint."
     [[ "$(cd "$REPO" && pwd -P)" = "$(cycle_state_get repository)" ]] || cycle_fail "Repository path changed."
     [[ "$(git -C "$REPO" branch --show-current)" = "$CYCLE_BRANCH" && "$(git -C "$REPO" rev-parse HEAD)" = "$CYCLE_HEAD" ]] || cycle_fail "Repository branch or HEAD changed."
     [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]] || cycle_fail "Tracked working tree changed."
@@ -167,10 +175,10 @@ cycle_resume_load() {
     if [[ "$CYCLE_REMOTE_COMMIT" != unpublished ]]; then
         [[ "$(git -C "$REPO" ls-remote "$CYCLE_REMOTE" "refs/heads/$CYCLE_BRANCH" | awk 'NR==1{print $1}')" = "$CYCLE_REMOTE_COMMIT" ]] || cycle_fail "Remote feature commit changed."
     fi
-    [[ "$(cycle_state_get development_fingerprint)" = "$(cycle_hash_config "$CYCLE_RUNTIME")" ]] || cycle_fail "Development configuration changed."
-    [[ "$(cycle_state_get staging_fingerprint)" = "$(cycle_hash_config "$STAGING")" ]] || cycle_fail "Staging configuration changed."
-    [[ "$(cycle_state_get rehearsal_fingerprint)" = "$(cycle_hash_config "$REHEARSAL")" ]] || cycle_fail "Rehearsal configuration changed."
-    [[ "$(cycle_state_get production_fingerprint)" = "$(cycle_hash_config "$PRODUCTION")" ]] || cycle_fail "Production configuration changed."
+    [[ "$CYCLE_DEV_FP" = "$(cycle_hash_config "$CYCLE_RUNTIME")" ]] || cycle_fail "Development configuration changed."
+    [[ "$CYCLE_STAGING_FP" = "$(cycle_hash_config "$STAGING")" ]] || cycle_fail "Staging configuration changed."
+    [[ "$CYCLE_REHEARSAL_FP" = "$(cycle_hash_config "$REHEARSAL")" ]] || cycle_fail "Rehearsal configuration changed."
+    [[ "$CYCLE_PROD_FP" = "$(cycle_hash_config "$PRODUCTION")" ]] || cycle_fail "Production configuration changed."
     if [[ "$CYCLE_COMPLETED" -ge 4 ]]; then [[ "$(cycle_identity "$STAGING")" = "$CYCLE_STAGING_ID" && -n "$(listener_pid 8082)" ]] || cycle_fail "Staging identity or process changed."; fi
     if [[ "$CYCLE_COMPLETED" -ge 5 ]]; then [[ "$(cycle_identity "$REHEARSAL")" = "$CYCLE_REHEARSAL_ID" && -n "$(listener_pid 8083)" ]] || cycle_fail "Rehearsal identity or process changed."; fi
     [[ "$(cycle_identity "$PRODUCTION")" = "$CYCLE_PRODUCTION_ID" && -n "$(listener_pid 8080)" ]] || cycle_fail "Production identity or process changed."

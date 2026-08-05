@@ -199,6 +199,96 @@ grep -q '^completed_phase=1$' "$state_file"
 grep -q "^head=$(git -C "$cycle_repo" rev-parse HEAD)$" "$state_file"
 pass "non-dry-run cycle Phase 1 reaches safe step cancellation under nounset"
 
+# Regression: a resume must restore the saved environment fingerprints before
+# any later cycle_save call. Otherwise a safe gate abort followed by a resume can
+# erase the fingerprints and make a second resume falsely report a configuration
+# change. This harness exercises only cycle state/config validation; its stubs
+# prevent push, service control, deployment, backup, rollback and tag actions.
+fingerprint_fixture="$TEST_ROOT/cycle-fingerprint-resume"
+fingerprint_repo="$fingerprint_fixture/repo"
+mkdir -p "$fingerprint_repo"
+git -C "$fingerprint_repo" init -q
+git -C "$fingerprint_repo" config user.name "WSI operations test"
+git -C "$fingerprint_repo" config user.email "wsi-operations-test@example.invalid"
+printf 'fingerprint fixture\n' >"$fingerprint_repo/tracked.txt"
+git -C "$fingerprint_repo" add tracked.txt
+git -C "$fingerprint_repo" commit -q -m fingerprint-fixture
+git -C "$fingerprint_repo" switch -q -c fixture-release-cycle
+
+fingerprint_runtime="$fingerprint_fixture/development"
+fingerprint_staging="$fingerprint_fixture/staging"
+fingerprint_rehearsal="$fingerprint_fixture/rehearsal"
+fingerprint_production="$fingerprint_fixture/production"
+write_cycle_config "$fingerprint_runtime" development 8081
+write_cycle_config "$fingerprint_staging" staging 8082
+write_cycle_config "$fingerprint_rehearsal" production 8083
+write_cycle_config "$fingerprint_production" production 8080
+mkdir -p "$fingerprint_production/app"
+printf 'production fixture jar\n' >"$fingerprint_production/app/wsi-server.jar"
+printf 'fixture-build\n' >"$fingerprint_production/app/BUILD_TAG.txt"
+git -C "$fingerprint_repo" rev-parse HEAD >"$fingerprint_production/app/BUILD_COMMIT.txt"
+
+REPO="$fingerprint_repo" \
+STAGING="$fingerprint_staging" \
+REHEARSAL="$fingerprint_rehearsal" \
+PRODUCTION="$fingerprint_production" \
+WSI_CYCLE_RUNTIME="$fingerprint_runtime" \
+WSI_CYCLE_BRANCH=fixture-release-cycle \
+OPS_CYCLE_SCRIPT="$OPS_DIR/wsi-release-cycle.sh" \
+bash <<'EOF'
+set -euo pipefail
+sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+property_value() { awk -F= -v key="$2" '$1==key {sub(/^[^=]*=/,""); print; exit}' "$1"; }
+listener_pid() { [[ "$1" = 8080 ]] && printf '4242\n'; }
+source "$OPS_CYCLE_SCRIPT"
+CYCLE_LOG="$CYCLE_RUNTIME/resume-regression.log"
+: >"$CYCLE_LOG"
+CYCLE_ID=fingerprint-regression
+CYCLE_HEAD="$(git -C "$REPO" rev-parse HEAD)"
+CYCLE_REMOTE_COMMIT=unpublished
+CYCLE_COMPLETED=1
+CYCLE_PRODUCTION_ID="$(cycle_identity "$PRODUCTION")"
+CYCLE_DEV_FP="$(cycle_hash_config "$CYCLE_RUNTIME")"
+CYCLE_STAGING_FP="$(cycle_hash_config "$STAGING")"
+CYCLE_REHEARSAL_FP="$(cycle_hash_config "$REHEARSAL")"
+CYCLE_PROD_FP="$(cycle_hash_config "$PRODUCTION")"
+cycle_save
+for key in development_fingerprint staging_fingerprint rehearsal_fingerprint production_fingerprint; do
+    value="$(cycle_state_get "$key")"
+    [[ -n "$value" ]]
+    eval "saved_${key}=\$value"
+done
+
+# Simulate a failed human gate by resuming from the Phase 1 checkpoint; the
+# restored shell variables must then preserve exact state through a later save.
+unset CYCLE_DEV_FP CYCLE_STAGING_FP CYCLE_REHEARSAL_FP CYCLE_PROD_FP
+cycle_resume_load
+[[ "$CYCLE_DEV_FP" = "$saved_development_fingerprint" ]]
+[[ "$CYCLE_STAGING_FP" = "$saved_staging_fingerprint" ]]
+[[ "$CYCLE_REHEARSAL_FP" = "$saved_rehearsal_fingerprint" ]]
+[[ "$CYCLE_PROD_FP" = "$saved_production_fingerprint" ]]
+CYCLE_COMPLETED=2
+cycle_save
+[[ "$(cycle_state_get development_fingerprint)" = "$saved_development_fingerprint" ]]
+[[ "$(cycle_state_get staging_fingerprint)" = "$saved_staging_fingerprint" ]]
+[[ "$(cycle_state_get rehearsal_fingerprint)" = "$saved_rehearsal_fingerprint" ]]
+[[ "$(cycle_state_get production_fingerprint)" = "$saved_production_fingerprint" ]]
+cycle_resume_load
+
+cp "$CYCLE_STATE" "$CYCLE_STATE.good"
+awk -F= 'BEGIN{OFS="="} $1=="development_fingerprint" {$2=""} {print}' "$CYCLE_STATE.good" >"$CYCLE_STATE"
+if ( cycle_resume_load ) >"$CYCLE_RUNTIME/missing.out" 2>&1; then exit 10; fi
+grep -q 'Resume state is missing development fingerprint' "$CYCLE_RUNTIME/missing.out"
+mv "$CYCLE_STATE.good" "$CYCLE_STATE"
+printf '\n# changed\n' >>"$CYCLE_RUNTIME/config/application.properties"
+if ( cycle_resume_load ) >"$CYCLE_RUNTIME/changed.out" 2>&1; then exit 11; fi
+grep -q 'Development configuration changed' "$CYCLE_RUNTIME/changed.out"
+EOF
+[[ ! -d "$fingerprint_production/releases" ]]
+[[ ! -d "$fingerprint_production/failed-releases" ]]
+[[ ! -e "$fingerprint_repo/.git/refs/tags/fixture-unused" ]]
+pass "cycle resume restores and preserves fingerprints while rejecting invalid or changed state"
+
 # Build a small, non-running fixture and prove that stage --dry-run traverses
 # preflight without producing a candidate or invoking process control.
 mkdir -p "$TEST_ROOT/staging-images"
