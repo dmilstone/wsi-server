@@ -202,3 +202,28 @@ WSI_RELEASE_AUDIT_LOG
 ```
 
 Credentials are not stored in these scripts.
+
+## Local ingestion dashboard
+
+The dashboard is a separate, deliberately launched Python service. It always
+binds `127.0.0.1:8084`; neither its launcher nor its implementation accepts a
+bind address or port. From the repository root:
+
+```bash
+set -a
+source ops/wsi-ingest.conf
+set +a
+export WSI_OPS_DASHBOARD_PASSWORD='enter a local password interactively'
+./ops/wsi-ops-dashboard
+```
+
+Then open `http://127.0.0.1:8084/` in a browser running on the image-server
+host. Stop it with Ctrl-C. Do not put the password in the repository, shell
+history, process arguments, or logs. `WSI_OPS_AUDIT_FILE` may select an ignored
+local audit file, but cannot change image roots or the listener.
+
+The session cookie is HttpOnly and SameSite=Strict. It intentionally lacks the
+`Secure` attribute because browsers do not send Secure cookies over this
+loopback HTTP endpoint. Secure cookies and HTTPS are mandatory before any
+future remote-administration phase. This local phase must not be exposed using
+a proxy, port forward, alternate bind address, or CORS.
