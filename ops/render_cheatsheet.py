@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the versioned WSI release cheat sheet as a two-page Letter PDF."""
+"""Render the versioned WSI release and ingestion cheat sheet as a Letter PDF."""
 
 import argparse
 from pathlib import Path
@@ -229,6 +229,43 @@ def page_two():
             Spacer(1, 4), P("Exactly one environment marker must exist. A missing, multiple or cross-environment marker prevents startup before the server accepts requests.", small)]
 
 
+def page_three():
+    prepare = [
+        P("1. Start and prepare", h2),
+        codebox(["cd /Users/dm026/Downloads/wsi-server_works",
+                 "source ops/wsi-ingest.conf", "./ops/wsi-ingest status"]),
+        P("Place one complete top-level directory beneath <b>/Users/dm026/wsi-ingest-staging</b>. The directory is one indivisible batch containing every .vsi, companion data directory and associated file.", small),
+        callout("<b>Never move a single .vsi without its companion data.</b> Never reuse a promoted name; use unique names such as 2026-08-05_batch-01 and 2026-08-05_batch-02.", RED, LIGHT_RED),
+        P("2. Seal and observe", h2),
+        codebox(["./ops/wsi-ingest inspect DATASET", "./ops/wsi-ingest seal DATASET   # type SEAL"]),
+        P("Do not modify the directory after sealing. The seal is observation 1. With validated defaults:", small),
+        P("1. Wait at least 60 seconds.<br/>2. Run <b>./ops/wsi-ingest observe DATASET</b>.<br/>3. Wait at least another 60 seconds.<br/>4. Run <b>./ops/wsi-ingest observe DATASET</b>.<br/>5. Run <b>./ops/wsi-ingest history</b>; confirm three observations.", small),
+    ]
+    promote = [
+        P("3. Preflight and promote", h2),
+        codebox(["./ops/wsi-ingest promote --dry-run DATASET", "./ops/wsi-ingest promote --step DATASET", "# type exactly PROMOTE", "./ops/wsi-ingest history", "./ops/wsi-ingest status"]),
+        P("Confirm transaction ID, file count, byte count and absent production destination before --step.", small),
+        callout("<b>Expected completion:</b><br/>verified observations 3<br/>sealed_pending_transactions: 0"),
+        P("Allow production live discovery to complete or use <b>Refresh images</b>. Confirm every expected image appears with expected channels.", small),
+        P("Stop conditions", h2),
+        P("- Scanner/copy activity may continue<br/>- Companion or associated file may be missing<br/>- Dataset changed after seal<br/>- Destination already exists<br/>- File or byte count differs<br/>- Roots missing, nested or on different filesystems<br/>- Wrong environment markers<br/>- Lock held or transaction ambiguous<br/>- Any command reports FAIL", small),
+    ]
+    columns = Table([[prepare, promote]], colWidths=[3.68*inch, 3.68*inch])
+    columns.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (0, -1), 8), ("LEFTPADDING", (1, 0), (1, -1), 8),
+        ("RIGHTPADDING", (1, 0), (1, -1), 0),
+    ]))
+    return [
+        P("Manual WSI ingestion", title),
+        P("Scanner-independent manual readiness + repeated whole-tree observations + atomic promotion", subtitle),
+        callout("<b>Manual readiness gate:</b> Confirm the scanner or copy appears finished before SEAL. Filesystem stability reduces risk but cannot prove acquisition completeness.", AMBER, LIGHT_AMBER),
+        columns,
+        Spacer(1, 5),
+        callout("<b>Never</b> manually copy/merge the sealed batch into production, use --force, or bypass stability. Full safety, atomicity and recovery design: docs/WSI-INGESTION.md", RED, LIGHT_RED),
+    ]
+
+
 def build(output=OUTPUT):
     output = Path(output)
     doc = BaseDocTemplate(str(output), pagesize=letter,
@@ -238,7 +275,7 @@ def build(output=OUTPUT):
                           author="WSI Viewer Operations")
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="normal")
     doc.addPageTemplates(PageTemplate(id="sheet", frames=[frame], onPage=footer))
-    story = page_one() + [PageBreak()] + page_two()
+    story = page_one() + [PageBreak()] + page_two() + [PageBreak()] + page_three()
     doc.build(story)
     print(output)
 

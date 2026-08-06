@@ -14,7 +14,7 @@ h3{margin:14px 0 5px;color:var(--blue);font-size:16px}.grid{display:grid;grid-te
 table{border-collapse:collapse;width:100%;font-size:13px}th{background:var(--navy);color:#fff;text-align:left}th,td{padding:6px 8px;border:1px solid var(--line);vertical-align:top}
 pre{margin:6px 0 8px;padding:9px 12px;background:#101a25;color:#eef6fd;border-radius:5px;white-space:pre-wrap;font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace}
 .gate{border-left:5px solid var(--green);background:#eef8f3;padding:8px 11px;margin:7px 0}.warn{border-left-color:var(--amber);background:#fff7e4}.stop{border-left-color:var(--red);background:#fff0f0}
-ul{margin:6px 0 9px;padding-left:21px}li{margin:3px 0}code{background:#edf1f4;padding:1px 4px;border-radius:3px}.page2{break-before:page}
+ul{margin:6px 0 9px;padding-left:21px}li{margin:3px 0}code{background:#edf1f4;padding:1px 4px;border-radius:3px}.page2,.page3{break-before:page}
 footer{margin-top:20px;border-top:1px solid var(--line);padding-top:8px;color:#667581;font-size:12px}
 @media(max-width:760px){main{margin:0;padding:20px}.grid{grid-template-columns:1fr}}
 @media print{@page{size:letter;margin:.4in}body{background:#fff;font-size:9pt}main{max-width:none;margin:0;padding:0;box-shadow:none}h1{font-size:21pt}h2{font-size:13pt;margin-top:10px}h3{font-size:10.5pt;margin-top:8px}pre{font-size:7pt;padding:5px 7px}table{font-size:7.4pt}.page2{break-before:page}}
@@ -73,4 +73,29 @@ wsi development logs</pre><p>Press <code>Control-C</code> to stop following a lo
 <div class="gate warn"><b>Timing:</b> the image-switch total ends at OpenSeadragon open and may not include completion of all visible tiles. Use browser Network timing and server logs for repeatable delays.</div>
 <div class="gate stop"><b>Privacy:</b> Never copy production slides into development, staging or rehearsal. Verify filenames, metadata, embedded labels, thumbnails, macro images and associated files are deidentified. Never synthesize a missing embedded label/thumbnail from diagnostic pixels.</div>
 <footer>Canonical source: ops/RELEASE-CHEATSHEET.md &bull; Production changes only through explicit verified promotion.</footer></section>
+
+<section class="page3"><h1>Manual WSI ingestion</h1>
+<div class="gate warn"><b>Manual readiness gate:</b> The command is scanner-independent. Confirm the scanner or copy process appears finished before sealing; filesystem stability cannot prove acquisition completeness.</div>
+<h2>1. Start and prepare one indivisible batch</h2>
+<pre>cd /Users/dm026/Downloads/wsi-server_works
+source ops/wsi-ingest.conf
+./ops/wsi-ingest status</pre>
+<p>Place one complete top-level dataset directory beneath <code>/Users/dm026/wsi-ingest-staging</code>. It must contain every <code>.vsi</code>, companion data directory and associated file intended for the batch. Never move a single <code>.vsi</code> without its companion data.</p>
+<p>Never reuse a promoted directory name. Use unique names such as <code>2026-08-05_batch-01</code> and <code>2026-08-05_batch-02</code>.</p>
+<div class="grid"><div><h2>2. Seal and observe</h2><pre>./ops/wsi-ingest inspect DATASET
+./ops/wsi-ingest seal DATASET
+# Type exactly SEAL</pre>
+<p>Do not modify the directory after sealing. The seal is observation 1. With validated defaults:</p>
+<ol><li>Wait at least 60 seconds.</li><li>Run <code>./ops/wsi-ingest observe DATASET</code>.</li><li>Wait at least another 60 seconds.</li><li>Run <code>./ops/wsi-ingest observe DATASET</code>.</li><li>Use history to confirm three observations.</li></ol></div>
+<div><h2>3. Preflight, promote and verify</h2><pre>./ops/wsi-ingest promote --dry-run DATASET
+./ops/wsi-ingest promote --step DATASET
+# Type exactly PROMOTE
+./ops/wsi-ingest history
+./ops/wsi-ingest status</pre>
+<p>Before promotion, confirm transaction ID, file count, byte count and absent production destination.</p>
+<div class="gate"><b>Expected:</b> <code>verified observations 3</code><br><code>sealed_pending_transactions: 0</code></div>
+<p>Allow live discovery to complete or use <b>Refresh images</b>. Confirm every expected image and channel appears.</p></div></div>
+<h2>Stop conditions</h2><div class="grid"><ul><li>Scanner or copy activity may continue</li><li>Companion directory or associated file may be missing</li><li>Dataset changed after seal</li><li>Production destination exists</li><li>File/byte count differs from seal or dry-run</li></ul><ul><li>Roots missing, nested or on different filesystems</li><li>Environment markers are wrong</li><li>Lock held or transaction ambiguous</li><li>Any command reports <code>FAIL</code></li><li>Never use <code>--force</code> or bypass stability</li></ul></div>
+<div class="gate stop">Never manually copy or merge the sealed batch into production. Full design: <code>docs/WSI-INGESTION.md</code>.</div>
+<footer>Canonical source: ops/RELEASE-CHEATSHEET.md &bull; Atomic ingestion moves the complete validated directory once.</footer></section>
 </main></body></html>

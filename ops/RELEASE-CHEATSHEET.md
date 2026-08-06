@@ -198,6 +198,75 @@ failed release is preserved for investigation. Repeat the `8080` browser gate.
 Exactly one marker must exist. A missing, multiple or cross-environment marker
 prevents startup before the server accepts requests.
 
+---
+
+## Manual WSI ingestion
+
+Start every ingestion session with the local environment loaded and a safety
+status check:
+
+```bash
+cd /Users/dm026/Downloads/wsi-server_works
+source ops/wsi-ingest.conf
+./ops/wsi-ingest status
+```
+
+Place one complete top-level dataset directory beneath
+`/Users/dm026/wsi-ingest-staging`. The directory is one indivisible batch: it
+must contain every `.vsi` file, companion data directory and associated file
+intended for that batch. **Never move a single `.vsi` without its companion
+data.** Never reuse a promoted dataset directory name; for multiple batches on
+one date, use unique names such as `2026-08-05_batch-01` and
+`2026-08-05_batch-02`.
+
+### Seal and observe
+
+Confirm manually that the scanner or copy process appears finished, then:
+
+```bash
+./ops/wsi-ingest inspect DATASET
+./ops/wsi-ingest seal DATASET       # type exactly SEAL
+```
+
+Do not modify the directory after sealing. The seal is observation 1. With the
+validated defaults, wait at least 60 seconds, run the first observation, wait
+at least another 60 seconds, and run the second observation:
+
+```bash
+./ops/wsi-ingest observe DATASET
+# wait at least another 60 seconds
+./ops/wsi-ingest observe DATASET
+./ops/wsi-ingest history            # confirm observations 3
+```
+
+### Preflight, promote and verify
+
+```bash
+./ops/wsi-ingest promote --dry-run DATASET
+./ops/wsi-ingest promote --step DATASET  # type exactly PROMOTE
+./ops/wsi-ingest history
+./ops/wsi-ingest status
+```
+
+Before `--step`, confirm the transaction ID, file count, byte count and absent
+production destination. Expected completed state is `verified observations 3`
+and `sealed_pending_transactions: 0`. In the production viewer, allow live
+discovery to complete or use **Refresh images**, then confirm every expected
+image appears with the expected channels.
+
+### Ingestion stop conditions
+
+Stop if scanner/copy activity may continue; a `.vsi` companion or associated
+file may be missing; the dataset changes after seal; the destination exists;
+file count or byte count differs from sealed/dry-run values; roots are missing,
+nested, on different filesystems, or have wrong markers; a lock is held or a
+transaction is ambiguous; or any command reports `FAIL`.
+
+Never manually copy or merge the sealed batch into production. Never use
+`--force` or bypass stability. The command is scanner-independent and therefore
+requires manual readiness confirmation. See `docs/WSI-INGESTION.md` for the
+complete safety, atomicity and recovery design.
+
 ## Safety reminders
 
 - Never copy production slides into development, staging or rehearsal.

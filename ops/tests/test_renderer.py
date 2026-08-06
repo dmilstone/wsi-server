@@ -11,6 +11,8 @@ from pathlib import Path
 OPS = Path(__file__).resolve().parents[1]
 RENDERER = OPS / "render_cheatsheet.py"
 CHECKED_IN = OPS / "WSI-Release-Cheat-Sheet.pdf"
+MARKDOWN = OPS / "RELEASE-CHEATSHEET.md"
+HTML = OPS / "RELEASE-CHEATSHEET.html"
 
 
 def run(*arguments):
@@ -50,7 +52,7 @@ def main():
         assert output.is_file() and output.stat().st_size > 0
         contents = output.read_bytes()
         assert contents.startswith(b"%PDF-")
-        assert len(re.findall(rb"/Type\s*/Page\b", contents)) == 2
+        assert len(re.findall(rb"/Type\s*/Page\b", contents)) == 3
 
         # The full renderer includes both an explicitly bold H3 style and
         # inline <b> markup in a normal DVSans paragraph. Requiring both their
@@ -62,8 +64,17 @@ def main():
         assert 'bold="DVSans-Bold"' in source
         assert 'normal="DVMono"' in source
 
+    synchronized = (source, MARKDOWN.read_text(encoding="utf-8"),
+                    HTML.read_text(encoding="utf-8"))
+    for required in (
+        "Manual WSI ingestion", "source ops/wsi-ingest.conf",
+        "promote --dry-run DATASET", "sealed_pending_transactions: 0",
+        "docs/WSI-INGESTION.md",
+    ):
+        assert all(required in document for document in synchronized)
+
     assert CHECKED_IN.read_bytes() == original
-    print("renderer preflight passed: portable fonts, isolated nonempty two-page PDF")
+    print("renderer preflight passed: portable fonts, isolated nonempty three-page PDF")
     return 0
 
 
