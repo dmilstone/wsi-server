@@ -68,13 +68,13 @@ def safe_candidates(root):
             mode = item.lstat().st_mode
         except OSError:
             continue
-        if item.name != CONTROL and stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
+        if not item.name.startswith("-") and item.name != CONTROL and stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
             result.append(item.name)
     return sorted(result)
 
 
 def valid_selection(name, root):
-    if not name or name in (".", "..") or "/" in name or "\\" in name or Path(name).name != name:
+    if not name or name.startswith("-") or name in (".", "..") or "/" in name or "\\" in name or Path(name).name != name:
         return False
     try:
         st = (root / name).lstat()
@@ -218,9 +218,12 @@ class Handler(BaseHTTPRequestHandler):
                 extra = f'<label>Type {confirm} <input name="confirmation"></label>' if confirm else ''
                 forms.append(f'<form method="post" action="/{action}"><input type="hidden" name="csrf" value="{html.escape(csrf)}"><select name="dataset">{options}</select>{extra}<button>{label}</button></form>')
             links = '<p><a href="/cheatsheet.html">Release cheat sheet HTML</a> · <a href="/cheatsheet.pdf">PDF</a></p>'
-            status = self.server.dashboard.invoke("status")
-            history = self.server.dashboard.invoke("history")
-            safe = html.escape(status.stdout + "\n" + history.stdout) if status.returncode == history.returncode == 0 else "Status unavailable (stop and inspect configuration)."
+            try:
+                status = self.server.dashboard.invoke("status")
+                history = self.server.dashboard.invoke("history")
+                safe = html.escape(status.stdout + "\n" + history.stdout) if status.returncode == history.returncode == 0 else "Status unavailable (stop and inspect configuration)."
+            except subprocess.TimeoutExpired:
+                safe = "Status unavailable (stop and inspect configuration)."
             return self.respond(200, self.page('<pre>'+safe+'</pre>'+''.join(forms)+links, csrf))
         if self.path in ("/cheatsheet.html", "/cheatsheet.pdf"):
             source = HERE / ("RELEASE-CHEATSHEET.html" if self.path.endswith("html") else "WSI-Release-Cheat-Sheet.pdf")

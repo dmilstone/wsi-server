@@ -113,6 +113,7 @@ class DashboardSafetyTests(unittest.TestCase):
 
     def test_candidates_are_direct_real_directories_only(self):
         self.dataset("good")
+        self.dataset("--help")
         (self.root / dashboard.CONTROL).mkdir()
         (self.root / "file").touch()
         os.symlink(self.root / "good", self.root / "linked")
@@ -122,7 +123,7 @@ class DashboardSafetyTests(unittest.TestCase):
     def test_traversal_and_symlinks_are_invalid(self):
         self.dataset()
         os.symlink(self.root / "sample", self.root / "alias")
-        for value in ("", ".", "..", "../sample", "a/b", "a\\b", "alias"):
+        for value in ("", ".", "..", "../sample", "a/b", "a\\b", "alias", "--help", "-sample"):
             self.assertFalse(dashboard.valid_selection(value, self.root), value)
 
     def test_fixed_vector_never_uses_a_shell_or_arbitrary_option(self):
@@ -320,6 +321,29 @@ class HTTPBoundaryTests(unittest.TestCase):
             self.assertEqual(400, request(self.app, "POST", "/inspect", {"csrf": csrf, "dataset": selected}, {"Cookie": cookie})[0])
         self.assertEqual(404, request(self.app, "POST", "/recover", {"csrf": csrf}, {"Cookie": cookie})[0])
         self.runner.assert_not_called()
+
+    def test_option_like_real_directory_is_rejected_before_runner(self):
+        option_directory = self.dataset("--help")
+        _, _, cookie, csrf = login(self.app); self.runner.reset_mock()
+        status, _, _ = request(self.app, "POST", "/inspect",
+                               {"csrf": csrf, "dataset": "--help"}, {"Cookie": cookie})
+        self.assertEqual(400, status)
+        self.runner.assert_not_called()
+        self.assertTrue(option_directory.is_dir())
+        self.assertTrue((option_directory / "slide.svs").is_file())
+        self.assertFalse((self.root / dashboard.CONTROL).exists())
+
+    def test_status_or_history_timeout_returns_safe_stop_message(self):
+        _, _, cookie, _ = login(self.app)
+        for timed_out_command in ("status", "history"):
+            def bounded_runner(argv, **kwargs):
+                if timed_out_command in argv:
+                    raise subprocess.TimeoutExpired(argv, kwargs.get("timeout", 10))
+                return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+            self.app.runner = bounded_runner
+            status, _, body = request(self.app, headers={"Cookie": cookie})
+            self.assertEqual(200, status)
+            self.assertIn(b"Status unavailable (stop and inspect configuration).", body)
 
 
 class DashboardIngestionHTTPTests(unittest.TestCase):
