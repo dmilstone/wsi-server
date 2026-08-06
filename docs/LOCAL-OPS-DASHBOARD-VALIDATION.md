@@ -69,15 +69,23 @@ node --test src/test/js/*.test.js
 git diff --check
 ```
 
-Automated results do not justify remote access. Manual browser validation is a
-separate gate and remains outstanding:
+Automated results do not justify remote access. The local-only manual browser
+gate was completed as follows:
 
 | Browser on image-server host | Login/logout | Status and safe candidates | Inspect/seal/observe/dry-run | Typed promotion fixture | Cheat sheets | Result |
 |---|---|---|---|---|---|---|
-| Chrome | — | — | — | — | — | **Not run** |
-| Safari | — | — | — | — | — | **Not run** |
+| Chrome | Pass | Pass | Pass | Pass | Pass | **Pass** |
+| Safari | Pass | Pass | Pass | Pass | Pass | **Pass** |
 
-During manual fixture validation confirm developer tools show the CSP and
-cookie attributes, no external resources, and no cross-origin requests. Do not
-start services, use real staging/production roots, deploy, back up, tag, or
-recommend remote access based on automated tests.
+Manual browser validation completed on 2026-08-06 using isolated temporary
+staging and production roots and two synthetic two-file datasets. Chrome and
+Safari both passed login/logout, protected cheat-sheet access, status,
+candidate selection, inspection, sealing, repeated observation, dry-run,
+typed atomic promotion, verified history, and privacy checks. No real image
+root was accessed. Safari uses Option-Tab for full-control keyboard navigation
+under its default macOS preference; enabled buttons displayed the expected
+focus styling.
+
+Request-level tests separately verified the CSP, cookie attributes, absence of
+external resources, and absence of cross-origin access. The dashboard remains
+loopback-only; this validation does not approve proxying or remote access.
