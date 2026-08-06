@@ -28,6 +28,33 @@ MAX_BODY = 8192
 CONTROL = ".wsi-ingest-control"
 ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 CSP = "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+DASHBOARD_STYLE = """
+body { font: 16px system-ui, sans-serif; margin: 2rem; }
+form { margin: .75rem 0; }
+form + form { margin-top: 1rem; }
+button {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 2px solid #174b78;
+  border-radius: .3rem;
+  background: #1769aa;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: .45rem .8rem;
+}
+button:not(:disabled):hover { background: #0e578f; border-color: #0a416d; }
+button:not(:disabled):active { background: #093d65; border-color: #062c49; transform: translateY(1px); }
+button:focus-visible { outline: 3px solid #f0a500; outline-offset: 3px; }
+button:disabled {
+  background: #d8dde2;
+  border-color: #9aa3ab;
+  color: #626b73;
+  cursor: not-allowed;
+  opacity: .75;
+}
+"""
 
 
 class Sessions:
@@ -189,7 +216,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def page(self, content, csrf=None):
         logout = (f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{html.escape(csrf)}"><button>Logout</button></form>' if csrf else "")
-        return '<!doctype html><html><head><meta charset="utf-8"><title>Local WSI operations</title></head><body><h1>Local WSI operations</h1>' + logout + content + '</body></html>'
+        return '<!doctype html><html><head><meta charset="utf-8"><title>Local WSI operations</title><style>' + DASHBOARD_STYLE + '</style></head><body><h1>Local WSI operations</h1>' + logout + content + '</body></html>'
 
     def require_session(self):
         sid, item = self.session()

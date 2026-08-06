@@ -345,6 +345,24 @@ class HTTPBoundaryTests(unittest.TestCase):
             self.assertEqual(200, status)
             self.assertIn(b"Status unavailable (stop and inspect configuration).", body)
 
+    def test_dashboard_button_css_is_explicit_self_contained_and_behavior_neutral(self):
+        _, _, cookie, _ = login(self.app); self.runner.reset_mock()
+        status, headers, body = request(self.app, headers={"Cookie": cookie})
+        page = body.decode()
+        self.assertEqual(200, status)
+        for contract in ("button {", "-webkit-appearance: none", "appearance: none",
+                         "background: #1769aa", "color: #fff", "border: 2px solid",
+                         "cursor: pointer", "button:not(:disabled):hover",
+                         "button:not(:disabled):active", "button:focus-visible",
+                         "button:disabled", "cursor: not-allowed", "form + form"):
+            self.assertIn(contract, page)
+        for external in ("<link", "<script", "@import", "url(", "http://", "https://"):
+            self.assertNotIn(external, page.lower())
+        self.assertEqual(dashboard.CSP, headers["content-security-policy"])
+        self.assertEqual([[os.sys.executable, str(OPS / "wsi_ingest.py"), "status"],
+                          [os.sys.executable, str(OPS / "wsi_ingest.py"), "history"]],
+                         [call.args[0] for call in self.runner.call_args_list])
+
 
 class DashboardIngestionHTTPTests(unittest.TestCase):
     def setUp(self):
