@@ -10,6 +10,7 @@ import secrets
 import stat
 import subprocess
 import sys
+import threading
 import time
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -32,21 +33,25 @@ CSP = "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; 
 class Sessions:
     def __init__(self, lifetime=SESSION_SECONDS, clock=time.time):
         self.lifetime, self.clock, self.items = lifetime, clock, {}
+        self.lock = threading.Lock()
 
     def create(self):
         sid, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        self.items[sid] = (self.clock() + self.lifetime, csrf)
+        with self.lock:
+            self.items[sid] = (self.clock() + self.lifetime, csrf)
         return sid, csrf
 
     def get(self, sid):
-        item = self.items.get(sid)
-        if not item or item[0] <= self.clock():
-            self.items.pop(sid, None)
-            return None
-        return item
+        with self.lock:
+            item = self.items.get(sid)
+            if not item or item[0] <= self.clock():
+                self.items.pop(sid, None)
+                return None
+            return item
 
     def remove(self, sid):
-        self.items.pop(sid, None)
+        with self.lock:
+            self.items.pop(sid, None)
 
 
 def password_from_environment():
@@ -85,14 +90,30 @@ class Dashboard:
         self.runner = runner
         self.clock = clock
         self.audit_path = Path(audit_path or os.environ.get("WSI_OPS_AUDIT_FILE", str(HERE / ".wsi-ops-audit.jsonl")))
+        self.audit_lock = threading.Lock()
 
     def audit(self, action, outcome, transaction_id=None):
         event = {"timestamp": self.clock(), "action": action, "outcome": outcome}
         if transaction_id:
             event["transaction_id"] = transaction_id
-        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.audit_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(event, sort_keys=True) + "\n")
+        line = json.dumps(event, sort_keys=True) + "\n"
+        with self.audit_lock:
+            if not self.audit_path.parent.exists():
+                missing = []
+                parent = self.audit_path.parent
+                while not parent.exists():
+                    missing.append(parent); parent = parent.parent
+                for directory in reversed(missing):
+                    directory.mkdir(mode=0o700); os.chmod(directory, 0o700)
+            fd = os.open(self.audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+                data = line.encode()
+                while data:
+                    data = data[os.write(fd, data):]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
     def root(self):
         return Path(os.environ["WSI_INGEST_STAGING_ROOT"]).expanduser().resolve()
@@ -112,8 +133,15 @@ class Dashboard:
                 raise ValueError("invalid dataset selection")
             args.append(dataset)
         # The executable and every option are selected above; dataset validation is repeated by wsi_ingest.py.
-        return self.runner(args, shell=False, input=(confirmation + "\n") if confirmation else None,
-                           text=True, capture_output=True, timeout=120)
+        child_env = dict(os.environ)
+        child_env.pop("WSI_OPS_DASHBOARD_PASSWORD", None)
+        kwargs = {"shell": False, "input": (confirmation + "\n") if confirmation else None,
+                  "text": True, "capture_output": True, "env": child_env}
+        # Only status/history are bounded metadata reads. Whole-tree and durable
+        # operations must finish under the ingester's lock/journal/recovery rules.
+        if action in ("status", "history"):
+            kwargs["timeout"] = 10
+        return self.runner(args, **kwargs)
 
 
 class OpsHTTPServer(ThreadingHTTPServer):

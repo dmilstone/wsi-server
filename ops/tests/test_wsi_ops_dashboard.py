@@ -1,17 +1,63 @@
 import importlib.util
+import io
 import json
 import os
 import stat
 import subprocess
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from http import HTTPStatus
 from pathlib import Path
 from unittest import mock
+from urllib.parse import urlencode
 
 OPS = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("wsi_ops_dashboard", OPS / "wsi_ops_dashboard.py")
 dashboard = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(dashboard)
+
+
+class FakeSocket:
+    def __init__(self, request):
+        self.input = io.BytesIO(request)
+        self.output = io.BytesIO()
+
+    def makefile(self, mode, buffering=None):
+        return self.input if "r" in mode else self.output
+
+    def sendall(self, data): self.output.write(data)
+    def close(self): pass
+
+
+class FakeServer:
+    def __init__(self, app): self.dashboard = app
+
+
+def request(app, method="GET", path="/", form=None, headers=None, peer="127.0.0.1"):
+    body = urlencode(form or {}).encode()
+    values = {"Host": "127.0.0.1:8084", **(headers or {})}
+    if body:
+        values.update({"Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
+    raw = f"{method} {path} HTTP/1.1\r\n".encode()
+    raw += b"".join(f"{key}: {value}\r\n".encode() for key, value in values.items()) + b"\r\n" + body
+    sock = FakeSocket(raw)
+    dashboard.Handler(sock, (peer, 54321), FakeServer(app))
+    head, content = sock.output.getvalue().split(b"\r\n\r\n", 1)
+    lines = head.decode().split("\r\n")
+    response_headers = {}
+    for line in lines[1:]:
+        key, value = line.split(":", 1); response_headers[key.lower()] = value.strip()
+    return int(lines[0].split()[1]), response_headers, content
+
+
+def login(app, password="secret"):
+    status, headers, _ = request(app, "POST", "/login", {"password": password})
+    cookie = headers.get("set-cookie", "").split(";", 1)[0]
+    sid = cookie.split("=", 1)[1] if cookie else ""
+    item = app.sessions.get(sid)
+    return status, headers, cookie, (item[1] if item else None)
 
 
 class DashboardSafetyTests(unittest.TestCase):
@@ -83,12 +129,21 @@ class DashboardSafetyTests(unittest.TestCase):
         self.dataset()
         runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "validation: ok\n", ""))
         app = dashboard.Dashboard(b"secret", Path(self.tmp.name) / "audit", runner=runner)
-        app.invoke("inspect", "sample")
+        with mock.patch.dict(os.environ, {"WSI_OPS_DASHBOARD_PASSWORD": "must-not-leak"}):
+            app.invoke("inspect", "sample")
         args, kwargs = runner.call_args
         self.assertEqual([os.sys.executable, str(OPS / "wsi_ingest.py"), "inspect", "sample"], args[0])
         self.assertIs(kwargs["shell"], False)
+        self.assertNotIn("timeout", kwargs)
+        self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", kwargs["env"])
         self.assertNotIn(";", "".join(args[0]))
         with self.assertRaises(ValueError): app.invoke("recover")
+
+    def test_only_bounded_metadata_commands_have_timeout(self):
+        runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        app = dashboard.Dashboard(b"secret", Path(self.tmp.name) / "audit", runner=runner)
+        for action in ("status", "history"):
+            app.invoke(action); self.assertEqual(10, runner.call_args.kwargs["timeout"])
 
     def test_inspect_uses_existing_ingester_on_fixture(self):
         self.dataset()
@@ -135,33 +190,214 @@ class DashboardSafetyTests(unittest.TestCase):
         for forbidden in ("supersecret", "sample", str(self.root), "slide.svs", "csrf", "session"):
             self.assertNotIn(forbidden, text)
 
-    def test_security_policy_cookie_and_boundary_are_explicit(self):
-        source = (OPS / "wsi_ops_dashboard.py").read_text()
-        self.assertIn("ipaddress.ip_address(self.client_address[0]).is_loopback", source)
-        self.assertIn("ALLOWED_HOSTS", source)
-        self.assertNotIn("X-Forwarded-For", source)
-        self.assertNotIn("Access-Control-Allow-Origin", source)
-        self.assertIn("HttpOnly; SameSite=Strict", source)
-        self.assertIn("form-action 'self'", dashboard.CSP)
-
-    def test_get_routes_contain_no_mutations(self):
-        source = (OPS / "wsi_ops_dashboard.py").read_text()
-        get_body = source.split("def do_GET(self):", 1)[1].split("def do_POST(self):", 1)[0]
-        for mutation in ('invoke("seal"', 'invoke("observe"', 'invoke("promote"', "sessions.remove"):
-            self.assertNotIn(mutation, get_body)
-
     def test_cheatsheets_are_existing_files_not_copies(self):
         self.assertTrue((OPS / "RELEASE-CHEATSHEET.html").is_file())
         self.assertTrue((OPS / "WSI-Release-Cheat-Sheet.pdf").is_file())
         self.assertFalse((OPS / "dashboard-cheatsheet.html").exists())
-        source = (OPS / "wsi_ops_dashboard.py").read_text()
-        self.assertGreater(source.index("auth = self.require_session()"), source.index("def do_GET"))
 
     def test_viewer_link_is_local_only_and_no_credentials(self):
         viewer = (OPS.parent / "src/main/resources/static/index.html").read_text()
         self.assertIn("http://127.0.0.1:8084/", viewer)
         self.assertIn("Available only in a browser running on the image server", viewer)
         self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", viewer)
+
+    def test_audit_concurrency_permissions_and_private_owned_parent(self):
+        audit = Path(self.tmp.name) / "private" / "nested" / "audit.jsonl"
+        app = dashboard.Dashboard(b"secret", audit)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(lambda n: app.audit("inspect", "success", f"tx{n}"), range(80)))
+        lines = audit.read_text().splitlines()
+        self.assertEqual(80, len(lines))
+        self.assertTrue(all(json.loads(line)["action"] == "inspect" for line in lines))
+        self.assertEqual(0o600, stat.S_IMODE(audit.stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(audit.parent.stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(audit.parent.parent.stat().st_mode))
+
+    def test_session_collection_is_safe_under_concurrency(self):
+        sessions = dashboard.Sessions()
+        def cycle(_):
+            sid, _ = sessions.create(); self.assertIsNotNone(sessions.get(sid)); sessions.remove(sid)
+        with ThreadPoolExecutor(max_workers=8) as pool: list(pool.map(cycle, range(100)))
+        self.assertEqual({}, sessions.items)
+
+
+class HTTPBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "staging"; self.prod = Path(self.tmp.name) / "production"
+        self.root.mkdir(); self.prod.mkdir(); (self.prod / ".wsi-environment-production").touch()
+        self.env = mock.patch.dict(os.environ, {
+            "WSI_INGEST_STAGING_ROOT": str(self.root), "WSI_INGEST_PRODUCTION_ROOT": str(self.prod),
+            "WSI_INGEST_MIN_QUIET_SECONDS": "1", "WSI_INGEST_REQUIRED_OBSERVATIONS": "2",
+            "WSI_INGEST_OBSERVATION_INTERVAL_SECONDS": "1", "WSI_OPS_DASHBOARD_PASSWORD": "secret",
+        }, clear=False); self.env.start()
+        self.dataset()
+        self.runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "roots_exist: true\n", ""))
+        self.app = dashboard.Dashboard(b"secret", Path(self.tmp.name) / "audit", runner=self.runner)
+
+    def tearDown(self): self.env.stop(); self.tmp.cleanup()
+
+    def dataset(self, name="sample"):
+        path = self.root / name; path.mkdir(); (path / "slide.svs").write_bytes(b"fixture")
+        old = dashboard.time.time() - 5; os.utime(path / "slide.svs", (old, old)); return path
+
+    def test_unauthenticated_login_authenticated_get_and_logout(self):
+        status, headers, body = request(self.app)
+        self.assertEqual(401, status); self.assertIn(b"password", body.lower())
+        bad, bad_headers, _ = request(self.app, "POST", "/login", {"password": "wrong"})
+        self.assertEqual(401, bad); self.assertNotIn("set-cookie", bad_headers); self.assertEqual({}, self.app.sessions.items)
+        good, headers, cookie, csrf = login(self.app)
+        self.assertEqual(303, good); self.assertIn("HttpOnly", headers["set-cookie"]); self.assertIsNotNone(csrf)
+        status, _, _ = request(self.app, headers={"Cookie": cookie}); self.assertEqual(200, status)
+        status, _, _ = request(self.app, "POST", "/logout", {"csrf": csrf}, {"Cookie": cookie}); self.assertEqual(303, status)
+        status, _, _ = request(self.app, headers={"Cookie": cookie}); self.assertEqual(401, status)
+
+    def test_expired_session_is_rejected(self):
+        now = [1]
+        self.app.sessions = dashboard.Sessions(lifetime=1, clock=lambda: now[0])
+        _, _, cookie, _ = login(self.app); now[0] = 2
+        self.assertEqual(401, request(self.app, headers={"Cookie": cookie})[0])
+
+    def test_every_mutation_requires_correct_csrf_and_get_never_invokes(self):
+        _, _, cookie, csrf = login(self.app)
+        self.runner.reset_mock()
+        for path in ("/inspect", "/seal", "/observe", "/dry-run", "/promote", "/logout"):
+            for token in (None, "incorrect"):
+                form = {"dataset": "sample"}
+                if token is not None: form["csrf"] = token
+                self.assertEqual(403, request(self.app, "POST", path, form, {"Cookie": cookie})[0], path)
+        self.runner.assert_not_called()
+        for path in ("/seal", "/observe", "/dry-run", "/promote"):
+            self.assertEqual(404, request(self.app, "GET", path, headers={"Cookie": cookie})[0])
+        self.runner.assert_not_called()
+
+    def test_cheatsheets_require_authentication_and_serve_after_login(self):
+        for path, content_type in (("/cheatsheet.html", "text/html"), ("/cheatsheet.pdf", "application/pdf")):
+            self.assertEqual(401, request(self.app, path=path)[0])
+            _, _, cookie, _ = login(self.app)
+            status, headers, body = request(self.app, path=path, headers={"Cookie": cookie})
+            self.assertEqual(200, status); self.assertIn(content_type, headers["content-type"]); self.assertTrue(body)
+
+    def test_host_peer_proxy_and_response_security_headers(self):
+        for host in ("evil.example:8084", "localhost", "127.0.0.1:80", "[::1]:8084"):
+            self.assertEqual(403, request(self.app, headers={"Host": host})[0])
+        for proxy_headers in ({}, {"X-Forwarded-For": "127.0.0.1"}, {"Forwarded": "for=127.0.0.1;host=localhost:8084"}):
+            self.assertEqual(403, request(self.app, headers=proxy_headers, peer="192.0.2.5")[0])
+        status, headers, _ = request(self.app)
+        self.assertEqual(401, status)
+        self.assertEqual(dashboard.CSP, headers["content-security-policy"])
+        self.assertEqual("no-store", headers["cache-control"])
+        self.assertEqual("nosniff", headers["x-content-type-options"])
+        self.assertEqual("no-referrer", headers["referrer-policy"])
+        self.assertNotIn("access-control-allow-origin", headers)
+
+    def test_typed_confirmations_block_subprocess(self):
+        _, _, cookie, csrf = login(self.app); self.runner.reset_mock()
+        for path, wrong in (("/seal", "seal"), ("/promote", "promote")):
+            status, _, _ = request(self.app, "POST", path, {"csrf": csrf, "dataset": "sample", "confirmation": wrong}, {"Cookie": cookie})
+            self.assertEqual(400, status)
+        self.runner.assert_not_called()
+
+    def test_all_allowlisted_dashboard_argv_and_no_durable_timeout(self):
+        _, _, cookie, csrf = login(self.app); self.runner.reset_mock()
+        expected = {"/inspect": ["inspect"], "/seal": ["seal"], "/observe": ["observe"],
+                    "/dry-run": ["promote", "--dry-run"], "/promote": ["promote", "--step"]}
+        for path, command in expected.items():
+            form = {"csrf": csrf, "dataset": "sample"}
+            if path == "/seal": form["confirmation"] = "SEAL"
+            if path == "/promote": form["confirmation"] = "PROMOTE"
+            self.assertEqual(200, request(self.app, "POST", path, form, {"Cookie": cookie})[0])
+            args, kwargs = self.runner.call_args
+            self.assertEqual([os.sys.executable, str(OPS / "wsi_ingest.py"), *command, "sample"], args[0])
+            self.assertFalse(kwargs["shell"]); self.assertNotIn("timeout", kwargs)
+            self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", kwargs["env"])
+        self.assertEqual(5, self.runner.call_count)
+
+    def test_invalid_selections_and_actions_never_reach_subprocess(self):
+        os.symlink(self.root / "sample", self.root / "alias")
+        _, _, cookie, csrf = login(self.app); self.runner.reset_mock()
+        for selected in ("../sample", "alias", "sample --unsafe", "missing"):
+            self.assertEqual(400, request(self.app, "POST", "/inspect", {"csrf": csrf, "dataset": selected}, {"Cookie": cookie})[0])
+        self.assertEqual(404, request(self.app, "POST", "/recover", {"csrf": csrf}, {"Cookie": cookie})[0])
+        self.runner.assert_not_called()
+
+
+class DashboardIngestionHTTPTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "staging"; self.prod = Path(self.tmp.name) / "production"
+        self.root.mkdir(); self.prod.mkdir(); (self.prod / ".wsi-environment-production").touch()
+        self.env = mock.patch.dict(os.environ, {
+            "WSI_INGEST_STAGING_ROOT": str(self.root), "WSI_INGEST_PRODUCTION_ROOT": str(self.prod),
+            "WSI_INGEST_MIN_QUIET_SECONDS": "1", "WSI_INGEST_REQUIRED_OBSERVATIONS": "2",
+            "WSI_INGEST_OBSERVATION_INTERVAL_SECONDS": "1", "WSI_OPS_DASHBOARD_PASSWORD": "never-child",
+        }, clear=False); self.env.start()
+        self.calls = []
+        def runner(argv, **kwargs):
+            self.calls.append((list(argv), dict(kwargs)))
+            return subprocess.run(argv, **kwargs)
+        self.audit = Path(self.tmp.name) / "audit.jsonl"
+        self.app = dashboard.Dashboard(b"secret", self.audit, runner=runner)
+        _, _, self.cookie, self.csrf = login(self.app)
+
+    def tearDown(self): self.env.stop(); self.tmp.cleanup()
+
+    def dataset(self, name):
+        path = self.root / name; path.mkdir(); (path / "slide.svs").write_bytes(b"fixture")
+        old = dashboard.time.time() - 5; os.utime(path / "slide.svs", (old, old)); return path
+
+    def post(self, path, name, confirmation=None):
+        form = {"csrf": self.csrf, "dataset": name}
+        if confirmation is not None: form["confirmation"] = confirmation
+        return request(self.app, "POST", path, form, {"Cookie": self.cookie})
+
+    def ready(self, name):
+        self.assertEqual(200, self.post("/seal", name, "SEAL")[0])
+        state = self.root / dashboard.CONTROL / f"{name}.json"
+        data = json.loads(state.read_text()); data["observations"][0]["time"] -= 2
+        state.write_text(json.dumps(data))
+        self.assertEqual(200, self.post("/observe", name)[0])
+        data = json.loads(state.read_text()); data["seal_time"] -= 2
+        state.write_text(json.dumps(data))
+
+    def test_inspect_seal_observe_dry_run_and_verified_promotion(self):
+        self.dataset("promotable")
+        status, _, body = self.post("/inspect", "promotable")
+        self.assertEqual(200, status); self.assertIn(b"regular_files: 1", body)
+        self.ready("promotable")
+        self.assertEqual(200, self.post("/dry-run", "promotable")[0])
+        self.assertTrue((self.root / "promotable").exists())
+        self.assertEqual(200, self.post("/promote", "promotable", "PROMOTE")[0])
+        self.assertFalse((self.root / "promotable").exists()); self.assertTrue((self.prod / "promotable").is_dir())
+        receipt = self.root / dashboard.CONTROL / "promotable.receipt.json"
+        self.assertEqual("verified", json.loads(receipt.read_text())["phase"])
+        history = subprocess.run([os.sys.executable, str(OPS / "wsi_ingest.py"), "history"],
+                                 text=True, capture_output=True, env={k:v for k,v in os.environ.items() if k != "WSI_OPS_DASHBOARD_PASSWORD"})
+        self.assertEqual(0, history.returncode); self.assertIn("verified observations 2", history.stdout)
+        for argv, kwargs in self.calls:
+            self.assertFalse(kwargs["shell"]); self.assertNotIn("timeout", kwargs)
+            self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", kwargs["env"])
+            self.assertEqual(str(OPS / "wsi_ingest.py"), argv[1])
+
+    def test_collision_is_fail_closed_and_not_retried(self):
+        source = self.dataset("collision")
+        self.ready("collision")
+        destination = self.prod / "collision"; destination.mkdir(); (destination / "existing.svs").write_bytes(b"existing")
+        before = len(self.calls)
+        status, _, _ = self.post("/promote", "collision", "PROMOTE")
+        self.assertEqual(409, status); self.assertEqual(before + 1, len(self.calls))
+        self.assertTrue(source.is_dir()); self.assertEqual(b"fixture", (source / "slide.svs").read_bytes())
+        self.assertEqual(b"existing", (destination / "existing.svs").read_bytes())
+        self.assertFalse((self.root / dashboard.CONTROL / "collision.receipt.json").exists())
+
+    def test_audit_from_http_excludes_all_sensitive_values(self):
+        self.dataset("private-dataset")
+        self.post("/inspect", "private-dataset")
+        text = self.audit.read_text()
+        for forbidden in ("secret", "never-child", "private-dataset", str(self.root), str(self.prod),
+                          "slide.svs", self.cookie, self.csrf, "wsi_ops_session"):
+            self.assertNotIn(forbidden, text)
+
 
 
 if __name__ == "__main__": unittest.main()

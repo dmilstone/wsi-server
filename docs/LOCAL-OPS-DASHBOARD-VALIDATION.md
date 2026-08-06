@@ -15,17 +15,25 @@ sessions expire after 15 minutes. Every mutation is POST-only and must supply
 the session CSRF value. Logout deletes the session. The loopback HTTP cookie is
 HttpOnly, SameSite=Strict, and path `/`. It cannot safely be marked Secure in
 this HTTP-only phase; a remote phase would require HTTPS and Secure cookies.
+Session access and audit appends are independently locked for the threaded
+server. The audit file and a dashboard-created parent use modes 0600 and 0700.
 
 ## Ingestion integration
 
 The dashboard invokes only `python3 ops/wsi_ingest.py` with a fixed list of
-known subcommands/options, `shell=False`, captured output, and a timeout. It
+known subcommands/options, `shell=False`, captured output, and an explicit
+filtered environment. It
 validates a selected direct-child directory first; `wsi_ingest.py` validates it
 again. Therefore scanner independence, seal/readiness observations, quiet
 time, manifest checks, lock, journal, receipt, recovery, collision refusal,
 and the native atomic no-replace rename remain in the existing implementation.
 There is no background worker, retry, copy/delete fallback, terminal, arbitrary
 option, or root override.
+
+Only the bounded `status` and `history` metadata commands have a timeout.
+Inspect, seal, observe, dry-run, and promotion are allowed to finish under the
+ingester's locking, journal, and recovery rules and are never retried. The
+explicit child environment removes `WSI_OPS_DASHBOARD_PASSWORD`.
 
 The authenticated page provides privacy-safe status/history, eligible direct
 children, inspect aggregates, typed `SEAL`, observe, promotion dry-run, typed
