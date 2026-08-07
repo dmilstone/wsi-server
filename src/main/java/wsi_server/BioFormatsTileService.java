@@ -13,6 +13,7 @@ import ome.units.quantity.Length;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 import wsi_server.api.AssociatedImageSeriesDto;
 import wsi_server.api.ChannelDisplayDto;
 import wsi_server.api.DisplayResponse;
@@ -53,6 +54,7 @@ public class BioFormatsTileService {
     private final MultichannelTileRenderer multichannelRenderer;
     private final ExportReaderFactory exportReaderFactory;
     private final ExportValidator exportValidator;
+    private final DiagnosticTiming timing;
     private final Map<String, ImageContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, AssociatedImages> associatedImageCache = new ConcurrentHashMap<>();
 
@@ -60,15 +62,25 @@ public class BioFormatsTileService {
                                  FluorescenceTileRenderer fluorescenceRenderer,
                                  MultichannelTileRenderer multichannelRenderer,
                                  ExportReaderFactory exportReaderFactory,
-                                 ExportValidator exportValidator) {
+                                 ExportValidator exportValidator,
+                                 @Value("${wsi.diagnostic-timing.enabled:false}") boolean diagnosticTimingEnabled) {
         this.registry = registry;
         this.fluorescenceRenderer = fluorescenceRenderer;
         this.multichannelRenderer = multichannelRenderer;
         this.exportReaderFactory = exportReaderFactory;
         this.exportValidator = exportValidator;
+        this.timing = new DiagnosticTiming(diagnosticTimingEnabled);
     }
 
     public ImageListResponse listImages() {
+        try {
+            return timing.measure("image_list", "snapshot_read", "registry", this::listImagesMeasured);
+        } catch (Exception impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    private ImageListResponse listImagesMeasured() {
         List<ImageSummary> images = registry.getImages().stream()
                 .map(entry -> new ImageSummary(entry.id(), entry.name(), entry.relativePath(), entry.folder()))
                 .toList();
@@ -76,6 +88,10 @@ public class BioFormatsTileService {
     }
 
     public ImageMetadataResponse getMetadata(String imageId, HttpSession session) throws Exception {
+        return timing.measure("metadata", "request_total", imageId, () -> getMetadataMeasured(imageId, session));
+    }
+
+    private ImageMetadataResponse getMetadataMeasured(String imageId, HttpSession session) throws Exception {
         ImageContext context = context(imageId);
         SessionDisplayState state = sessionState(session, imageId, context);
         synchronized (context) {
@@ -107,14 +123,23 @@ public class BioFormatsTileService {
     }
 
     public List<AssociatedImageSeriesDto> getAssociatedImageSeries(String imageId) throws Exception {
+        return timing.measure("associated_catalog", "request_total", imageId,
+                () -> getAssociatedImageSeriesMeasured(imageId));
+    }
+
+    private List<AssociatedImageSeriesDto> getAssociatedImageSeriesMeasured(String imageId) throws Exception {
         ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
-        BufferedImageReader reader = createAssociatedImageReader();
+        BufferedImageReader reader = timing.measure("associated_catalog", "reader_create", imageId,
+                this::createAssociatedImageReader);
         try {
-            reader.setId(entry.path().toString());
+            timing.measure("associated_catalog", "set_id_metadata_parse", imageId,
+                    () -> reader.setId(entry.path().toString()));
             MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
                     ? retrieve : null;
-            int label = chooseLabelSeries(reader);
-            int macro = chooseMacroSeries(reader);
+            int[] associated = timing.measure("associated_catalog", "series_search", imageId,
+                    () -> new int[]{chooseLabelSeries(reader), chooseMacroSeries(reader)});
+            int label = associated[0];
+            int macro = associated[1];
             List<AssociatedImageSeriesDto> result = new ArrayList<>();
             for (int series = 0; series < reader.getSeriesCount(); series++) {
                 reader.setSeries(series);
@@ -137,7 +162,8 @@ public class BioFormatsTileService {
     }
 
     public byte[] getSlideLabel(String imageId) throws Exception {
-        AssociatedImages images = associatedImages(imageId);
+        AssociatedImages images = timing.measure("embedded_label", "request_total", imageId,
+                () -> associatedImages(imageId));
         if (images.label() == null) {
             throw new IllegalStateException("This slide does not contain a readable label associated image.");
         }
@@ -145,7 +171,8 @@ public class BioFormatsTileService {
     }
 
     public byte[] getDisplayThumbnail(String imageId, HttpSession session) throws Exception {
-        AssociatedImages images = associatedImages(imageId);
+        AssociatedImages images = timing.measure("embedded_macro", "request_total", imageId,
+                () -> associatedImages(imageId));
         if (images.macro() == null) {
             throw new IllegalStateException("This slide does not contain a macro/overview associated image.");
         }
@@ -159,21 +186,37 @@ public class BioFormatsTileService {
             cached = associatedImageCache.get(imageId);
             if (cached != null) return cached;
             ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
-            BufferedImageReader reader = createAssociatedImageReader();
+            BufferedImageReader reader = timing.measure("embedded_bundle", "reader_create", imageId,
+                    this::createAssociatedImageReader);
             try {
-                reader.setId(entry.path().toString());
+                timing.measure("embedded_bundle", "set_id_metadata_parse", imageId,
+                        () -> reader.setId(entry.path().toString()));
                 byte[] label = null;
                 byte[] macro = null;
                 try {
-                    int labelSeries = chooseLabelSeries(reader);
-                    reader.setSeries(labelSeries);
-                    label = encodePng(scaleToFit(reader.openImage(0), 1000, 420));
+                    int labelSeries = timing.measure("embedded_label", "series_search", imageId,
+                            () -> chooseLabelSeries(reader));
+                    if (labelSeries >= 0) {
+                        reader.setSeries(labelSeries);
+                        BufferedImage source = timing.measure("embedded_label", "open_bytes_decode", imageId,
+                                () -> reader.openImage(0));
+                        BufferedImage rendered = timing.measure("embedded_label", "render_scale", imageId,
+                                () -> scaleToFit(source, 1000, 420));
+                        label = timing.measure("embedded_label", "png_encode", imageId,
+                                () -> encodePng(rendered));
+                    }
                 } catch (Exception ignored) { }
                 try {
-                    int macroSeries = chooseMacroSeries(reader);
+                    int macroSeries = timing.measure("embedded_macro", "series_search", imageId,
+                            () -> chooseMacroSeries(reader));
                     if (macroSeries >= 0) {
                         reader.setSeries(macroSeries);
-                        macro = encodePng(scaleToFit(reader.openImage(0), 1200, 900));
+                        BufferedImage source = timing.measure("embedded_macro", "open_bytes_decode", imageId,
+                                () -> reader.openImage(0));
+                        BufferedImage rendered = timing.measure("embedded_macro", "render_scale", imageId,
+                                () -> scaleToFit(source, 1200, 900));
+                        macro = timing.measure("embedded_macro", "png_encode", imageId,
+                                () -> encodePng(rendered));
                     }
                 } catch (Exception ignored) { }
                 cached = new AssociatedImages(label, macro);
@@ -202,8 +245,6 @@ public class BioFormatsTileService {
                 ? retrieve : null;
         int bestNamed = -1;
         long bestNamedArea = -1;
-        int bestFallback = -1;
-        long bestFallbackArea = -1;
 
         for (int series = 0; series < upper; series++) {
             reader.setSeries(series);
@@ -215,18 +256,15 @@ public class BioFormatsTileService {
 
             boolean label = name.contains("label") || name.contains("barcode");
             boolean macro = name.contains("macro") || name.contains("overview")
-                    || name.contains("thumbnail") || name.contains("preview");
+                    || name.contains("thumbnail") || name.contains("preview")
+                    || reader.isThumbnailSeries();
 
             if (macro && !label && area > bestNamedArea) {
                 bestNamed = series;
                 bestNamedArea = area;
             }
-            if (!label && area > bestFallbackArea) {
-                bestFallback = series;
-                bestFallbackArea = area;
-            }
         }
-        return bestNamed >= 0 ? bestNamed : bestFallback;
+        return bestNamed;
     }
 
     private String seriesName(MetadataRetrieve metadata, int series) {
@@ -241,16 +279,12 @@ public class BioFormatsTileService {
 
     private int chooseLabelSeries(BufferedImageReader reader) {
         int upper = Math.min(ImageContext.FLUORESCENCE_SERIES, reader.getSeriesCount());
-        if (upper <= 0) {
-            throw new IllegalStateException("This slide does not expose a label associated-image series.");
-        }
+        if (upper <= 0) return -1;
 
         MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
                 ? retrieve : null;
         int bestNamed = -1;
         long bestNamedArea = -1;
-        int bestFallback = -1;
-        double bestFallbackScore = Double.NEGATIVE_INFINITY;
 
         for (int series = 0; series < upper; series++) {
             reader.setSeries(series);
@@ -267,18 +301,8 @@ public class BioFormatsTileService {
                 bestNamedArea = area;
             }
 
-            double longSide = Math.max(width, height);
-            double shortSide = Math.min(width, height);
-            double aspect = longSide / Math.max(1.0, shortSide);
-            double score = aspect * 10.0 - Math.log1p(area);
-            if (score > bestFallbackScore) {
-                bestFallbackScore = score;
-                bestFallback = series;
-            }
         }
-        if (bestNamed >= 0) return bestNamed;
-        if (bestFallback >= 0) return bestFallback;
-        throw new IllegalStateException("This slide does not expose a readable label associated-image series.");
+        return bestNamed;
     }
 
     private BufferedImage scaleToFit(BufferedImage source, int maxWidth, int maxHeight) {
@@ -640,7 +664,7 @@ public class BioFormatsTileService {
         synchronized (contexts) {
             existing = contexts.get(imageId);
             if (existing == null) {
-                existing = new ImageContext(entry);
+                existing = new ImageContext(entry, timing);
                 contexts.put(imageId, existing);
             }
             return existing;

@@ -34,23 +34,28 @@ final class ImageContext implements AutoCloseable {
     private final boolean rgb;
     private final String[] channelLabels;
 
-    ImageContext(ImageRegistry.ImageEntry entry) throws Exception {
+    ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing) throws Exception {
         this.entry = entry;
-        this.reader = new ImageReader();
+        String imageId = entry.id();
+        this.reader = timing.measure("metadata", "reader_create", imageId, ImageReader::new);
         reader.setMetadataStore(MetadataTools.createOMEXMLMetadata());
         reader.setFlattenedResolutions(false);
-        reader.setId(entry.path().toString());
-        reader.setSeries(FLUORESCENCE_SERIES);
+        timing.measure("metadata", "set_id_metadata_parse", imageId,
+                () -> reader.setId(entry.path().toString()));
+        timing.measure("metadata", "series_select", imageId,
+                () -> reader.setSeries(FLUORESCENCE_SERIES));
         this.rgb = reader.getPixelType() == FormatTools.UINT8 && (reader.isRGB() || reader.getSizeC() >= 3);
         validatePixelType();
-        this.channelLabels = initializeChannelLabels();
+        this.channelLabels = timing.measure("metadata", "metadata_extract", imageId,
+                this::initializeChannelLabels);
         this.automaticWindows = new DisplayWindow[reader.getSizeC()];
         if (rgb) {
             for (int channel = 0; channel < automaticWindows.length; channel++) {
                 automaticWindows[channel] = new DisplayWindow(0, 255);
             }
         } else {
-            initializeSlideDisplayWindows();
+            timing.measure("metadata", "automatic_window_open_bytes", imageId,
+                    this::initializeSlideDisplayWindows);
         }
     }
 
