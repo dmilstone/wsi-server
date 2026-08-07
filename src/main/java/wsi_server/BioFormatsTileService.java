@@ -132,14 +132,12 @@ public class BioFormatsTileService {
         BufferedImageReader reader = timing.measure("associated_catalog", "reader_create", imageId,
                 this::createAssociatedImageReader);
         try {
-            timing.measure("associated_catalog", "set_id_metadata_parse", imageId,
+            timing.measureVoid("associated_catalog", "set_id_metadata_parse", imageId,
                     () -> reader.setId(entry.path().toString()));
             MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
                     ? retrieve : null;
-            int[] associated = timing.measure("associated_catalog", "series_search", imageId,
-                    () -> new int[]{chooseLabelSeries(reader), chooseMacroSeries(reader)});
-            int label = associated[0];
-            int macro = associated[1];
+            AssociatedImageSelection associated = timing.measure("associated_catalog", "series_search", imageId,
+                    () -> selectAssociatedImages(reader, metadata));
             List<AssociatedImageSeriesDto> result = new ArrayList<>();
             for (int series = 0; series < reader.getSeriesCount(); series++) {
                 reader.setSeries(series);
@@ -152,8 +150,8 @@ public class BioFormatsTileService {
                         reader.getResolutionCount(),
                         reader.isRGB(),
                         reader.isThumbnailSeries(),
-                        series == label,
-                        series == macro));
+                        associated.isLabel(series),
+                        associated.isOverview(series)));
             }
             return result;
         } finally {
@@ -165,7 +163,7 @@ public class BioFormatsTileService {
         AssociatedImages images = timing.measure("embedded_label", "request_total", imageId,
                 () -> associatedImages(imageId));
         if (images.label() == null) {
-            throw new IllegalStateException("This slide does not contain a readable label associated image.");
+            throw new IllegalStateException(AssociatedImageSelection.MISSING_LABEL_MESSAGE);
         }
         return images.label();
     }
@@ -174,7 +172,7 @@ public class BioFormatsTileService {
         AssociatedImages images = timing.measure("embedded_macro", "request_total", imageId,
                 () -> associatedImages(imageId));
         if (images.macro() == null) {
-            throw new IllegalStateException("This slide does not contain a macro/overview associated image.");
+            throw new IllegalStateException(AssociatedImageSelection.MISSING_OVERVIEW_MESSAGE);
         }
         return images.macro();
     }
@@ -189,13 +187,19 @@ public class BioFormatsTileService {
             BufferedImageReader reader = timing.measure("embedded_bundle", "reader_create", imageId,
                     this::createAssociatedImageReader);
             try {
-                timing.measure("embedded_bundle", "set_id_metadata_parse", imageId,
+                timing.measureVoid("embedded_bundle", "set_id_metadata_parse", imageId,
                         () -> reader.setId(entry.path().toString()));
                 byte[] label = null;
                 byte[] macro = null;
+                AssociatedImageSelection selection = AssociatedImageSelection.select(List.of());
                 try {
-                    int labelSeries = timing.measure("embedded_label", "series_search", imageId,
-                            () -> chooseLabelSeries(reader));
+                    MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
+                            ? retrieve : null;
+                    selection = timing.measure("embedded_bundle", "series_search", imageId,
+                            () -> selectAssociatedImages(reader, metadata));
+                } catch (Exception ignored) { }
+                try {
+                    int labelSeries = selection.labelSeries();
                     if (labelSeries >= 0) {
                         reader.setSeries(labelSeries);
                         BufferedImage source = timing.measure("embedded_label", "open_bytes_decode", imageId,
@@ -207,8 +211,7 @@ public class BioFormatsTileService {
                     }
                 } catch (Exception ignored) { }
                 try {
-                    int macroSeries = timing.measure("embedded_macro", "series_search", imageId,
-                            () -> chooseMacroSeries(reader));
+                    int macroSeries = selection.overviewSeries();
                     if (macroSeries >= 0) {
                         reader.setSeries(macroSeries);
                         BufferedImage source = timing.measure("embedded_macro", "open_bytes_decode", imageId,
@@ -237,34 +240,15 @@ public class BioFormatsTileService {
         return new BufferedImageReader(baseReader);
     }
 
-    private int chooseMacroSeries(BufferedImageReader reader) {
+    private AssociatedImageSelection selectAssociatedImages(BufferedImageReader reader, MetadataRetrieve metadata) {
         int upper = Math.min(ImageContext.FLUORESCENCE_SERIES, reader.getSeriesCount());
-        if (upper <= 0) return -1;
-
-        MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
-                ? retrieve : null;
-        int bestNamed = -1;
-        long bestNamedArea = -1;
-
+        List<AssociatedImageSelection.SeriesIdentity> identities = new ArrayList<>();
         for (int series = 0; series < upper; series++) {
             reader.setSeries(series);
-            long width = reader.getSizeX();
-            long height = reader.getSizeY();
-            if (width <= 0 || height <= 0) continue;
-            long area = width * height;
-            String name = seriesName(metadata, series).toLowerCase();
-
-            boolean label = name.contains("label") || name.contains("barcode");
-            boolean macro = name.contains("macro") || name.contains("overview")
-                    || name.contains("thumbnail") || name.contains("preview")
-                    || reader.isThumbnailSeries();
-
-            if (macro && !label && area > bestNamedArea) {
-                bestNamed = series;
-                bestNamedArea = area;
-            }
+            identities.add(new AssociatedImageSelection.SeriesIdentity(series, seriesName(metadata, series),
+                    reader.getSizeX(), reader.getSizeY(), reader.isThumbnailSeries()));
         }
-        return bestNamed;
+        return AssociatedImageSelection.select(identities);
     }
 
     private String seriesName(MetadataRetrieve metadata, int series) {
@@ -275,34 +259,6 @@ public class BioFormatsTileService {
         } catch (RuntimeException ignored) {
             return "";
         }
-    }
-
-    private int chooseLabelSeries(BufferedImageReader reader) {
-        int upper = Math.min(ImageContext.FLUORESCENCE_SERIES, reader.getSeriesCount());
-        if (upper <= 0) return -1;
-
-        MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
-                ? retrieve : null;
-        int bestNamed = -1;
-        long bestNamedArea = -1;
-
-        for (int series = 0; series < upper; series++) {
-            reader.setSeries(series);
-            long width = reader.getSizeX();
-            long height = reader.getSizeY();
-            if (width <= 0 || height <= 0) continue;
-
-            String name = seriesName(metadata, series).toLowerCase();
-            boolean namedLabel = name.contains("label") || name.contains("barcode")
-                    || name.contains("slide label");
-            long area = width * height;
-            if (namedLabel && area > bestNamedArea) {
-                bestNamed = series;
-                bestNamedArea = area;
-            }
-
-        }
-        return bestNamed;
     }
 
     private BufferedImage scaleToFit(BufferedImage source, int maxWidth, int maxHeight) {

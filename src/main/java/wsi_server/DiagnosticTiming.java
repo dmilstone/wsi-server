@@ -58,7 +58,7 @@ public final class DiagnosticTiming {
         }
     }
 
-    public void measure(String category, String stage, String imageId, CheckedRunnable operation)
+    public void measureVoid(String category, String stage, String imageId, CheckedRunnable operation)
             throws Exception {
         measure(category, stage, imageId, () -> { operation.run(); return null; });
     }

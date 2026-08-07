@@ -37,12 +37,13 @@ final class ImageContext implements AutoCloseable {
     ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing) throws Exception {
         this.entry = entry;
         String imageId = entry.id();
-        this.reader = timing.measure("metadata", "reader_create", imageId, ImageReader::new);
+        DiagnosticTiming.CheckedSupplier<ImageReader> readerFactory = ImageReader::new;
+        this.reader = timing.measure("metadata", "reader_create", imageId, readerFactory);
         reader.setMetadataStore(MetadataTools.createOMEXMLMetadata());
         reader.setFlattenedResolutions(false);
-        timing.measure("metadata", "set_id_metadata_parse", imageId,
+        timing.measureVoid("metadata", "set_id_metadata_parse", imageId,
                 () -> reader.setId(entry.path().toString()));
-        timing.measure("metadata", "series_select", imageId,
+        timing.measureVoid("metadata", "series_select", imageId,
                 () -> reader.setSeries(FLUORESCENCE_SERIES));
         this.rgb = reader.getPixelType() == FormatTools.UINT8 && (reader.isRGB() || reader.getSizeC() >= 3);
         validatePixelType();
@@ -54,7 +55,7 @@ final class ImageContext implements AutoCloseable {
                 automaticWindows[channel] = new DisplayWindow(0, 255);
             }
         } else {
-            timing.measure("metadata", "automatic_window_open_bytes", imageId,
+            timing.measureVoid("metadata", "automatic_window_open_bytes", imageId,
                     this::initializeSlideDisplayWindows);
         }
     }

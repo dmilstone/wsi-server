@@ -18,8 +18,8 @@ class DiagnosticTimingTests {
         assertEquals("result", timing.measure("metadata", "fake_set_id", "private/name.vsi", () -> {
             Thread.sleep(12); return "result";
         }));
-        timing.measure("metadata", "fake_set_id", "private/name.vsi", () -> Thread.sleep(2));
-        timing.measure("metadata", "fake_set_id", "other-patient.ndpi", () -> Thread.sleep(2));
+        timing.measureVoid("metadata", "fake_set_id", "private/name.vsi", () -> Thread.sleep(2));
+        timing.measureVoid("metadata", "fake_set_id", "other-patient.ndpi", () -> Thread.sleep(2));
 
         assertEquals(List.of("process_cold", "image_warm", "image_cold"),
                 events.stream().map(DiagnosticTiming.Event::state).toList());
@@ -37,7 +37,7 @@ class DiagnosticTimingTests {
         CountDownLatch release = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {
             var task = (java.util.concurrent.Callable<Void>) () -> {
-                timing.measure("embedded_label", "fake_open_bytes", "secret-slide", () -> {
+                timing.measureVoid("embedded_label", "fake_open_bytes", "secret-slide", () -> {
                     entered.countDown();
                     release.await();
                 });

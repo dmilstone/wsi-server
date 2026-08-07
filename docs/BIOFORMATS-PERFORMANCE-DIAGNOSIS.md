@@ -46,8 +46,8 @@ diagnostic run. It is false by default. Logger `wsi.performance` emits one struc
 | `image_list` | `snapshot_read` |
 | `metadata` | `request_total`, `reader_create`, `set_id_metadata_parse`, `series_select`, `metadata_extract`, `automatic_window_open_bytes` |
 | `associated_catalog` | `request_total`, `reader_create`, `set_id_metadata_parse`, `series_search` |
-| `embedded_bundle` | `reader_create`, `set_id_metadata_parse` |
-| `embedded_label`, `embedded_macro` | `request_total`, `series_search`, `open_bytes_decode`, `render_scale`, `png_encode` |
+| `embedded_bundle` | `reader_create`, `set_id_metadata_parse`, `series_search` |
+| `embedded_label`, `embedded_macro` | `request_total`, `open_bytes_decode`, `render_scale`, `png_encode` |
 
 Every record contains category, stage, `process_cold`, `image_cold`, `image_warm`, or `concurrent_first` state,
 a truncated SHA-256 correlation identifier, elapsed milliseconds, outcome, exception class on failure, and an
