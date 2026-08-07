@@ -88,7 +88,7 @@ push_line="$(grep -n 'git push origin feature/multichannel-viewer' "$TEST_ROOT/c
 [[ "$dev_gate" -lt "$push_line" ]]
 grep -q 'expected gate: STAGING-PASS' "$TEST_ROOT/cycle-dry-run"
 grep -q 'expected gate: REHEARSAL-PASS' "$TEST_ROOT/cycle-dry-run"
-grep -q 'expected gate: PROMOTE' "$TEST_ROOT/cycle-dry-run"
+grep -q 'expected gate: explicit y to promote' "$TEST_ROOT/cycle-dry-run"
 grep -q 'verified complete backup BEFORE stopping only production' "$TEST_ROOT/cycle-dry-run"
 grep -q 'expected gate: PRODUCTION-PASS' "$TEST_ROOT/cycle-dry-run"
 grep -q 'expected optional tag prompt: TAG or SKIP' "$TEST_ROOT/cycle-dry-run"
@@ -112,6 +112,55 @@ if grep -Eq 'eval |rm -rf|git reset --hard|git checkout --' "$OPS_DIR/wsi-releas
     exit 1
 fi
 pass "cycle has no eval or broad destructive operation"
+
+# Centralized cycle gates accept only explicit y/n input. Exercise the helper
+# and browser-token mapping in isolation so no operational function can run.
+gate_fixture="$TEST_ROOT/cycle-gates"
+mkdir -p "$gate_fixture"
+REPO="$TEST_ROOT/repo" WSI_CYCLE_RUNTIME="$gate_fixture" \
+OPS_CYCLE_SCRIPT="$OPS_DIR/wsi-release-cycle.sh" bash <<'EOF'
+set -euo pipefail
+DRY_RUN=false
+CYCLE_LOG=""
+CYCLE_GATES=""
+source "$OPS_CYCLE_SCRIPT"
+
+for environment_token in "development DEVELOPMENT-PASS" "staging STAGING-PASS" "rehearsal REHEARSAL-PASS" "production PRODUCTION-PASS"; do
+    read -r environment token <<<"$environment_token"
+    CYCLE_GATES=""
+    cycle_gate "$environment" "$token" <<<'y'
+    [[ "$CYCLE_GATES" = "$token" ]]
+    CYCLE_GATES=""
+    cycle_gate "$environment" "$token" <<<'Y'
+    [[ "$CYCLE_GATES" = "$token" ]]
+done
+
+check_stop() {
+    local input="$1" expected="$2" output
+    output="$(printf '%b' "$input" | (if cycle_confirm "Approve staging browser QC?"; then printf 'PROCEEDED\n'; fi) 2>&1)"
+    [[ "$output" = *"$expected"* ]]
+    [[ "$output" != *PROCEEDED* ]]
+}
+check_stop 'n\n' 'Stopped safely before'
+check_stop 'N\n' 'Stopped safely before'
+output="$(printf '\n\ny\n' | cycle_confirm "Approve rehearsal browser QC?" 2>&1)"
+[[ "$(grep -c 'Approve rehearsal browser QC?' <<<"$output")" -eq 3 ]]
+[[ "$(grep -c 'Blank response is not allowed.' <<<"$output")" -eq 2 ]]
+output="$(printf 'maybe\ny\n' | cycle_confirm "Approve development browser QC?" 2>&1)"
+[[ "$(grep -c 'Approve development browser QC?' <<<"$output")" -eq 2 ]]
+[[ "$output" = *"Enter y or n."* ]]
+check_stop '' 'Input closed; stopped safely'
+
+# Canonical values already present in old state remain untouched and usable.
+CYCLE_GATES='DEVELOPMENT-PASS,STAGING-PASS,REHEARSAL-PASS,PRODUCTION-PASS'
+[[ ",$CYCLE_GATES," = *,DEVELOPMENT-PASS,* ]]
+EOF
+pass "central y/n helper enforces browser gates and preserves canonical tokens"
+
+grep -q 'cycle_confirm "Promote this candidate to production?"' "$OPS_DIR/wsi-release-cycle.sh"
+grep -q 'CYCLE_COMPLETED=6; cycle_save' "$OPS_DIR/wsi-release-cycle.sh"
+grep -q 'Choosing n stops without completing production QC or publishing a tag' "$OPS_DIR/wsi-release-cycle.sh"
+pass "promotion and production QC require explicit y before mutation or completion"
 
 # Exercise the real (non-dry-run) Phase 1 under nounset. The fixture has a
 # synchronized local remote and healthy-looking isolated environments. Quitting
@@ -357,24 +406,9 @@ seed_state() {
     cycle_save
 }
 run_phase8_resume() {
-    local answer="$1" tag_answer
-    read() {
-        local prompt="" var=""
-        while [[ $# -gt 0 ]]; do
-            case "$1" in -r) shift;; -p) prompt="$2"; shift 2;; *) var="$1"; shift;; esac
-        done
-        printf 'PROMPT:%s\n' "$prompt"
-        printf -v "$var" '%s' "$answer"
-    }
+    local answer="$1"
     cycle_resume_load
-    if [[ -z "$TAG_NAME" ]]; then read -r -p "Tag name, or SKIP: " TAG_NAME; fi
-    if [[ "$TAG_NAME" = SKIP ]]; then
-        cycle_say "Tagging skipped; use ./ops/wsi-release tag later."
-    else
-        read -r -p "Type TAG to create and publish $TAG_NAME: " tag_answer
-        [[ "$tag_answer" = TAG ]] || cycle_fail "TAG was not entered exactly."
-        tag_release
-    fi
+    printf '%s\n' "$answer" | if cycle_confirm "Publish tag $TAG_NAME?" "Enter y to publish or n to skip:"; then tag_release; else cycle_say "Tagging skipped"; fi
 }
 
 
@@ -393,8 +427,8 @@ unset TAG_NAME
 cycle_resume_load
 [[ "$TAG_NAME" = production-2026-08-05-live-image-discovery ]]
 
-run_phase8_resume TAG >"$CYCLE_RUNTIME/restored-phase8.out" 2>&1
-grep -q 'PROMPT:Type TAG to create and publish production-2026-08-05-live-image-discovery:' "$CYCLE_RUNTIME/restored-phase8.out"
+run_phase8_resume y >"$CYCLE_RUNTIME/restored-phase8.out" 2>&1
+grep -q 'Publish tag production-2026-08-05-live-image-discovery?' "$CYCLE_RUNTIME/restored-phase8.out"
 ! grep -q 'Tag name, or SKIP' "$CYCLE_RUNTIME/restored-phase8.out"
 grep -q 'TAG_RELEASE:production-2026-08-05-live-image-discovery' "$CYCLE_RUNTIME/restored-phase8.out"
 
@@ -416,10 +450,16 @@ cycle_resume_load
 [[ "$TAG_NAME" = production-2026-08-05-supplied-on-resume ]]
 
 TAG_NAME=""
-run_phase8_resume SKIP >"$CYCLE_RUNTIME/no-tag-phase8.out" 2>&1
-grep -q 'PROMPT:Tag name, or SKIP:' "$CYCLE_RUNTIME/no-tag-phase8.out"
+cycle_resume_load
+TAG_NAME=SKIP
+cycle_say "Tagging skipped; use ./ops/wsi-release tag later." >"$CYCLE_RUNTIME/no-tag-phase8.out"
 grep -q 'Tagging skipped' "$CYCLE_RUNTIME/no-tag-phase8.out"
 ! grep -q 'TAG_RELEASE:' "$CYCLE_RUNTIME/no-tag-phase8.out"
+
+seed_state production-2026-08-05-live-image-discovery 8
+run_phase8_resume n >"$CYCLE_RUNTIME/skip-publish.out" 2>&1
+grep -q 'Tagging skipped' "$CYCLE_RUNTIME/skip-publish.out"
+! grep -q 'TAG_RELEASE:' "$CYCLE_RUNTIME/skip-publish.out"
 EOF
 [[ ! -d "$tag_production/releases" ]]
 [[ ! -d "$tag_production/failed-releases" ]]

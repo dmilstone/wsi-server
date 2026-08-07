@@ -80,8 +80,24 @@ cycle_command() {
     if $VERBOSE; then "$@" 2>&1 | tee -a "$CYCLE_LOG"; else "$@" >>"$CYCLE_LOG" 2>&1; fi || cycle_fail "$description failed."
     cycle_say "  PASS $description"
 }
+cycle_confirm() {
+    local action="$1" instruction="${2:-Enter y to proceed or n to stop safely:}" answer
+    while true; do
+        printf '%s\n%s ' "$action" "$instruction"
+        if ! IFS= read -r answer; then
+            cycle_say "Input closed; stopped safely before: $action"
+            return 1
+        fi
+        case "$answer" in
+            y|Y) return 0 ;;
+            n|N) cycle_say "Stopped safely before: $action"; return 1 ;;
+            "") cycle_say "Blank response is not allowed." ;;
+            *) cycle_say "Enter y or n." ;;
+        esac
+    done
+}
 cycle_gate() {
-    local environment="$1" token="$2" answer
+    local environment="$1" token="$2" action
     cycle_say "Browser QC — $environment"
     cycle_say "  [ ] correct banner/title; login; image discovery/opening/switching"
     cycle_say "  [ ] tiles, pan/zoom, channel and display controls"
@@ -90,8 +106,12 @@ cycle_gate() {
     cycle_say "  [ ] console has no application Promise rejection or unexpected 403/400/500"
     cycle_say "  [ ] no sustained unexpected performance delay"
     $DRY_RUN && { cycle_say "  expected gate: $token"; return; }
-    read -r -p "Type $token: " answer || cycle_fail "Input closed at $token gate."
-    [[ "$answer" = "$token" ]] || cycle_fail "$token was not entered exactly."
+    action="Approve $environment browser QC?"
+    if [[ "$environment" = production ]]; then
+        cycle_say "  Choosing n stops without completing production QC or publishing a tag."
+        cycle_say "  It does not roll back the installed candidate; resume this cycle or use the existing rollback command."
+    fi
+    cycle_confirm "$action" || exit 0
     CYCLE_GATES="${CYCLE_GATES:+$CYCLE_GATES,}$token"
 }
 cycle_phase() { CYCLE_PHASE="$2"; cycle_say "PHASE $1 — $2"; }
@@ -199,7 +219,7 @@ cycle_resume_load() {
     fi
 }
 cycle_release() {
-    local branch remote production_before answer tag_answer free_kb needed_kb candidate dev_pid staging_pid rehearsal_pid
+    local branch remote production_before free_kb needed_kb candidate dev_pid staging_pid rehearsal_pid
     if $DRY_RUN; then
         CYCLE_ID="dry-run-$(date +%Y%m%d-%H%M%S)"; CYCLE_HEAD="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf unavailable)"
         cycle_say "WSI release cycle DRY-RUN (no filesystem, Git, process, backup, push or tag changes)"
@@ -259,10 +279,10 @@ cycle_release() {
         free_kb="$(df -Pk "$PRODUCTION" | awk 'NR==2{print $4}')"; needed_kb="$(du -sk "$PRODUCTION" | awk '{print $1}')"; [[ "$free_kb" -gt "$needed_kb" ]] || cycle_fail "Insufficient space for the complete production backup."
         CYCLE_BACKUP="$PRODUCTION/releases/$(date +%Y%m%d-%H%M%S)"
         cycle_say "  candidate commit: $CYCLE_HEAD"; cycle_say "  build: $(cat "$STAGING/app/BUILD_TAG.txt")"; cycle_say "  SHA-256: $CYCLE_SHA"; cycle_say "  source: $STAGING/app/wsi-server.jar"; cycle_say "  production target: $PRODUCTION/app/wsi-server.jar"; cycle_say "  backup: $CYCLE_BACKUP"
-        read -r -p "Type PROMOTE: " answer || cycle_fail "Input closed at PROMOTE gate."; [[ "$answer" = PROMOTE ]] || cycle_fail "PROMOTE was not entered exactly."
+        cycle_confirm "Promote this candidate to production?" || exit 0
         CYCLE_GATES="${CYCLE_GATES:+$CYCLE_GATES,}PROMOTE"; CYCLE_COMPLETED=6; cycle_save
     }
-    $DRY_RUN && { cycle_say "  expected identities and backup-space checks"; cycle_say "  expected gate: PROMOTE"; }
+    $DRY_RUN && { cycle_say "  expected identities and backup-space checks"; cycle_say "  expected gate: explicit y to promote"; }
     cycle_phase 7 "production backup and promotion"
     $DRY_RUN || [[ "$CYCLE_COMPLETED" -ge 7 ]] || {
         dev_pid="$(listener_pid 8081)"; staging_pid="$(listener_pid 8082)"; rehearsal_pid="$(listener_pid 8083)"
@@ -280,9 +300,12 @@ cycle_release() {
     cycle_phase 8 "production browser QC and optional tag"
     $DRY_RUN || [[ "$CYCLE_COMPLETED" -ge 8 ]] || { cycle_gate production PRODUCTION-PASS; CYCLE_COMPLETED=8; cycle_save; cycle_say "RELEASE COMPLETED SUCCESSFULLY"; }
     if $DRY_RUN; then cycle_gate production PRODUCTION-PASS; cycle_say "  expected optional tag prompt: TAG or SKIP"; return; fi
-    if [[ -z "$TAG_NAME" ]]; then read -r -p "Tag name, or SKIP: " TAG_NAME; fi
+    if [[ -z "$TAG_NAME" ]]; then
+        read -r -p "Tag name, or SKIP: " TAG_NAME || { cycle_say "Input closed; tagging skipped safely."; return 0; }
+        [[ "$TAG_NAME" = SKIP ]] || { validate_tag_name "$TAG_NAME"; cycle_save; }
+    fi
     if [[ "$TAG_NAME" = SKIP ]]; then cycle_say "Tagging skipped; use ./ops/wsi-release tag later."; else
-        read -r -p "Type TAG to create and publish $TAG_NAME: " tag_answer; [[ "$tag_answer" = TAG ]] || cycle_fail "TAG was not entered exactly."
+        cycle_confirm "Publish tag $TAG_NAME?" "Enter y to publish or n to skip:" || { cycle_say "Tagging skipped; use ./ops/wsi-release tag later."; return 0; }
         ASSUME_YES=true; tag_release
         [[ "$(git -C "$REPO" rev-parse "$TAG_NAME^{}")" = "$CYCLE_HEAD" ]] || cycle_fail "Local tag target verification failed."
         remote="$(git -C "$REPO" ls-remote "$CYCLE_REMOTE" "refs/tags/$TAG_NAME^{}" | awk 'NR==1{print $1}')"; [[ "$remote" = "$CYCLE_HEAD" ]] || cycle_fail "Remote tag target verification failed."

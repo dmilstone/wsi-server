@@ -69,7 +69,8 @@ def main():
     for required in (
         "Manual WSI ingestion", "source ops/wsi-ingest.conf",
         "promote --dry-run DATASET", "sealed_pending_transactions: 0",
-        "docs/WSI-INGESTION.md",
+        "docs/WSI-INGESTION.md", "./ops/wsi-release cycle --tag NAME",
+        "Development browser QC: y/n", "Production browser QC: y/n",
     ):
         assert all(required in document for document in synchronized)
 

@@ -31,18 +31,17 @@ footer{margin-top:20px;border-top:1px solid var(--line);padding-top:8px;color:#6
 <tr><td>Production</td><td>8080</td><td>Frozen validated JAR; no banner</td><td>Authorized clinical images and production annotations</td></tr>
 </tbody></table>
 <h2>Normal monitored release</h2>
-<div class="grid"><section><pre>./ops/wsi-release cycle --step
-./ops/wsi-release cycle
+<div class="grid"><section><pre>./ops/wsi-release cycle --tag NAME
 ./ops/wsi-release cycle --dry-run
-./ops/wsi-release cycle --resume --step</pre>
-<div class="gate"><b>Recommended:</b> one <code>cycle --step</code> command displays each material action and runs the complete safe workflow.</div>
+./ops/wsi-release cycle --resume</pre>
+<div class="gate"><b>Normal:</b> <code>cycle --tag NAME</code> runs safe phases in order. Diagnostic <code>--step</code> commands are listed under Troubleshooting modes.</div>
 <p>Cycle performs repository/environment preflight, all development tests, candidate publication, staging, exact-artifact rehearsal, final preflight, verified production backup/promotion, production QC and optional tagging.</p></section>
-<section><h2>Exact human gates</h2><pre>DEVELOPMENT-PASS
-STAGING-PASS
-REHEARSAL-PASS
-PROMOTE
-PRODUCTION-PASS
-TAG  (or SKIP)</pre>
+<section><h2>Exact human gates</h2><pre>Development browser QC: y/n
+Staging browser QC: y/n
+Rehearsal browser QC: y/n
+Promotion: y/n
+Production browser QC: y/n
+Publish saved tag: y/n</pre>
 <div class="gate warn">Browser success is never inferred. Promotion cannot begin until the complete backup is verified. A failed production start prints rollback guidance and never rolls back silently.</div></section></div>
 <div class="gate"><b>Browser checklist at every environment:</b> banner/title, login, image discovery/open/switch, tiles/pan/zoom, channels/display, full annotation naming/edit/delete/persistence and global Show/Hide, exports, isolated annotation directory, clean console/network, and no sustained unexpected delay.</div>
 
@@ -62,7 +61,9 @@ wsi development logs</pre><p>Press <code>Control-C</code> to stop following a lo
 <h2>Rollback</h2><pre>./ops/wsi-release history
 ./ops/wsi-release rollback --step
 ./ops/wsi-release verify production</pre><div class="gate warn">Rollback restores code/configuration but never restores, replaces or overwrites annotations.</div></div>
-<div><h2>Troubleshooting modes</h2><pre>./ops/wsi-release cycle --resume --verbose
+<div><h2>Troubleshooting modes</h2><pre>./ops/wsi-release cycle --step
+./ops/wsi-release cycle --resume --step
+./ops/wsi-release cycle --resume --verbose
 ./ops/wsi-release stage --dry-run
 ./ops/wsi-release stage --step --verbose
 ./ops/wsi-release rehearse --dry-run
