@@ -47,7 +47,11 @@ diagnostic run. It is false by default. Logger `wsi.performance` emits one struc
 | `metadata` | `request_total`, `reader_create`, `set_id_metadata_parse`, `series_select`, `metadata_extract`, `automatic_window_open_bytes` |
 | `associated_catalog` | `request_total`, `reader_create`, `set_id_metadata_parse`, `series_search` |
 | `embedded_bundle` | `reader_create`, `set_id_metadata_parse`, `series_search` |
-| `embedded_label`, `embedded_macro` | `request_total`, `open_bytes_decode`, `render_scale`, `png_encode` |
+| `embedded_label`, `embedded_macro` | `request_total`, strategy-specific decode stage, `render_scale`, `png_encode` |
+
+The associated decode stage is now strategy-specific: `full_open_image_decode` identifies the default
+`BufferedImageReader.openImage(0)` path, while `thumbnail_open_image_decode` identifies the explicitly opted-in
+candidate `BufferedImageReader.openThumbImage(0)` path. Timing remains disabled by default.
 
 Every record contains category, stage, `process_cold`, `image_cold`, `image_warm`, or `concurrent_first` state,
 a truncated SHA-256 correlation identifier, elapsed milliseconds, outcome, exception class on failure, and an
@@ -103,7 +107,31 @@ Real-file NDPI validation remains outstanding. A later explicitly approved NDPI 
 procedure and keep process-cold, first-image, same-image warm, concurrent-first, and different-image cohorts
 separate.
 
-No optimization is included here. Based on the VSI evidence, the next focused change should address the
+### Experimental thumbnail comparison
+
+The project uses Bio-Formats 7.3.1. Its `BufferedImageReader.openThumbImage(plane)` is the typed-image wrapper
+over the reader's `openThumbBytes(plane)` behavior and uses `getThumbSizeX()`/`getThumbSizeY()` dimensions. The
+candidate therefore uses `openThumbImage(0)` rather than duplicating Bio-Formats byte-to-`BufferedImage`
+conversion. It first requires positive thumbnail dimensions that are smaller on at least one axis than the
+already-selected genuine associated series. If not, candidate mode fails explicitly; it never invokes the full
+decode as a fallback. `AssociatedImageSelection` remains the only selection authority, and the decoder cannot
+search for a different series.
+
+The default is `wsi.associated-images.decode-strategy=full`. For an isolated comparison only, set
+`WSI_ASSOCIATED_IMAGE_DECODE_STRATEGY=bio-formats-thumbnail`. Do not make that setting a production default.
+
+For a later comparison, obtain explicit approval for a copied, deidentified fixture and dedicated temporary
+image root; use an empty temporary annotation root. Verify the fixture and roots without opening any real image
+or annotation root. For each strategy, restart the isolated localhost-only process before every run and collect
+at least three process-cold label requests, process-cold macro requests, and request totals with diagnostic timing
+enabled. Record selected series numbers/names from the associated-series catalog separately from timing output,
+confirm the same label and overview identities under both strategies, and compare rendered pixels side-by-side
+at native output size for orientation, crop, color, legibility, and clinically relevant visual fidelity. Keep
+the full and candidate cohorts separate; a candidate failure is a result, not permission to fall back. Report
+medians and ranges, fixture/host/JVM/Bio-Formats context, and limitations. Do not make a speed or fidelity claim
+until that genuine VSI comparison is complete. Real-file NDPI validation remains outstanding.
+
+No proven optimization is included here. Based on the VSI evidence, the next focused change should address the
 associated-image pipeline rather than metadata parsing: replace the existing cache behavior with a bounded,
 per-image single-flight design keyed by a source fingerprint, invalidated after dataset change and live discovery.
 It must prove byte/resource bounds, concurrent-request safety, no sharing of non-thread-safe Bio-Formats readers,

@@ -55,6 +55,8 @@ public class BioFormatsTileService {
     private final ExportReaderFactory exportReaderFactory;
     private final ExportValidator exportValidator;
     private final DiagnosticTiming timing;
+    private final AssociatedImageDecodeStrategy associatedDecodeStrategy;
+    private final AssociatedImageDecoder associatedImageDecoder = new AssociatedImageDecoder();
     private final Map<String, ImageContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, AssociatedImages> associatedImageCache = new ConcurrentHashMap<>();
 
@@ -63,13 +65,15 @@ public class BioFormatsTileService {
                                  MultichannelTileRenderer multichannelRenderer,
                                  ExportReaderFactory exportReaderFactory,
                                  ExportValidator exportValidator,
-                                 @Value("${wsi.diagnostic-timing.enabled:false}") boolean diagnosticTimingEnabled) {
+                                 @Value("${wsi.diagnostic-timing.enabled:false}") boolean diagnosticTimingEnabled,
+                                 @Value("${wsi.associated-images.decode-strategy:full}") String associatedDecodeStrategy) {
         this.registry = registry;
         this.fluorescenceRenderer = fluorescenceRenderer;
         this.multichannelRenderer = multichannelRenderer;
         this.exportReaderFactory = exportReaderFactory;
         this.exportValidator = exportValidator;
         this.timing = new DiagnosticTiming(diagnosticTimingEnabled);
+        this.associatedDecodeStrategy = AssociatedImageDecodeStrategy.fromConfiguration(associatedDecodeStrategy);
     }
 
     public ImageListResponse listImages() {
@@ -201,27 +205,27 @@ public class BioFormatsTileService {
                 try {
                     int labelSeries = selection.labelSeries();
                     if (labelSeries >= 0) {
-                        reader.setSeries(labelSeries);
-                        BufferedImage source = timing.measure("embedded_label", "open_bytes_decode", imageId,
-                                () -> reader.openImage(0));
+                        BufferedImage source = decodeAssociated(reader, labelSeries, "embedded_label", imageId);
                         BufferedImage rendered = timing.measure("embedded_label", "render_scale", imageId,
                                 () -> scaleToFit(source, 1000, 420));
                         label = timing.measure("embedded_label", "png_encode", imageId,
                                 () -> encodePng(rendered));
                     }
-                } catch (Exception ignored) { }
+                } catch (Exception failure) {
+                    if (associatedDecodeStrategy == AssociatedImageDecodeStrategy.BIO_FORMATS_THUMBNAIL) throw failure;
+                }
                 try {
                     int macroSeries = selection.overviewSeries();
                     if (macroSeries >= 0) {
-                        reader.setSeries(macroSeries);
-                        BufferedImage source = timing.measure("embedded_macro", "open_bytes_decode", imageId,
-                                () -> reader.openImage(0));
+                        BufferedImage source = decodeAssociated(reader, macroSeries, "embedded_macro", imageId);
                         BufferedImage rendered = timing.measure("embedded_macro", "render_scale", imageId,
                                 () -> scaleToFit(source, 1200, 900));
                         macro = timing.measure("embedded_macro", "png_encode", imageId,
                                 () -> encodePng(rendered));
                     }
-                } catch (Exception ignored) { }
+                } catch (Exception failure) {
+                    if (associatedDecodeStrategy == AssociatedImageDecodeStrategy.BIO_FORMATS_THUMBNAIL) throw failure;
+                }
                 cached = new AssociatedImages(label, macro);
                 associatedImageCache.put(imageId, cached);
                 return cached;
@@ -232,6 +236,21 @@ public class BioFormatsTileService {
     }
 
     private record AssociatedImages(byte[] label, byte[] macro) { }
+
+    private BufferedImage decodeAssociated(BufferedImageReader reader, int selectedSeries,
+                                           String category, String imageId) throws Exception {
+        AssociatedImageDecoder.Reader adapter = new AssociatedImageDecoder.Reader() {
+            public void setSeries(int series) { reader.setSeries(series); }
+            public int sizeX() { return reader.getSizeX(); }
+            public int sizeY() { return reader.getSizeY(); }
+            public int thumbnailSizeX() { return reader.getThumbSizeX(); }
+            public int thumbnailSizeY() { return reader.getThumbSizeY(); }
+            public BufferedImage openFullImage() throws Exception { return reader.openImage(0); }
+            public BufferedImage openThumbnailImage() throws Exception { return reader.openThumbImage(0); }
+        };
+        return timing.measure(category, associatedDecodeStrategy.timingStage(), imageId,
+                () -> associatedImageDecoder.decode(adapter, selectedSeries, associatedDecodeStrategy));
+    }
 
     private BufferedImageReader createAssociatedImageReader() {
         ImageReader baseReader = new ImageReader();
