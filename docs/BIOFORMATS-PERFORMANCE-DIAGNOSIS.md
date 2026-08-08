@@ -64,17 +64,49 @@ transparent disabled results. Compare event `elapsed_ms` by category/stage; do n
 wall time as Bio-Formats throughput. Synthetic sleeps cannot reproduce JVM class loading, native filesystem
 caches, vendor parsers, compression, file layout, storage latency, or actual PNG complexity.
 
-## Later approved real-file benchmark
+## Bounded deidentified VSI observation
 
-Only after explicit approval, place nonclinical/deidentified VSI and NDPI fixtures in a dedicated temporary
-image root (never the production image or annotation roots), configure a separate local process to that root,
-and enable timing. For each format: (1) restart and capture initial viewer metadata; (2) repeat the same request;
-(3) open the overview and repeat; (4) issue simultaneous first requests after another restart; (5) request a
-different fixture without restart. Record several runs and compare medians and ranges stage-by-stage, keeping
-process-cold, first-image, same-image warm, concurrent-first, and different-image cohorts separate. Verify the
-associated-series catalog before accepting label or overview output.
+An explicitly approved validation used one copied, deidentified compound VSI acquisition and its companion
+directory in a dedicated private temporary image root, with a separate empty temporary annotation root. The
+fixture aggregate was 9 regular files and 745,510,137 bytes, with no symbolic links and no identity in its
+filename, embedded label/barcode, or metadata. The isolated diagnostic process was bound only to
+`127.0.0.1:18085`, used temporary credentials, enabled diagnostic timing, and was stopped afterward. The source
+fixture and all production/development image and annotation roots remained untouched. The viewer opened with
+the expected channels and displayed genuine embedded label and overview images; no diagnostic pixels were
+substituted.
 
-Real VSI/NDPI validation remains outstanding. The next focused change should first measure those approved files,
-then consider per-image single-flight/context lifecycle and a bounded, source-fingerprint-invalidated metadata or
-embedded-byte cache. Any such work must prove discovery invalidation, memory bounds, reader isolation and
-thread-safety, concurrency, and unchanged failures before claiming improvement.
+The following milliseconds are a bounded three-run observation of this one VSI fixture, not a performance
+guarantee for other files, formats, storage, hosts, JVM states, or Bio-Formats versions:
+
+| Process-cold measurement | Run 1 | Run 2 | Run 3 | Median | Range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Metadata `request_total` | 375.438500 | 455.428375 | 444.029208 | 444.029208 | 375.438500–455.428375 |
+| Metadata `reader_create` | 113.877584 | 182.334375 | 148.746042 | 148.746042 | 113.877584–182.334375 |
+| Metadata `set_id_metadata_parse` | 40.607167 | 39.606834 | 47.282750 | 40.607167 | 39.606834–47.282750 |
+| Metadata `automatic_window_open_bytes` | 178.651000 | 176.458333 | 174.449459 | 176.458333 | 174.449459–178.651000 |
+| Embedded label `open_bytes_decode` | 1276.367708 | 1510.635958 | 1321.158541 | 1321.158541 | 1276.367708–1510.635958 |
+| Embedded macro `open_bytes_decode` | 2414.520958 | 2454.057709 | 2589.063042 | 2454.057709 | 2414.520958–2589.063042 |
+| Embedded request/shared bundle total | 3837.502916 | 4111.127833 | 4065.132625 | 4065.132625 | 3837.502916–4111.127833 |
+
+In the same process, warm metadata totals were 0.049875 ms and 0.023334 ms. Cached label and macro request totals
+were each 0.004583 ms, with no repeated reader creation, `setId`, pixel decode, scaling, or PNG encoding. For this
+fixture, cold embedded-image latency was dominated by genuine associated-pixel decoding—particularly macro
+decoding—not series search, scaling, PNG encoding, or `setId`.
+
+The effectively instantaneous repeat requests demonstrate the behavior of the existing same-process associated
+byte cache. That cache remains unbounded and has no source-change invalidation, so it is **not** an acceptable
+final cache design and these warm observations are not evidence that its lifecycle is safe.
+
+## Remaining validation and next optimization
+
+Real-file NDPI validation remains outstanding. A later explicitly approved NDPI run should use the same isolated
+procedure and keep process-cold, first-image, same-image warm, concurrent-first, and different-image cohorts
+separate.
+
+No optimization is included here. Based on the VSI evidence, the next focused change should address the
+associated-image pipeline rather than metadata parsing: replace the existing cache behavior with a bounded,
+per-image single-flight design keyed by a source fingerprint, invalidated after dataset change and live discovery.
+It must prove byte/resource bounds, concurrent-request safety, no sharing of non-thread-safe Bio-Formats readers,
+no stale results, and unchanged missing-image and decode-failure behavior. Any attempt to reduce cold decode time
+(for example, independently reading genuine associated images) must first provide before/after measurements and
+the same concurrency and reader-isolation proofs; it must never substitute or synthesize diagnostic pixels.
