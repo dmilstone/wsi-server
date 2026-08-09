@@ -208,6 +208,8 @@ assert.match(toolbar, /z-index:\s*16/);
 assert.match(rule(".annotation-overlay"), /z-index:\s*10/);
 assert.match(rule(".annotation-name-layer"), /z-index:\s*11/);
 assert.match(rule(".image-lightbox"), /z-index:\s*40/);
+assert.match(rule(".export-error-dialog"), /z-index:\s*50/);
+assert.match(html, /id="export-error-dialog"/);
 assert.match(rule(".environment-banner"), /z-index:\s*2147483647/);
 assert.match(html, /id="environment-banner"/);
 

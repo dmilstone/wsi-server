@@ -672,6 +672,23 @@
         .image-lightbox-close:hover { background:rgba(255,255,255,.16); }
         .image-lightbox-stage { min-width:0; min-height:0; display:grid; place-items:center; overflow:auto; }
         .image-lightbox-image { display:block; max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain; background:#05070a; }
+        .export-error-dialog {
+            position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+            padding: 20px; background: rgba(0, 0, 0, .72); backdrop-filter: blur(6px);
+        }
+        .export-error-dialog[hidden] { display: none; }
+        .export-error-dialog-panel {
+            width: min(440px, 100%); padding: 20px 20px 16px; border-radius: var(--radius);
+            border: 1px solid var(--border-strong); background: var(--surface-raised); box-shadow: var(--shadow);
+        }
+        .export-error-dialog-title { margin: 0 0 10px; font-size: 16px; color: var(--text); }
+        .export-error-dialog-message { margin: 0 0 16px; color: var(--text-secondary); font-size: 14px; line-height: 1.45; }
+        .export-error-dialog-actions { display: flex; justify-content: flex-end; }
+        .export-error-dialog-close {
+            min-width: 72px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-strong);
+            background: var(--accent); color: #fff; cursor: pointer; font-weight: 600;
+        }
+        .export-error-dialog-close:hover { background: var(--accent-hover); }
         .discovery-controls { display:flex; align-items:center; gap:8px; margin-top:8px; }
         .discovery-controls .action { padding:5px 9px; }
         .discovery-status { font-size:11px; color:var(--muted); }
@@ -818,6 +835,15 @@
                 <img id="image-lightbox-image" class="image-lightbox-image" alt="">
             </div>
         </section>
+        <div id="export-error-dialog" class="export-error-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="export-error-dialog-title">
+            <div class="export-error-dialog-panel">
+                <h2 id="export-error-dialog-title" class="export-error-dialog-title">Export failed</h2>
+                <p id="export-error-dialog-message" class="export-error-dialog-message"></p>
+                <div class="export-error-dialog-actions">
+                    <button id="export-error-dialog-close" class="export-error-dialog-close" type="button">OK</button>
+                </div>
+            </div>
+        </div>
         <button id="presentation-exit" class="toolbar-button presentation-exit" aria-label="Exit presentation mode">Exit presentation</button>
         <button id="reveal-tools" class="panel-reveal tools-reveal" type="button" aria-label="Show viewer tools">Show tools</button>
         <div id="scale-bar" class="scale-bar" hidden aria-label="Image scale"><span id="scale-bar-label" class="scale-bar-label"></span><div id="scale-bar-line" class="scale-bar-line"></div></div>
@@ -1286,6 +1312,15 @@
 
     const MAX_EXPORT_PIXELS = 16000000;
     const MAX_EXPORT_FILENAME_PART = 80;
+    const EXPORT_TOO_LARGE_CODE = "EXPORT_TOO_LARGE";
+    const EXPORT_TOO_LARGE_MESSAGE =
+        "Export failed: the requested region is too large to export at native resolution. Zoom in or select a smaller region and try again.";
+    const EXPORT_GENERIC_FAILURE_MESSAGE =
+        "Export failed. Please try again or choose a smaller region.";
+
+    const exportErrorDialog = document.getElementById("export-error-dialog");
+    const exportErrorDialogMessage = document.getElementById("export-error-dialog-message");
+    const exportErrorDialogClose = document.getElementById("export-error-dialog-close");
 
     function sanitizeExportFilenamePart(value) {
         const cleaned = String(value ?? "")
@@ -1324,19 +1359,62 @@
         return { x: left, y: top, width: right - left, height: bottom - top };
     }
 
-    function exportScaleForRegion(width, height) {
-        const sourcePixels = width * height;
-        if (sourcePixels <= MAX_EXPORT_PIXELS) return 1;
-        // Keep the request inside the server pixel budget when the (now wider)
-        // header-toolbar stage exposes a larger native visible region.
-        const scale = Math.sqrt(MAX_EXPORT_PIXELS / sourcePixels);
-        const scaledWidth = Math.max(1, Math.round(width * scale));
-        const scaledHeight = Math.max(1, Math.round(height * scale));
-        if (scaledWidth * scaledHeight > MAX_EXPORT_PIXELS) {
-            const tight = Math.sqrt(MAX_EXPORT_PIXELS / (scaledWidth * scaledHeight)) * scale;
-            return Math.max(Number.EPSILON, tight);
+    function exportScaleForRegion(/* width, height */) {
+        // Native-resolution exports only; oversized regions are rejected by the server.
+        return 1;
+    }
+
+    function isExportTooLargePayload(payload) {
+        if (!payload || typeof payload !== "object") return false;
+        if (payload.code === EXPORT_TOO_LARGE_CODE) return true;
+        const detail = typeof payload.detail === "string" ? payload.detail : "";
+        return /Export exceeds the configured maximum/i.test(detail);
+    }
+
+    function messageFromExportErrorPayload(payload) {
+        if (isExportTooLargePayload(payload)) return EXPORT_TOO_LARGE_MESSAGE;
+        if (typeof payload?.detail === "string" && payload.detail.trim()) return payload.detail.trim();
+        if (typeof payload?.title === "string" && payload.title.trim()
+                && payload.title.trim() !== "Invalid export request"
+                && payload.title.trim() !== "Export region too large") {
+            return payload.title.trim();
         }
-        return scale;
+        return "";
+    }
+
+    async function readExportFailureMessage(response) {
+        try {
+            const payload = await response.json();
+            return messageFromExportErrorPayload(payload) || EXPORT_GENERIC_FAILURE_MESSAGE;
+        } catch (_) {
+            return EXPORT_GENERIC_FAILURE_MESSAGE;
+        }
+    }
+
+    function closeExportErrorDialog() {
+        if (!exportErrorDialog || exportErrorDialog.hidden) return;
+        exportErrorDialog.hidden = true;
+        if (exportErrorDialogMessage) exportErrorDialogMessage.textContent = "";
+    }
+
+    function showExportErrorDialog(message) {
+        const text = String(message || EXPORT_GENERIC_FAILURE_MESSAGE).trim()
+            || EXPORT_GENERIC_FAILURE_MESSAGE;
+        if (!exportErrorDialog || !exportErrorDialogMessage) {
+            window.alert(text);
+            return;
+        }
+        exportErrorDialogMessage.textContent = text;
+        exportErrorDialog.hidden = false;
+        exportErrorDialogClose?.focus();
+    }
+
+    function reportExportFailure(error) {
+        const message = error?.message && String(error.message).trim()
+            ? String(error.message).trim()
+            : EXPORT_GENERIC_FAILURE_MESSAGE;
+        statusElement.textContent = message;
+        showExportErrorDialog(message);
     }
 
     // Bounds are accepted separately so annotation export can reuse this path.
@@ -1352,11 +1430,14 @@
             width: String(region.width), height: String(region.height),
             scale: String(scale)
         });
-        const response = await fetch(`/export?${parameters}`);
+        let response;
+        try {
+            response = await fetch(`/export?${parameters}`);
+        } catch (_) {
+            throw new Error(EXPORT_GENERIC_FAILURE_MESSAGE);
+        }
         if (!response.ok) {
-            let detail = "";
-            try { detail = (await response.text()).trim(); } catch (_) { /* ignore */ }
-            throw new Error(detail || `Export failed (${response.status})`);
+            throw new Error(await readExportFailureMessage(response));
         }
         const blobUrl = URL.createObjectURL(await response.blob());
         const link = document.createElement("a");
@@ -1380,12 +1461,10 @@
                 throw new Error("No image pixels are visible to export.");
             }
             statusElement.textContent = "Exporting visible region at native resolution…";
-            const scale = await exportImageBounds(imageBounds);
-            statusElement.textContent = scale < 1
-                ? "Visible region exported (scaled to fit the export pixel limit)."
-                : "Visible region exported.";
+            await exportImageBounds(imageBounds);
+            statusElement.textContent = "Visible region exported.";
         } catch (error) {
-            statusElement.textContent = error.message;
+            reportExportFailure(error);
         } finally {
             exportVisibleRegionButton.disabled = false;
         }
@@ -1415,11 +1494,19 @@
             });
             statusElement.textContent = "Selected annotation exported.";
         } catch (error) {
-            statusElement.textContent = error.message;
+            reportExportFailure(error);
         } finally {
             updateSelectedAnnotationExportState();
         }
     }
+
+    exportErrorDialogClose?.addEventListener("click", closeExportErrorDialog);
+    exportErrorDialog?.addEventListener("click", (event) => {
+        if (event.target === exportErrorDialog) closeExportErrorDialog();
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeExportErrorDialog();
+    });
 
 
     function clearPixelReadout() {

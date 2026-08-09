@@ -46,7 +46,7 @@ class ExportControllerTests {
                 org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyDouble(), any()))
-                .thenThrow(new IllegalArgumentException(
+                .thenThrow(new ExportTooLargeException(
                         "Export exceeds the configured maximum of 16000000 pixels."));
         MockMvc mvc = MockMvcBuilders.standaloneSetup(new ExportController(service))
                 .setControllerAdvice(new ExportExceptionHandler()).build();
@@ -57,6 +57,35 @@ class ExportControllerTests {
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentType("application/problem+json"))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString(
-                        "Export exceeds the configured maximum")));
+                        "Export exceeds the configured maximum")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"code\":\"EXPORT_TOO_LARGE\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "Export region too large")));
+    }
+
+    @Test
+    void returnsGenericInvalidExportProblemForOtherValidationErrors() throws Exception {
+        ExportService service = mock(ExportService.class);
+        when(service.export(org.mockito.ArgumentMatchers.eq("slide"),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyDouble(), any()))
+                .thenThrow(new IllegalArgumentException(
+                        "Export region must be contained within the image."));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new ExportController(service))
+                .setControllerAdvice(new ExportExceptionHandler()).build();
+
+        mvc.perform(get("/export").param("image", "slide")
+                        .param("x", "0").param("y", "0")
+                        .param("width", "30").param("height", "40"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType("application/problem+json"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "Export region must be contained within the image.")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "Invalid export request")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(
+                        "EXPORT_TOO_LARGE"))));
     }
 }

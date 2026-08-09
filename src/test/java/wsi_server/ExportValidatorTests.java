@@ -27,10 +27,11 @@ class ExportValidatorTests {
 
     @Test
     void rejectsSourceOrScaledOutputOverPixelLimit() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(ExportTooLargeException.class,
                 () -> validator.validate(0, 0, 11, 10, 0.5, 20, 20));
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        ExportTooLargeException error = assertThrows(ExportTooLargeException.class,
                 () -> validator.validate(0, 0, 5, 5, 3.0, 20, 20));
         assertEquals("Export exceeds the configured maximum of 100 pixels.", error.getMessage());
+        assertEquals(ExportTooLargeException.CODE, "EXPORT_TOO_LARGE");
     }
 }

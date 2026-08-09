@@ -35,7 +35,7 @@ class ExportValidator {
             throw new IllegalArgumentException("Scale produces invalid export dimensions.");
         }
         if (sourcePixels > maximumPixels || outputPixels > maximumPixels) {
-            throw new IllegalArgumentException("Export exceeds the configured maximum of "
+            throw new ExportTooLargeException("Export exceeds the configured maximum of "
                     + maximumPixels + " pixels.");
         }
     }
