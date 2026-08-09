@@ -56,19 +56,26 @@ assert.ok(
     "toolbar must appear before the viewer stage"
 );
 assert.match(rule(".tools-tray"), /justify-content:\s*safe center/);
-assert.match(rule(".tools-tray.tools-collapsed"), /visibility:\s*hidden/);
-assert.match(html, /id="toggle-tools"/);
-assert.doesNotMatch(html, /id="collapse-tools"/);
-assert.match(html, /id="reveal-tools"/);
-assert.match(html, /function setToolsCollapsed\(collapsed\)/);
-assert.match(html, /tools-tray"\)\.classList\.toggle\("tools-collapsed"/);
-assert.match(html, /localStorage\.setItem\(`\$\{STORAGE_PREFIX\}\.toolsCollapsed`/);
 
-// CURRENT IMAGE is a bounded, non-overlapping header region.
-const headerContext = rule(".header-context");
-assert.match(headerContext, /max-width:\s*220px/);
-assert.match(headerContext, /overflow:\s*hidden/);
-assert.match(headerContext, /min-width:\s*96px/);
+// Removed toolbar controls and collapse persistence.
+for (const removedId of [
+    "open-image", "fit-view", "pan-mode", "select-mode", "toggle-tools", "reveal-tools"
+]) {
+    assert.doesNotMatch(html, new RegExp(`id="${removedId}"`));
+}
+assert.doesNotMatch(html, /function setToolsCollapsed\(collapsed\)/);
+assert.doesNotMatch(html, /toolsCollapsed/);
+assert.doesNotMatch(html, /tools-collapsed/);
+
+// Header: current image beneath WSI Viewer; no fluorescence subtitle or competing context row.
+assert.doesNotMatch(html, /Whole-slide fluorescence imaging/);
+assert.doesNotMatch(html, /class="brand-subtitle"/);
+assert.doesNotMatch(html, /class="header-context"/);
+assert.match(html, /class="brand-current-image"/);
+assert.match(html, /class="header-label">Current image</);
+assert.match(html, /id="selected-name">No image selected/);
+const brandCurrent = rule(".brand-current-image");
+assert.match(brandCurrent, /overflow:\s*hidden/);
 assert.match(rule("#selected-name"), /max-width:\s*100%/);
 assert.match(rule("#selected-name"), /text-overflow:\s*ellipsis/);
 
@@ -107,8 +114,9 @@ assert.match(nameEditorSource, /this\.input\.select\?\.\(\)/);
 const narrow = rule(".viewer-main", "max-width:\\s*820px");
 assert.match(narrow, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
 assert.match(rule(".viewer-stage", "max-width:\\s*820px"), /grid-row:\s*1/);
+assert.match(rule(".brand-copy", "max-width:\\s*820px"), /max-width:\s*min\(52vw,\s*360px\)/);
 
-// Reference tool order (primary controls), then preserved extras.
+// Exact retained toolbar order (left to right).
 const headerHtml = html.slice(
     html.indexOf('class="app-header"'),
     html.indexOf("</header>")
@@ -117,19 +125,37 @@ const toolbarStart = headerHtml.indexOf('class="viewer-toolbar"');
 assert.ok(toolbarStart >= 0, "header contains viewer toolbar");
 const toolbarHtml = headerHtml.slice(toolbarStart);
 const orderedIds = [
-    "open-image", "toggle-left",
-    "zoom-in", "zoom-out", "fit-view", "pan-mode", "select-mode",
+    "home-view", "toggle-left",
+    "zoom-in", "zoom-out",
     "annotation-mode",
-    "annotation-visibility",
+    "annotation-visibility", "annotation-names",
     "export-visible-region", "export-selected-annotation",
-    "viewer-help", "toggle-right"
+    "slide-overview-button", "full-screen", "presentation",
+    "toggle-right", "viewer-help"
 ];
 let cursor = -1;
 for (const id of orderedIds) {
     const idx = toolbarHtml.indexOf(`id="${id}"`);
-    assert.ok(idx > cursor, `toolbar order includes ${id}`);
+    assert.ok(idx > cursor, `toolbar order includes ${id} after prior controls`);
     cursor = idx;
 }
+
+// Home leftmost; Images immediately follows Home; Help rightmost; Settings precedes Help.
+assert.equal(toolbarHtml.indexOf('id="home-view"'), toolbarHtml.search(/id="[^"]+"/));
+const homeIdx = toolbarHtml.indexOf('id="home-view"');
+const imagesIdx = toolbarHtml.indexOf('id="toggle-left"');
+const settingsIdx = toolbarHtml.indexOf('id="toggle-right"');
+const helpIdx = toolbarHtml.indexOf('id="viewer-help"');
+assert.ok(imagesIdx > homeIdx, "Images immediately follows Home");
+assert.ok(settingsIdx < helpIdx, "Settings immediately precedes Help");
+assert.ok(helpIdx === Math.max(...orderedIds.map(id => toolbarHtml.indexOf(`id="${id}"`))),
+    "Help is the rightmost toolbar control");
+
+// Pan/select modes removed; default OSD drag-pan and Annotorious selection remain.
+assert.doesNotMatch(html, /navigateMode/);
+assert.doesNotMatch(html, /syncNavigateModeButtons/);
+assert.match(spikeSource, /setDrawingEnabled/);
+assert.match(spikeSource, /selectionChanged/);
 
 // Local operations stays available, but never as primary header/toolbar chrome.
 assert.doesNotMatch(headerHtml, /id="local-operations"/);
@@ -146,13 +172,8 @@ assert.match(
 assert.match(channelsPanelHtml, /class="panel-secondary-link"/);
 assert.match(channelsPanelHtml, />Local operations</);
 
-// Hover/focus tooltips and accessible labels on every visible toolbar control.
-const extraIds = [
-    "home-view", "annotation-names", "slide-overview-button",
-    "full-screen", "toggle-tools", "presentation"
-];
-const toolbarActionIds = [...orderedIds, ...extraIds];
-for (const id of toolbarActionIds) {
+// Hover/focus tooltips and accessible labels on every retained toolbar control.
+for (const id of orderedIds) {
     const markup = toolbarControlMarkup(id);
     assert.match(markup, /aria-label="/, `${id} needs aria-label`);
     assert.match(markup, /data-tooltip="/, `${id} needs data-tooltip`);
@@ -230,12 +251,13 @@ assert.doesNotMatch(
 
 for (const label of [
     "Annotation drawing and editing tools", "Annotation visibility",
-    "Zoom and navigation", "Export actions",
-    "Open and images"
+    "Home and images", "Export actions", "Viewer actions", "Settings and help", "Zoom"
 ]) {
     assert.match(html, new RegExp(`role="group" aria-label="${label}"`));
 }
 assert.doesNotMatch(html, /role="group" aria-label="Selected annotation name"/);
+assert.doesNotMatch(html, /role="group" aria-label="Open and images"/);
+assert.doesNotMatch(html, /role="group" aria-label="Zoom and navigation"/);
 assert.match(rule("button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible"), /outline:\s*3px solid/);
 
 console.log("viewer compact header-toolbar layout checks passed at 1440px, 1024px, and 768px");
