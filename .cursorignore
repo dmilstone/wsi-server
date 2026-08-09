@@ -1,0 +1,37 @@
+# Maven / build outputs
+target/
+.gradle/
+build/
+
+# Local runtime, logs, PIDs, release-cycle state
+.runtime/
+
+# IDE / OS noise
+.idea/
+*.iml
+.DS_Store
+
+# Local-only tooling and virtualenvs
+.tools/
+.venv-release-docs/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Transient files
+*.log
+*.tmp
+
+# Secrets / local ops state
+.env
+.env.*
+ops/wsi-ingest.conf
+ops/.wsi-ops-audit.jsonl
+
+# Whole-slide image binaries
+*.vsi
+*.ndpi
+*.svs
+*.scn
+*.mrxs

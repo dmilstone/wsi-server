@@ -1,0 +1,20 @@
+---
+description: Keep Cursor context and edits narrowly scoped to the current task.
+alwaysApply: true
+---
+
+# Context efficiency
+
+- Start with the smallest relevant context.
+- Do not scan or read the entire repository unless the task genuinely requires repository-wide understanding.
+- Prefer the named file, symbol, failing test, or immediate dependency chain.
+- Read additional files only when needed to resolve a concrete dependency or uncertainty.
+- Prefer targeted searches over broad directory reads.
+- Do not attach or read entire folders when a specific file or symbol will suffice.
+- When editing, modify the smallest coherent function, class, style block, or test block necessary.
+- Do not rewrite unchanged surrounding code merely for formatting or stylistic consistency.
+- Do not perform unrelated cleanup or refactoring.
+- Before materially expanding scope, state why additional files are necessary.
+- For bounded bug fixes, preserve existing architecture and behavior outside the failing path.
+- Prefer focused tests relevant to the change during implementation, but still run the repository's required full review gate before commit.
+- Respect ROADMAP.md, release-environment isolation, and human QC gates; context efficiency must never weaken safety or release controls.
