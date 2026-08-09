@@ -18,129 +18,142 @@ function rule(selector, mediaPattern = "") {
     return match[1];
 }
 
-// Every pointer target uses the same 40px contract, with text kept on one line.
-const button = rule(".toolbar-button");
-assert.match(button, /min-width:\s*40px/);
-assert.match(button, /height:\s*40px/);
-assert.match(button, /min-height:\s*40px/);
-assert.match(button, /white-space:\s*nowrap/);
+// Compact icon hit target: consistent 28px contract, icons only (no label chrome).
+const button = rule(".toolbar-button, a.toolbar-button");
+assert.match(button, /min-width:\s*28px/);
+assert.match(button, /height:\s*28px/);
+assert.match(button, /min-height:\s*28px/);
+assert.match(button, /width:\s*28px/);
 
-// Single dock/collapse model: tools occupy a dedicated tray column beside the
-// stage so palettes never overlay WSI pixels or annotation geometry.
+// Header-row toolbar above the viewer stage — never overlays WSI pixels.
 const viewerMain = rule(".viewer-main");
-assert.match(viewerMain, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*var\(--tools-tray-width,\s*280px\)/);
-assert.match(rule(".viewer-main.tools-collapsed"), /--tools-tray-width:\s*0px/);
-assert.match(rule(".viewer-main.tools-collapsed .tools-tray"), /visibility:\s*hidden/);
-assert.match(rule(".tools-tray"), /border-left:\s*1px solid/);
+assert.match(viewerMain, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+assert.match(viewerMain, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+assert.match(rule(".viewer-stage"), /grid-row:\s*1/);
+assert.match(html, /class="app-header"/);
 assert.match(html, /id="tools-tray"[^>]*class="tools-tray"/);
+assert.ok(
+    html.indexOf('id="tools-tray"') < html.indexOf('class="viewer-stage"'),
+    "toolbar must appear before the viewer stage"
+);
+assert.match(rule(".tools-tray"), /justify-content:\s*center/);
+assert.match(rule(".tools-tray.tools-collapsed"), /visibility:\s*hidden/);
 assert.match(html, /id="collapse-tools"/);
 assert.match(html, /id="toggle-tools"/);
 assert.match(html, /id="reveal-tools"/);
 assert.match(html, /function setToolsCollapsed\(collapsed\)/);
+assert.match(html, /tools-tray"\)\.classList\.toggle\("tools-collapsed"/);
 assert.match(html, /localStorage\.setItem\(`\$\{STORAGE_PREFIX\}\.toolsCollapsed`/);
-assert.match(html, /setToolsCollapsed\(localStorage\.getItem\(`\$\{STORAGE_PREFIX\}\.toolsCollapsed`\) === "true"\)/);
 
-// Toolbar is in-flow inside the tray (not absolutely positioned over the stage).
+// Toolbar is a single horizontal in-flow row in the header (not over #viewer).
 const toolbar = rule(".viewer-toolbar");
-assert.match(toolbar, /flex-direction:\s*column/);
-assert.match(toolbar, /max-width:\s*100%/);
-assert.match(toolbar, /box-sizing:\s*border-box/);
-assert.match(toolbar, /overflow:\s*visible/);
-assert.match(toolbar, /isolation:\s*isolate/);
+assert.match(toolbar, /flex-direction:\s*row/);
+assert.match(toolbar, /flex-wrap:\s*nowrap/);
+assert.match(toolbar, /min-height:\s*32px/);
 assert.doesNotMatch(toolbar, /position:\s*absolute/);
-const palette = rule(".toolbar-palette");
-assert.match(palette, /flex-wrap:\s*wrap/);
-assert.match(palette, /border:\s*1px solid/);
-assert.match(palette, /max-width:\s*100%/);
-assert.match(palette, /position:\s*relative/);
-assert.match(palette, /overflow:\s*visible/);
+assert.doesNotMatch(html, /toolbar-palette/);
+assert.doesNotMatch(html, /tools-tray-title/);
 
-// Tray width contract across common desktop/tablet viewer widths.
-for (const width of [1440, 1024, 768]) {
-    const stage = width - 280;
-    assert.ok(stage > 360, `docked tray leaves usable stage at ${width}px (${stage}px)`);
+// Compact height leaves nearly full stage height at common desktop widths.
+for (const [width, height] of [[1440, 900], [1024, 768], [768, 1024]]) {
+    const chrome = 58 + 30; // header (includes toolbar) + status
+    const stageHeight = height - chrome;
+    assert.ok(stageHeight > 480, `header toolbar leaves usable stage at ${width}x${height} (${stageHeight}px)`);
 }
 
-// Groups remain atomic flex items; the name editor fills the tray width.
+// Groups remain atomic; name editor stays compact in the toolbar row.
 assert.match(rule(".toolbar-group"), /flex:\s*0 0 auto/);
-assert.match(rule(".annotation-name-group"), /flex:\s*1 1 100%/);
-assert.match(rule(".annotation-name-control"), /min-width:\s*0/);
-assert.match(rule(".annotation-name-control input"), /min-width:\s*0/);
+assert.match(rule(".annotation-name-group"), /flex:\s*0 1 160px/);
+assert.match(rule(".annotation-name-control input"), /height:\s*28px/);
 
-// Narrow viewports stack the tray under the stage instead of beside it.
+// Narrow viewports keep stage full-height under the header toolbar.
 const narrow = rule(".viewer-main", "max-width:\\s*820px");
-assert.match(narrow, /grid-template-columns:\s*1fr/);
-assert.match(rule(".tools-tray", "max-width:\\s*820px"), /max-height:\s*min\(280px,\s*40vh\)/);
-assert.match(rule(".viewer-main.tools-collapsed", "max-width:\\s*820px"), /grid-template-rows:\s*minmax\(0,\s*1fr\)\s*0/);
+assert.match(narrow, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+assert.match(rule(".viewer-stage", "max-width:\\s*820px"), /grid-row:\s*1/);
 
-// Viewer/export actions form the upper palette; annotation controls the lower.
-const viewerPalette = html.indexOf('class="toolbar-palette viewer-palette"');
-const annotationPalette = html.indexOf('class="toolbar-palette annotation-palette"');
-const toolsTray = html.indexOf('id="tools-tray"');
-assert.ok(toolsTray >= 0 && viewerPalette > toolsTray && annotationPalette > viewerPalette);
-assert.match(rule(".viewer-palette"), /width:\s*100%/);
-assert.match(rule(".annotation-palette"), /width:\s*100%/);
+// Reference tool order (primary controls), then preserved extras.
+const toolbarHtml = html.slice(
+    html.indexOf('class="viewer-toolbar"'),
+    html.indexOf('class="header-actions"')
+);
+const orderedIds = [
+    "open-image", "toggle-left",
+    "zoom-in", "zoom-out", "fit-view", "pan-mode", "select-mode",
+    "annotation-mode", "polygon-mode", "freehand-mode",
+    "annotation-visibility",
+    "export-visible-region", "export-selected-annotation",
+    "viewer-help", "toggle-right"
+];
+let cursor = -1;
+for (const id of orderedIds) {
+    const idx = toolbarHtml.indexOf(`id="${id}"`);
+    assert.ok(idx > cursor, `toolbar order includes ${id}`);
+    cursor = idx;
+}
 
-// Backdrop-filter stacking: upper palette / open export menu stay above lower.
-assert.match(rule(".viewer-palette"), /z-index:\s*2/);
-assert.match(rule(".annotation-palette"), /z-index:\s*1/);
-assert.match(rule(".export-menu"), /overflow:\s*visible/);
-assert.match(rule('.export-menu[open]'), /z-index:\s*3/);
-const exportItems = rule(".export-menu-items");
-assert.match(exportItems, /position:\s*absolute/);
-assert.match(exportItems, /z-index:\s*4/);
-assert.match(exportItems, /right:\s*0/);
-assert.match(exportItems, /max-width:\s*calc\(100vw - 32px\)/);
-assert.match(exportItems, /overflow-y:\s*auto/);
-assert.match(exportItems, /pointer-events:\s*auto/);
-assert.match(rule('.export-menu[data-placement="above"] .export-menu-items'), /bottom:\s*calc\(100% \+ 8px\)/);
+// Hover/focus tooltips and accessible labels on every toolbar control.
+const extraIds = [
+    "home-view", "annotation-names", "slide-overview-button",
+    "full-screen", "toggle-tools", "collapse-tools", "presentation"
+];
+for (const id of [...orderedIds, ...extraIds]) {
+    const controlMatch = html.match(new RegExp(`id="${id}"[^>]*`));
+    assert.ok(controlMatch, `missing control ${id}`);
+    assert.match(controlMatch[0], /aria-label="/);
+    assert.match(controlMatch[0], /data-tooltip="/);
+}
+assert.match(html, /id="annotation-name"[^>]*aria-label="Annotation name"/);
+assert.match(rule(".toolbar-button[data-tooltip]::after"), /content:\s*attr\(data-tooltip\)/);
+assert.match(html, /\.toolbar-button\[data-tooltip\]:hover::after/);
+assert.match(html, /\.toolbar-button\[data-tooltip\]:focus-visible::after/);
+assert.match(html, /white-space:\s*pre-line/);
 
-// Stage overlays stay above canvas/annotation layers; tray chrome is separate.
+// Icon-only visibility controls keep API textContent contract but hide glyphs via CSS.
+assert.match(html, /id="annotation-visibility"[^>]*aria-label="Hide annotations"[^>]*aria-pressed="true"[^>]*>Annotations</);
+assert.match(html, /id="annotation-names"[^>]*aria-label="Hide annotation names"[^>]*aria-pressed="true"[^>]*>Names</);
+assert.match(rule(".annotation-visibility,\n        .annotation-names"), /font-size:\s*0/);
+
+// No floating export palette; exports are direct icon buttons.
+assert.match(html, /id="export-visible-region"[^>]*aria-label="Export view"/);
+assert.match(html, /id="export-selected-annotation"[^>]*aria-label="Export annotations"/);
+assert.doesNotMatch(html, /id="export-menu"/);
+assert.doesNotMatch(html, /function positionExportMenu/);
+
+// Polygon/freehand remain present but disabled (not implemented).
+assert.match(html, /id="polygon-mode"[^>]*disabled/);
+assert.match(html, /id="freehand-mode"[^>]*disabled/);
+
+// Stage overlays and environment banner contracts stay intact.
 assert.match(toolbar, /z-index:\s*16/);
 assert.match(rule(".annotation-overlay"), /z-index:\s*10/);
 assert.match(rule(".annotation-name-layer"), /z-index:\s*11/);
 assert.match(rule(".image-lightbox"), /z-index:\s*40/);
 assert.match(rule(".environment-banner"), /z-index:\s*2147483647/);
+assert.match(html, /id="environment-banner"/);
 
-// Export actions and placement stay interactive; placement uses the tray box.
-assert.match(html, /id="export-visible-region"[^>]*>Entire view<\/button>/);
-assert.match(html, /id="export-selected-annotation"[^>]*>Selected Annotation<\/button>/);
-assert.match(rule(".export-menu-item"), /cursor:\s*pointer/);
-const placementFunction = html.match(/function positionExportMenu\(\) \{([\s\S]*?)\n    \}/)?.[1];
-assert.ok(placementFunction);
-assert.match(placementFunction, /spaceBelow/);
-assert.match(placementFunction, /spaceAbove/);
-assert.match(placementFunction, /data-placement|dataset\.placement/);
-assert.match(placementFunction, /getElementById\("tools-tray"\)/);
-assert.doesNotMatch(placementFunction, /viewer-palette|annotation-palette|style\.(top|left|right|bottom|transform)/);
-assert.match(html, /exportMenu\.addEventListener\("toggle", \(\) => requestAnimationFrame\(positionExportMenu\)\)/);
-assert.match(html, /window\.addEventListener\("resize", \(\) => requestAnimationFrame\(positionExportMenu\)\)/);
-
-// Presentation mode collapses the docked tray and exposes the full stage width.
-assert.match(rule(".presentation-mode .viewer-main"), /--tools-tray-width:\s*0px/);
+// Presentation mode hides the header toolbar; stage stays full-bleed in viewer-main.
 assert.match(rule(".presentation-mode .tools-tray"), /visibility:\s*hidden/);
 assert.match(rule(".presentation-mode .workspace"), /grid-template-columns:\s*0 0 minmax\(0,1fr\) 0 0/);
 
-// DOM order: stage (image) then docked tray; no floating toolbar over #viewer.
+// Toolbar must not sit inside the viewer stage / #viewer.
 const stageIdx = html.indexOf('class="viewer-stage"');
 const viewerIdx = html.indexOf('id="viewer"');
-assert.ok(stageIdx >= 0 && viewerIdx > stageIdx && toolsTray > viewerIdx);
+const mainEnd = html.indexOf("</main>");
+assert.ok(stageIdx >= 0 && viewerIdx > stageIdx);
 assert.doesNotMatch(
-    html.slice(viewerIdx, toolsTray),
+    html.slice(stageIdx, mainEnd),
     /class="viewer-toolbar"/,
     "toolbar must not sit over the viewer stage"
 );
 
-// Semantic groups and compact accessibility labels remain stable.
 for (const label of [
     "Annotation drawing and editing tools", "Annotation visibility",
-    "Selected annotation name", "Export and viewer actions"
+    "Selected annotation name", "Zoom and navigation", "Export actions",
+    "Open and images"
 ]) {
     assert.match(html, new RegExp(`role="group" aria-label="${label}"`));
 }
-assert.match(html, /id="annotation-visibility"[^>]*aria-label="Hide annotations"[^>]*aria-pressed="true"[^>]*>Annotations</);
-assert.match(html, /id="annotation-names"[^>]*aria-label="Hide annotation names"[^>]*aria-pressed="true"[^>]*>Names</);
 assert.match(html, /\.toolbar-button\[aria-pressed="true"\][^{]*\{[^}]*background:\s*var\(--accent\)/);
 assert.match(rule("button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible"), /outline:\s*3px solid/);
 
-console.log("viewer toolbar dock/collapse layout checks passed at 1440px, 1024px, and 768px");
+console.log("viewer compact header-toolbar layout checks passed at 1440px, 1024px, and 768px");

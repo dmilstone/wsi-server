@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Terminal-native docked-tools viewport contract check.
+ * Terminal-native header-toolbar viewport contract check.
  * Uses local Google Chrome headless when available. Safari has no stable
  * headless shell here; Safari-relevant breakpoints are asserted via the same
  * CSS contracts exercised for Chrome window sizes below.
@@ -31,14 +31,10 @@ const chrome = chromeCandidates.find((candidate) => {
     return spawnSync("command", ["-v", candidate], { encoding: "utf8" }).status === 0;
 });
 
-// Chrome headless clamps very narrow windows (~500px floor). Safari has no
-// headless shell here, so Safari-class narrow/stacked contracts are validated
-// at the shared 820px CSS breakpoint using achievable Chrome window sizes.
 const viewports = [
-    { name: "chrome-desktop", width: 1440, height: 900, expectTrayBeside: true },
-    { name: "chrome-laptop", width: 1280, height: 800, expectTrayBeside: true },
-    { name: "safari-ipad-portrait-contract", width: 768, height: 1024, expectTrayBeside: false },
-    { name: "safari-narrow-stack-contract", width: 520, height: 900, expectTrayBeside: false }
+    { name: "chrome-desktop", width: 1440, height: 900 },
+    { name: "chrome-laptop", width: 1024, height: 768 },
+    { name: "safari-ipad-portrait-contract", width: 768, height: 1024 }
 ];
 
 const styleMatch = indexHtml.match(/<style>([\s\S]*?)<\/style>/);
@@ -50,48 +46,62 @@ const fixture = `<!doctype html>
 <meta charset="utf-8">
 <style>
 ${styleMatch[1]}
-body { display:block !important; margin:0; width:100vw; height:100vh; overflow:hidden; }
+body { display:grid !important; grid-template-rows: 58px minmax(0,1fr) 30px !important; margin:0; width:100vw; height:100vh; overflow:hidden; }
 .workspace {
   display:grid !important;
   grid-template-columns: minmax(0, 1fr) !important;
-  height:100vh;
+  grid-template-rows: minmax(0, 1fr) !important;
+  min-height:0;
+  height:100%;
 }
+.viewer-main, .viewer-stage, #viewer, .annotation-overlay {
+  min-height:0 !important;
+  height:100% !important;
+}
+.header-actions { display:none !important; }
 </style>
 </head>
 <body>
+<header class="app-header">
+  <div class="brand"><div class="brand-title">WSI Viewer</div></div>
+  <div id="tools-tray" class="tools-tray"><div class="viewer-toolbar" role="toolbar"></div></div>
+</header>
 <div class="workspace">
   <main class="viewer-main" aria-label="Whole-slide image viewer">
-    <div class="viewer-stage"><div id="viewer"></div></div>
-    <aside id="tools-tray" class="tools-tray"><div class="viewer-toolbar"></div></aside>
+    <div class="viewer-stage"><div id="viewer"></div><div class="annotation-overlay"></div></div>
   </main>
 </div>
+<footer class="status-bar"></footer>
 <pre id="out">pending</pre>
 <script>
 (() => {
   const stage = document.querySelector(".viewer-stage").getBoundingClientRect();
   const tray = document.querySelector(".tools-tray").getBoundingClientRect();
-  const main = document.querySelector(".viewer-main").getBoundingClientRect();
-  const overlap = !(stage.right <= tray.left + 0.5 || tray.right <= stage.left + 0.5 ||
-                    stage.bottom <= tray.top + 0.5 || tray.bottom <= stage.top + 0.5);
-  const beside = Math.abs(stage.top - tray.top) < 2 && stage.right <= tray.left + 1;
-  const below = Math.abs(stage.left - tray.left) < 2 && stage.bottom <= tray.top + 1;
+  const viewer = document.getElementById("viewer").getBoundingClientRect();
+  const annotation = document.querySelector(".annotation-overlay").getBoundingClientRect();
+  const overlapTrayStage = !(stage.right <= tray.left + 0.5 || tray.right <= stage.left + 0.5 ||
+                            stage.bottom <= tray.top + 0.5 || tray.bottom <= stage.top + 0.5);
+  const overlapTrayViewer = !(viewer.right <= tray.left + 0.5 || tray.right <= viewer.left + 0.5 ||
+                              viewer.bottom <= tray.top + 0.5 || tray.bottom <= viewer.top + 0.5);
+  const above = tray.bottom <= stage.top + 1;
   document.getElementById("out").textContent = JSON.stringify({
     vw: window.innerWidth,
     vh: window.innerHeight,
-    stage: { width: stage.width, height: stage.height, left: stage.left, top: stage.top, right: stage.right, bottom: stage.bottom },
-    tray: { width: tray.width, height: tray.height, left: tray.left, top: tray.top, right: tray.right, bottom: tray.bottom },
-    main: { width: main.width, height: main.height },
-    overlap,
-    beside,
-    below
+    stage: { width: stage.width, height: stage.height, top: stage.top, bottom: stage.bottom },
+    tray: { width: tray.width, height: tray.height, top: tray.top, bottom: tray.bottom },
+    viewer: { width: viewer.width, height: viewer.height },
+    annotation: { width: annotation.width, height: annotation.height },
+    overlapTrayStage,
+    overlapTrayViewer,
+    above
   });
 })();
 </script>
 </body>
 </html>`;
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wsi-dock-viewport-"));
-const fixturePath = path.join(tmpDir, "dock-fixture.html");
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wsi-toolbar-viewport-"));
+const fixturePath = path.join(tmpDir, "toolbar-fixture.html");
 fs.writeFileSync(fixturePath, fixture);
 
 function runChrome(width, height) {
@@ -120,25 +130,24 @@ for (const viewport of viewports) {
     const measured = runChrome(viewport.width, viewport.height);
     assert.ok(Math.abs(measured.vw - viewport.width) <= 40,
         `${viewport.name} width ~${viewport.width} (got ${measured.vw})`);
-    assert.equal(measured.overlap, false, `${viewport.name} stage/tray must not overlap`);
-    if (viewport.expectTrayBeside) {
-        assert.equal(measured.beside, true, `${viewport.name} tray should dock beside stage`);
-        assert.ok(measured.tray.width >= 240, `${viewport.name} tray width`);
-        assert.ok(measured.stage.width >= 360, `${viewport.name} usable stage width`);
-    } else {
-        assert.equal(measured.below, true, `${viewport.name} tray should stack under stage`);
-        assert.ok(measured.stage.height > 0, `${viewport.name} stage height`);
-        assert.ok(measured.vw <= 820, `${viewport.name} must exercise the 820px stack breakpoint`);
-    }
+    assert.equal(measured.overlapTrayStage, false, `${viewport.name} toolbar/stage must not overlap`);
+    assert.equal(measured.overlapTrayViewer, false, `${viewport.name} toolbar/viewer must not overlap`);
+    assert.equal(measured.above, true, `${viewport.name} toolbar should sit above stage`);
+    assert.ok(measured.stage.height >= 400, `${viewport.name} usable stage height`);
+    assert.ok(measured.tray.height > 0 && measured.tray.height <= 64, `${viewport.name} compact toolbar height`);
+    assert.ok(Math.abs(measured.annotation.height - measured.viewer.height) < 2,
+        `${viewport.name} annotation overlay matches viewer`);
     reports.push({ name: viewport.name, ...measured });
 }
 
-// Collapsed tray must leave stage occupying the full main width on desktop.
 const collapsedFixture = fixture.replace(
+    'id="tools-tray" class="tools-tray"',
+    'id="tools-tray" class="tools-tray tools-collapsed"'
+).replace(
     'class="viewer-main"',
     'class="viewer-main tools-collapsed"'
 );
-const collapsedPath = path.join(tmpDir, "dock-collapsed.html");
+const collapsedPath = path.join(tmpDir, "toolbar-collapsed.html");
 fs.writeFileSync(collapsedPath, collapsedFixture);
 const collapsed = (() => {
     const result = spawnSync(chrome, [
@@ -151,14 +160,13 @@ const collapsed = (() => {
     assert.ok(match, "collapsed dump-dom missing #out payload");
     return JSON.parse(match[1]);
 })();
-assert.ok(collapsed.stage.width >= 1400, "collapsed tray restores nearly full stage width");
+assert.ok(collapsed.stage.height >= 640, "collapsed toolbar restores tall stage");
 assert.ok(collapsed.tray.width <= 1, "collapsed tray width is ~0");
 
 fs.rmSync(tmpDir, { recursive: true, force: true });
 
-console.log("viewer tools dock viewport contracts passed");
+console.log("viewer header toolbar viewport contracts passed");
 for (const report of reports) {
-    console.log(`- ${report.name}: stage ${Math.round(report.stage.width)}x${Math.round(report.stage.height)}, tray ${Math.round(report.tray.width)}x${Math.round(report.tray.height)}, overlap=${report.overlap}`);
+    console.log(`- ${report.name}: stage ${Math.round(report.stage.width)}x${Math.round(report.stage.height)}, tray ${Math.round(report.tray.width)}x${Math.round(report.tray.height)}, overlap=${report.overlapTrayStage}`);
 }
-console.log(`- chrome-desktop-collapsed: stage ${Math.round(collapsed.stage.width)}x${Math.round(collapsed.stage.height)}, tray ${Math.round(collapsed.tray.width)}`);
-console.log("Safari: no headless binary; safari-* sizes validated via Chrome engine against shared CSS breakpoints (820px stack).");
+console.log(`- chrome-desktop-collapsed: stage ${Math.round(collapsed.stage.width)}x${Math.round(collapsed.stage.height)}`);

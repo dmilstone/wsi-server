@@ -68,13 +68,14 @@
         .app-header {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 20px;
-            padding: 0 18px;
+            justify-content: flex-start;
+            gap: 12px;
+            padding: 0 14px;
             background: #0e151d;
             border-bottom: 1px solid var(--border);
             box-shadow: 0 2px 12px rgba(0, 0, 0, .18);
             z-index: 30;
+            min-width: 0;
         }
         .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
         .brand-mark {
@@ -162,15 +163,16 @@
         .image-button.active::before { background: var(--accent); }
         .image-path { display: block; margin-top: 5px; color: var(--text-muted); font-size: 11px; line-height: 1.3; }
 
+        /* Stage fills the viewer; toolbar lives in the header row above (not over canvas). */
         .viewer-main {
             position: relative;
             display: grid;
-            grid-template-columns: minmax(0, 1fr) var(--tools-tray-width, 280px);
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: minmax(0, 1fr);
             min-width: 0;
             min-height: 0;
             background: #000;
         }
-        .viewer-main.tools-collapsed { --tools-tray-width: 0px; }
         .viewer-stage {
             grid-column: 1;
             grid-row: 1;
@@ -181,41 +183,29 @@
         }
         #viewer { width: 100%; height: 100%; background: #000; }
         .tools-tray {
-            grid-column: 2;
-            grid-row: 1;
+            flex: 1 1 auto;
             min-width: 0;
-            min-height: 0;
             display: flex;
-            flex-direction: column;
-            background: var(--surface);
-            border-left: 1px solid var(--border);
-            overflow: auto;
+            flex-direction: row;
+            align-items: center;
+            justify-content: center;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: thin;
             scrollbar-color: #405064 transparent;
+            z-index: 16;
+        }
+        .tools-tray.tools-collapsed {
+            visibility: hidden;
+            overflow: hidden;
+            flex: 0 0 0;
+            max-width: 0;
+            opacity: 0;
+            pointer-events: none;
         }
         #reveal-left, #reveal-right {
-            grid-column: 1 / -1;
+            grid-column: 1;
             grid-row: 1;
-        }
-        .viewer-main.tools-collapsed .tools-tray { visibility: hidden; overflow: hidden; }
-        .tools-tray-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 12px 14px;
-            background: rgba(17, 24, 33, .96);
-            border-bottom: 1px solid var(--border);
-            flex: 0 0 auto;
-            position: sticky;
-            top: 0;
-            z-index: 2;
-        }
-        .tools-tray-title {
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: .09em;
-            text-transform: uppercase;
-            color: var(--accent);
         }
         .annotation-overlay {
             position: absolute;
@@ -390,48 +380,68 @@
         .resize-handle:hover, .resize-handle.dragging { background: var(--accent); }
         .resize-handle::after { content:""; position:absolute; inset:0 -3px; }
         main { grid-column: auto; }
-        .panel-header .panel-toggle, .tools-tray-header .panel-toggle { min-width: 32px; min-height: 32px; padding: 5px; }
-        /* Docked tools tray: palettes live beside the stage so they never
-           overlay WSI pixels or annotation geometry. */
+        .panel-header .panel-toggle { min-width: 32px; min-height: 32px; padding: 5px; }
+        .visually-hidden {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+        }
+        /* Compact icon-only toolbar in the header row (reference layout, no text labels). */
         .viewer-toolbar {
             display: flex;
-            flex-direction: column;
-            align-items: stretch;
-            gap: 10px;
-            width: 100%;
+            flex-direction: row;
+            flex-wrap: nowrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            width: max-content;
             max-width: 100%;
-            padding: 12px;
+            min-height: 32px;
+            padding: 0 4px;
             box-sizing: border-box;
             overflow: visible;
             isolation: isolate;
-            flex: 1 1 auto;
             z-index: 16;
         }
-        .toolbar-palette {
+        .toolbar-group { display: flex; flex: 0 0 auto; align-items: center; gap: 1px; min-width: 0; }
+        .toolbar-group + .toolbar-group { margin-left: 5px; padding-left: 5px; border-left: 1px solid rgba(255,255,255,.14); }
+        .toolbar-button, a.toolbar-button {
             position: relative;
-            display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
-            max-width: 100%; box-sizing: border-box; padding: 6px; overflow: visible;
-            border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
-            background: rgba(12,17,23,.84); backdrop-filter: blur(10px); box-shadow: var(--shadow);
+            display: inline-grid; place-items: center;
+            width: 28px; min-width: 28px; height: 28px; min-height: 28px; box-sizing: border-box;
+            padding: 0; white-space: nowrap; line-height: 1; font-size: 13px;
+            text-decoration: none;
+            background: transparent; border: 1px solid transparent; border-radius: 6px;
+            color: rgba(255,255,255,.84); cursor: pointer;
         }
-        /* Each backdrop-filter creates a stacking context. Keep the earlier
-           viewer palette above the later annotation palette so its absolutely
-           positioned export menu cannot be painted underneath the lower row. */
-        .viewer-palette { z-index: 2; width: 100%; }
-        .annotation-palette { z-index: 1; width: 100%; }
-        .toolbar-group { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; min-width: 0; }
-        .toolbar-group + .toolbar-group { padding-left: 6px; border-left: 1px solid rgba(255,255,255,.14); }
-        .toolbar-button {
-            min-width: 40px; height: 40px; min-height: 40px; box-sizing: border-box;
-            padding: 6px 9px; white-space: nowrap; line-height: 1; background: transparent;
-            border-color: transparent; color: rgba(255,255,255,.82);
+        .toolbar-button:hover, a.toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
+        .toolbar-button:disabled { opacity: .38; cursor: default; }
+        .toolbar-icon { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+        .toolbar-icon.filled { fill: currentColor; stroke: none; }
+        /* Tooltip uses ::after only so icon buttons may keep ::before glyphs. */
+        .toolbar-button[data-tooltip]::after {
+            content: attr(data-tooltip); pointer-events: none; opacity: 0;
+            position: absolute; left: 50%; top: calc(100% + 7px); z-index: 40;
+            transform: translateX(-50%); transition: opacity .12s ease;
+            min-width: 72px; max-width: 220px; padding: 6px 8px;
+            border: 1px solid rgba(255,255,255,.16); border-radius: 6px;
+            background: rgba(12,17,23,.96); color: #f2f5f8;
+            font-size: 11px; font-weight: 650; line-height: 1.35; white-space: pre-line;
+            text-align: center; box-shadow: var(--shadow);
         }
-        .toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
-        .visibility-group .toolbar-button { min-width: 40px; padding-inline: 8px; gap: 5px; font-size: 11px; font-weight: 750; }
-        .annotation-visibility { gap: 7px; }
-        .annotation-visibility::before { content: "\25CC"; font-size: 15px; }
+        .toolbar-button[data-tooltip]:hover::after,
+        .toolbar-button[data-tooltip]:focus-visible::after { opacity: 1; }
+        .annotation-visibility,
+        .annotation-names { font-size: 0; line-height: 0; color: transparent; }
+        .annotation-visibility::before {
+            content: "\25CC"; font-size: 14px; line-height: 1; color: rgba(255,255,255,.84);
+        }
         .annotation-visibility[aria-pressed="true"]::before { content: "\25C9"; }
-        .annotation-names { font-weight: 750; }
+        .annotation-visibility:hover::before,
+        .annotation-names:hover::before { color: white; }
+        .annotation-names::before {
+            content: "Aa"; font-size: 11px; font-weight: 750; line-height: 1;
+            color: rgba(255,255,255,.84); letter-spacing: -.02em;
+        }
         .annotation-name-layer { position: absolute; inset: 0; z-index: 11; overflow: hidden; pointer-events: none; }
         .annotation-name-layer[hidden] { display: none; }
         .annotation-name-label {
@@ -441,14 +451,15 @@
             box-shadow: 0 1px 3px rgba(0,0,0,.9); font: 700 11px/1.25 system-ui, sans-serif;
             overflow-wrap: anywhere; pointer-events: none; user-select: none;
         }
-        .annotation-name-group { flex: 1 1 100%; min-width: 0; }
+        .annotation-name-group { flex: 0 1 160px; min-width: 88px; max-width: 180px; }
         .annotation-name-control { display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-width: 0; width: 100%; color: rgba(255,255,255,.72); font-size: 11px; font-weight: 700; white-space: nowrap; }
-        .annotation-name-control input { flex: 1 1 auto; width: 100%; min-width: 0; height: 40px; box-sizing: border-box; padding: 5px 8px; color: white; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.18); border-radius: 6px; }
-        .annotation-name-control input:disabled { opacity: .55; }
-        @media (max-width: 480px) {
-            .annotation-name-control > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-            .annotation-name-control input { min-width: 0; }
+        .annotation-name-control input {
+            flex: 1 1 auto; width: 100%; min-width: 0; height: 28px; box-sizing: border-box;
+            padding: 3px 7px; color: white; background: rgba(0,0,0,.28);
+            border: 1px solid rgba(255,255,255,.18); border-radius: 6px; font-size: 12px;
         }
+        .annotation-name-control input:disabled { opacity: .55; }
+        .header-context { flex: 0 1 auto; }
         /* Annotorious renders all geometry, handles, and selections in its a9s
            overlay. Visibility is suppressed at the display boundary so no live
            annotation data or persistence state is touched. */
@@ -458,21 +469,6 @@
             visibility: hidden !important;
             pointer-events: none !important;
         }
-        .export-menu { position: relative; overflow: visible; }
-        .export-menu[open] { z-index: 3; }
-        .export-menu > summary { list-style: none; }
-        .export-menu > summary::-webkit-details-marker { display: none; }
-        .export-menu-items {
-            position: absolute; z-index: 4; top: calc(100% + 8px); right: 0; left: auto;
-            min-width: 190px; max-width: calc(100vw - 32px); padding: 6px;
-            overflow-x: hidden; overflow-y: auto; pointer-events: auto;
-            border: 1px solid rgba(255,255,255,.16); border-radius: 9px;
-            background: rgba(12,17,23,.96); box-shadow: var(--shadow);
-        }
-        .export-menu[data-placement="above"] .export-menu-items { top: auto; bottom: calc(100% + 8px); }
-        .export-menu-item { width: 100%; padding: 9px 10px; text-align: left; color: white; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
-        .export-menu-item:hover:not(:disabled) { background: rgba(255,255,255,.10); }
-        .export-menu-item:disabled { color: var(--text-muted); cursor: default; }
 
         .slide-overview {
             position: absolute;
@@ -511,7 +507,6 @@
         }
         #reveal-left { left: 0; border-left: 0; border-radius: 0 9px 9px 0; }
         #reveal-right { right: 0; border-right: 0; border-radius: 9px 0 0 9px; }
-        #reveal-tools { right: 0; border-right: 0; border-radius: 9px 0 0 9px; }
         .workspace.left-collapsed #reveal-left, .workspace.right-collapsed #reveal-right { display: block; }
         .viewer-main.tools-collapsed #reveal-tools { display: block; }
         .panel-reveal:hover { background: var(--accent); }
@@ -579,10 +574,21 @@
         .presentation-mode .workspace { --left-panel: 0px; --right-panel: 0px; grid-template-columns: 0 0 minmax(0,1fr) 0 0; }
         .presentation-mode aside, .presentation-mode .resize-handle { visibility: hidden; overflow: hidden; }
         .presentation-mode .viewer-badge, .presentation-mode .panel-reveal { display: none; }
-        .presentation-mode .viewer-main { --tools-tray-width: 0px; grid-template-columns: minmax(0, 1fr) 0; }
-        .presentation-mode .tools-tray { visibility: hidden; overflow: hidden; }
-        .presentation-exit { display:none; position:absolute; right:16px; top:16px; z-index:20; }
+        .presentation-mode .tools-tray { visibility: hidden; overflow: hidden; flex: 0 0 0; max-width: 0; }
+        .presentation-exit {
+            display:none; position:absolute; right:16px; top:16px; z-index:20;
+            width: auto; min-width: 38px; height: auto; min-height: 36px;
+            padding: 7px 10px; font-size: 12px; font-weight: 750;
+        }
         .presentation-mode .presentation-exit { display:inline-grid; }
+        #reveal-tools {
+            top: 0; right: auto; left: 50%;
+            transform: translate(-50%, 0);
+            writing-mode: horizontal-tb; text-orientation: mixed;
+            min-height: auto; min-width: 108px; padding: 7px 12px;
+            border-right: 1px solid rgba(255,255,255,.18); border-top: 0;
+            border-radius: 0 0 9px 9px;
+        }
 
         @media (max-width: 1100px) {
             .workspace { --left-panel: 230px; --right-panel: 315px; }
@@ -594,31 +600,13 @@
             .app-header { min-height: 58px; }
             .header-context { display: none; }
             .workspace { display:grid; grid-template-columns:1fr; grid-template-rows:230px minmax(480px,70vh) auto; }
-            .viewer-main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
-            .viewer-main.tools-collapsed { grid-template-rows: minmax(0, 1fr) 0; }
+            .viewer-main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
             .viewer-stage { grid-column: 1; grid-row: 1; }
-            .tools-tray {
-                grid-column: 1;
-                grid-row: 2;
-                border-left: 0;
-                border-top: 1px solid var(--border);
-                max-height: min(280px, 40vh);
-            }
-            #reveal-left, #reveal-right { grid-column: 1; grid-row: 1 / -1; }
+            .annotation-name-group { max-width: 120px; min-width: 72px; }
+            #reveal-left, #reveal-right { grid-column: 1; grid-row: 1; }
             .resize-handle { display:none; }
             #images-panel { border-right: 0; border-bottom: 1px solid var(--border); }
             #channels-panel { border-left: 0; border-top: 1px solid var(--border); }
-            .viewer-main.tools-collapsed #reveal-tools {
-                display: block;
-                top: auto;
-                bottom: 0;
-                transform: none;
-                writing-mode: horizontal-tb;
-                min-height: auto;
-                width: auto;
-                padding: 8px 12px;
-                border-radius: 9px 9px 0 0;
-            }
             .status-bar { min-height: 34px; }
             .status-help { display: none; }
         }
@@ -659,13 +647,89 @@
         <div class="header-label">Current image</div>
         <div id="selected-name">No image selected</div>
     </div>
+    <div id="tools-tray" class="tools-tray" aria-label="Viewer tools">
+        <div class="viewer-toolbar" role="toolbar" aria-label="Viewer tools">
+            <div class="toolbar-group file-group" role="group" aria-label="Open and images">
+                <button id="open-image" class="toolbar-button" type="button" data-tooltip="Open&#10;Show the image browser" aria-label="Open">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h4l1 1.5h5V13H3z"/><path d="M8 7v4M6 9h4"/></svg>
+                </button>
+                <button id="toggle-left" class="toolbar-button" type="button" data-tooltip="Images&#10;Show or hide image browser" title="Show or hide image browser" aria-label="Images" aria-pressed="true">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5"/><rect x="9" y="2.5" width="4.5" height="4.5"/><rect x="2.5" y="9" width="4.5" height="4.5"/><rect x="9" y="9" width="4.5" height="4.5"/></svg>
+                </button>
+            </div>
+            <div class="toolbar-group nav-group" role="group" aria-label="Zoom and navigation">
+                <button id="zoom-in" class="toolbar-button" type="button" data-tooltip="Zoom in" aria-label="Zoom in">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4M7 5v4"/></svg>
+                </button>
+                <button id="zoom-out" class="toolbar-button" type="button" data-tooltip="Zoom out" aria-label="Zoom out">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4"/></svg>
+                </button>
+                <button id="fit-view" class="toolbar-button" type="button" data-tooltip="Zoom fit&#10;Fit the whole slide in the viewport" aria-label="Zoom fit">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/><rect x="5.5" y="5.5" width="5" height="5"/></svg>
+                </button>
+                <button id="home-view" class="toolbar-button" type="button" data-tooltip="Home view&#10;Reset to the initial home zoom" aria-label="Home view">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 2.5l5.5 5V14H9.5V9.5h-3V14H2.5z"/></svg>
+                </button>
+                <button id="pan-mode" class="toolbar-button" type="button" data-tooltip="Pan&#10;Drag to move the slide" aria-label="Pan" aria-pressed="true">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5v5.2M5.2 4.2 7 2.5l1.8 1.7M7 7.7c-2.2 0-4 1.3-4 3.4V14h8v-2.9c0-2.1-1.8-3.4-4-3.4z"/></svg>
+                </button>
+                <button id="select-mode" class="toolbar-button" type="button" data-tooltip="Select&#10;Select annotations without drawing" aria-label="Select" aria-pressed="false">
+                    <svg class="toolbar-icon filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.2 12.2 8.1l-3.4.7 1.6 4.3-1.7.7-1.6-4.2-2.7 2.4z"/></svg>
+                </button>
+            </div>
+            <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
+                <button id="annotation-mode" class="toolbar-button" type="button" data-tooltip="Rectangle&#10;Draw rectangle annotation" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="4" width="10" height="8" stroke-dasharray="2 1.5"/></svg>
+                </button>
+                <button id="polygon-mode" class="toolbar-button" type="button" data-tooltip="Polygon&#10;Polygon drawing is not available yet" aria-label="Polygon" disabled>
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 12.5 2.5 6.5 8 2.5l5.5 4-1.5 6z"/></svg>
+                </button>
+                <button id="freehand-mode" class="toolbar-button" type="button" data-tooltip="Freehand&#10;Freehand drawing is not available yet" aria-label="Freehand" disabled>
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12c2-3 3-5 4.2-5.2S9 9 10 9s2-2.5 3-4"/><path d="M11.5 2.5 13.5 4.5 6 12H4v-2z"/></svg>
+                </button>
+            </div>
+            <div class="toolbar-group visibility-group" role="group" aria-label="Annotation visibility">
+                <button id="annotation-visibility" class="toolbar-button annotation-visibility" type="button" data-tooltip="Hide annotations" title="Hide annotations" aria-label="Hide annotations" aria-pressed="true" disabled>Annotations</button>
+                <button id="annotation-names" class="toolbar-button annotation-names" type="button" data-tooltip="Hide annotation names" title="Hide annotation names" aria-label="Hide annotation names" aria-pressed="true" disabled>Names</button>
+            </div>
+            <div class="toolbar-group export-group" role="group" aria-label="Export actions">
+                <button id="export-visible-region" class="toolbar-button" type="button" data-tooltip="Export view&#10;Export the visible region at native resolution" aria-label="Export view" disabled>
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10"/><path d="M8 5.5v5M5.8 8.2 8 5.8l2.2 2.4"/></svg>
+                </button>
+                <button id="export-selected-annotation" class="toolbar-button" type="button" data-tooltip="Export annotations&#10;Export the selected annotation region" aria-label="Export annotations" disabled>
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3V13.5H4z"/><path d="M9 2.5v3h3M6.5 9h3M6.5 11h3"/></svg>
+                </button>
+            </div>
+            <div class="toolbar-group viewer-actions-group" role="group" aria-label="Viewer actions">
+                <a id="viewer-help" class="toolbar-button" href="/help/viewer-guide.html" target="_blank" rel="noopener" data-tooltip="Help" title="Open WSI Viewer quick guide in a new tab" aria-label="Open WSI Viewer quick guide in a new tab"><span class="help-link-symbol" aria-hidden="true">?</span><span class="visually-hidden">Help</span></a>
+                <button id="toggle-right" class="toolbar-button" type="button" data-tooltip="Settings&#10;Show or hide display controls" title="Show or hide display controls" aria-label="Settings" aria-pressed="true">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.5v1.4M8 12.1v1.4M2.5 8h1.4M12.1 8h1.4M4.1 4.1l1 1M10.9 10.9l1 1M11.9 4.1l-1 1M5.1 10.9l-1 1"/></svg>
+                </button>
+                <button id="slide-overview-button" class="toolbar-button" type="button" data-tooltip="Slide overview&#10;Show slide label and thumbnail" aria-label="Show slide label and thumbnail overview" disabled>
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10"/><path d="M2.5 10.5 6 7.5l2.2 2.2L11 6.5l2.5 3"/></svg>
+                </button>
+                <button id="full-screen" class="toolbar-button" type="button" data-tooltip="Full screen" aria-label="Browser full screen">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg>
+                </button>
+                <button id="toggle-tools" class="toolbar-button" type="button" data-tooltip="Hide tools" title="Hide viewer tools" aria-label="Hide viewer tools" aria-pressed="true">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5.5h10M3 8h10M3 10.5h10"/></svg>
+                </button>
+                <button id="collapse-tools" class="toolbar-button" type="button" data-tooltip="Hide tools" aria-label="Hide viewer tools">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 9.5 8 4.5l5 5"/></svg>
+                </button>
+                <button id="presentation" class="toolbar-button" type="button" data-tooltip="Presentation mode" aria-label="Enter presentation mode">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="8"/><path d="M5 13.5h6"/></svg>
+                </button>
+            </div>
+            <div class="toolbar-group annotation-name-group" role="group" aria-label="Selected annotation name">
+                <label class="annotation-name-control"><span class="visually-hidden">Selected name</span>
+                    <input id="annotation-name" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Annotation name" disabled>
+                </label>
+            </div>
+        </div>
+    </div>
     <div class="header-actions">
         <a id="local-operations" class="help-link" href="http://127.0.0.1:8084/" target="_blank" rel="noopener" title="Available only in a browser running on the image server">Local operations — Available only in a browser running on the image server</a>
-        <a id="viewer-help" class="help-link" href="/help/viewer-guide.html" target="_blank" rel="noopener" title="Open WSI Viewer quick guide in a new tab" aria-label="Open WSI Viewer quick guide in a new tab"><span class="help-link-symbol" aria-hidden="true">?</span><span>Help</span></a>
-        <button id="toggle-left" class="icon-button" title="Show or hide image browser" aria-label="Show or hide image browser">☰</button>
-        <button id="toggle-tools" class="icon-button" title="Hide viewer tools" aria-label="Hide viewer tools" aria-pressed="true">⚙</button>
-        <button id="toggle-right" class="icon-button" title="Show or hide display controls" aria-label="Show or hide display controls">☷</button>
-        <button id="presentation" class="icon-button" title="Presentation mode" aria-label="Enter presentation mode">⛶</button>
     </div>
 </header>
 <div class="workspace">
@@ -733,43 +797,6 @@
         </div>
         <button id="reveal-left" class="panel-reveal" type="button" aria-label="Show image browser">Show images</button>
         <button id="reveal-right" class="panel-reveal" type="button" aria-label="Show display controls">Show channels</button>
-        <aside id="tools-tray" class="tools-tray" aria-label="Viewer tools">
-            <div class="tools-tray-header">
-                <span class="tools-tray-title">Tools</span>
-                <button id="collapse-tools" class="panel-toggle" type="button" title="Hide viewer tools" aria-label="Hide viewer tools">›</button>
-            </div>
-            <div class="viewer-toolbar" role="toolbar" aria-label="Viewer tools">
-                <div class="toolbar-palette viewer-palette" role="group" aria-label="Export and viewer actions">
-                    <div class="toolbar-group viewer-actions-group">
-                    <button id="home-view" class="toolbar-button" title="Home view" aria-label="Home view">⌂</button>
-                    <button id="fit-view" class="toolbar-button" title="Fit image" aria-label="Fit image">□</button>
-                    <button id="slide-overview-button" class="toolbar-button" title="Show slide label and thumbnail overview" aria-label="Show slide label and thumbnail overview" disabled>▣</button>
-                    <details id="export-menu" class="export-menu">
-                        <summary class="toolbar-button" aria-label="Export image region">Export ▾</summary>
-                        <div class="export-menu-items">
-                            <button id="export-visible-region" class="export-menu-item" type="button" disabled>Entire view</button>
-                            <button id="export-selected-annotation" class="export-menu-item" type="button" disabled>Selected Annotation</button>
-                        </div>
-                    </details>
-                    <button id="full-screen" class="toolbar-button" title="Browser full screen" aria-label="Browser full screen">⛶</button>
-                    </div>
-                </div>
-                <div class="toolbar-palette annotation-palette" role="group" aria-label="Annotation controls">
-                    <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
-                        <button id="annotation-mode" class="toolbar-button" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>▱</button>
-                    </div>
-                    <div class="toolbar-group visibility-group" role="group" aria-label="Annotation visibility">
-                        <button id="annotation-visibility" class="toolbar-button annotation-visibility" title="Hide annotations" aria-label="Hide annotations" aria-pressed="true" disabled>Annotations</button>
-                        <button id="annotation-names" class="toolbar-button annotation-names" title="Hide annotation names" aria-label="Hide annotation names" aria-pressed="true" disabled>Names</button>
-                    </div>
-                    <div class="toolbar-group annotation-name-group" role="group" aria-label="Selected annotation name">
-                        <label class="annotation-name-control"><span>Selected name</span>
-                            <input id="annotation-name" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Select one annotation" disabled>
-                        </label>
-                    </div>
-                </div>
-            </div>
-        </aside>
     </main>
     <div id="right-resizer" class="resize-handle" role="separator" aria-label="Resize display controls"></div>
     <aside id="channels-panel" aria-label="Display controls">
@@ -813,8 +840,6 @@
     const resetButton = document.getElementById("reset");
     const recomputeAutoButton = document.getElementById("recompute-auto");
     const imageInfoElement = document.getElementById("image-info");
-    const exportMenu = document.getElementById("export-menu");
-    const exportMenuItems = exportMenu.querySelector(".export-menu-items");
     const exportVisibleRegionButton = document.getElementById("export-visible-region");
     const exportSelectedAnnotationButton = document.getElementById("export-selected-annotation");
     const annotationVisibilityButton = document.getElementById("annotation-visibility");
@@ -833,26 +858,6 @@
     const slideLabelImage = document.getElementById("slide-label-image");
     const slideThumbnailImage = document.getElementById("slide-thumbnail-image");
     const imageLightbox = document.getElementById("image-lightbox");
-
-    function positionExportMenu() {
-        if (!exportMenu.open) {
-            exportMenu.removeAttribute("data-placement");
-            exportMenuItems.style.removeProperty("max-height");
-            return;
-        }
-
-        const viewerBounds = document.getElementById("tools-tray").getBoundingClientRect();
-        const triggerBounds = exportMenu.querySelector("summary").getBoundingClientRect();
-        const gap = 8;
-        const spaceBelow = Math.max(0, viewerBounds.bottom - triggerBounds.bottom - gap);
-        const spaceAbove = Math.max(0, triggerBounds.top - viewerBounds.top - gap);
-        const placeAbove = exportMenuItems.scrollHeight > spaceBelow && spaceAbove > spaceBelow;
-        exportMenu.dataset.placement = placeAbove ? "above" : "below";
-        exportMenuItems.style.maxHeight = `${Math.floor(placeAbove ? spaceAbove : spaceBelow)}px`;
-    }
-
-    exportMenu.addEventListener("toggle", () => requestAnimationFrame(positionExportMenu));
-    window.addEventListener("resize", () => requestAnimationFrame(positionExportMenu));
     const imageLightboxImage = document.getElementById("image-lightbox-image");
     const imageLightboxTitle = document.getElementById("image-lightbox-title");
     let imageLightboxReturnFocus = null;
@@ -1195,6 +1200,12 @@
                     selectionChanged: updateSelectedAnnotationExportState
                 }
             );
+            const setDrawingEnabled = annotationSpike.setDrawingEnabled.bind(annotationSpike);
+            annotationSpike.setDrawingEnabled = enabled => {
+                setDrawingEnabled(enabled);
+                syncNavigateModeButtons();
+            };
+            syncNavigateModeButtons();
             // Use native pointer events here rather than OpenSeadragon's canvas-move
             // event, which is not emitted consistently across browsers/configurations.
             const updatePointerCoordinates = event => {
@@ -1270,7 +1281,6 @@
     async function exportVisibleRegion() {
         if (!viewer?.viewport || !viewer.world.getItemCount()) return;
         exportVisibleRegionButton.disabled = true;
-        document.getElementById("export-menu").open = false;
         try {
             const viewportBounds = viewer.viewport.getBounds(true);
             const imageBounds = viewer.world.getItemAt(0).viewportToImageRectangle(viewportBounds);
@@ -1298,7 +1308,6 @@
         }
 
         exportSelectedAnnotationButton.disabled = true;
-        document.getElementById("export-menu").open = false;
         try {
             const annotationBounds = annotationSpike.getAnnotationBounds(selected[0]);
             statusElement.textContent = "Exporting selected annotation at native resolution…";
@@ -1691,13 +1700,14 @@
 
     function setToolsCollapsed(collapsed) {
         viewerMain.classList.toggle("tools-collapsed", collapsed);
+        document.getElementById("tools-tray").classList.toggle("tools-collapsed", collapsed);
         localStorage.setItem(`${STORAGE_PREFIX}.toolsCollapsed`, String(collapsed));
         const headerToggle = document.getElementById("toggle-tools");
         headerToggle.setAttribute("aria-pressed", String(!collapsed));
         headerToggle.title = collapsed ? "Show viewer tools" : "Hide viewer tools";
         headerToggle.setAttribute("aria-label", headerToggle.title);
+        headerToggle.setAttribute("data-tooltip", collapsed ? "Show tools" : "Hide tools");
         setTimeout(() => viewer?.viewport?.resize(), 0);
-        requestAnimationFrame(positionExportMenu);
     }
 
     function setPanelCollapsed(side, collapsed) {
@@ -1705,10 +1715,27 @@
         localStorage.setItem(`${STORAGE_PREFIX}.${side}Collapsed`, String(collapsed));
         const headerToggle = document.getElementById(`toggle-${side}`);
         headerToggle.setAttribute("aria-pressed", String(!collapsed));
-        headerToggle.title = collapsed
-            ? (side === "left" ? "Show image browser" : "Show display controls")
-            : (side === "left" ? "Hide image browser" : "Hide display controls");
+        const showLabel = side === "left" ? "Show image browser" : "Show display controls";
+        const hideLabel = side === "left" ? "Hide image browser" : "Hide display controls";
+        const shortLabel = side === "left" ? "Images" : "Settings";
+        headerToggle.title = collapsed ? showLabel : hideLabel;
+        headerToggle.setAttribute("aria-label", shortLabel);
+        headerToggle.setAttribute(
+            "data-tooltip",
+            collapsed ? `${shortLabel}\n${showLabel}` : `${shortLabel}\n${hideLabel}`
+        );
         setTimeout(() => viewer?.viewport?.resize(), 0);
+    }
+
+    let navigateMode = "pan";
+    const panModeButton = document.getElementById("pan-mode");
+    const selectModeButton = document.getElementById("select-mode");
+    const annotationModeButton = document.getElementById("annotation-mode");
+
+    function syncNavigateModeButtons() {
+        const drawing = Boolean(annotationSpike?.drawingEnabled);
+        panModeButton.setAttribute("aria-pressed", String(!drawing && navigateMode === "pan"));
+        selectModeButton.setAttribute("aria-pressed", String(!drawing && navigateMode === "select"));
     }
 
     imageInfoElement.addEventListener("toggle", () => localStorage.setItem(
@@ -1757,8 +1784,36 @@
     }
     setToolsCollapsed(localStorage.getItem(`${STORAGE_PREFIX}.toolsCollapsed`) === "true");
 
+    document.getElementById("open-image").addEventListener("click", () => {
+        setPanelCollapsed("left", false);
+        document.getElementById("refresh-images")?.focus();
+    });
     document.getElementById("home-view").addEventListener("click", () => viewer?.viewport?.goHome());
+    document.getElementById("zoom-in").addEventListener("click", () => {
+        if (!viewer?.viewport) return;
+        viewer.viewport.zoomBy(1.25);
+        viewer.viewport.applyConstraints();
+    });
+    document.getElementById("zoom-out").addEventListener("click", () => {
+        if (!viewer?.viewport) return;
+        viewer.viewport.zoomBy(0.8);
+        viewer.viewport.applyConstraints();
+    });
     document.getElementById("fit-view").addEventListener("click", () => viewer?.viewport?.fitBounds(viewer.viewport.getHomeBounds(), false));
+    panModeButton.addEventListener("click", () => {
+        navigateMode = "pan";
+        annotationSpike?.setDrawingEnabled(false);
+        syncNavigateModeButtons();
+    });
+    selectModeButton.addEventListener("click", () => {
+        navigateMode = "select";
+        annotationSpike?.setDrawingEnabled(false);
+        syncNavigateModeButtons();
+    });
+    annotationModeButton.addEventListener("click", () => {
+        navigateMode = "select";
+        requestAnimationFrame(syncNavigateModeButtons);
+    });
     exportVisibleRegionButton.addEventListener("click", exportVisibleRegion);
     exportSelectedAnnotationButton.addEventListener("click", exportSelectedAnnotation);
     document.getElementById("full-screen").addEventListener("click", async () => {
@@ -1767,7 +1822,6 @@
     });
     document.addEventListener("fullscreenchange", () => {
         document.getElementById("full-screen").setAttribute("aria-pressed", String(Boolean(document.fullscreenElement)));
-        requestAnimationFrame(positionExportMenu);
     });
 
     function setPresentationMode(enabled) {

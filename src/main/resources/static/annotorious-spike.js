@@ -261,6 +261,7 @@ class AnnotoriousSpike {
         this.namesButton.textContent = "Names";
         this.namesButton.title = shown ? "Hide annotation names" : "Show annotation names";
         this.namesButton.setAttribute("aria-label", this.namesButton.title);
+        this.namesButton.setAttribute("data-tooltip", this.namesButton.title);
     }
 
     getSelectedAnnotations() {
@@ -376,6 +377,12 @@ class AnnotoriousSpike {
             "aria-label",
             this.toggleButton.title
         );
+        this.toggleButton.setAttribute(
+            "data-tooltip",
+            this.drawingEnabled
+                ? "Rectangle\nExit rectangle annotation mode"
+                : "Rectangle\nDraw rectangle annotation"
+        );
     }
 
     setAnnotationsVisible(visible) {
@@ -398,6 +405,7 @@ class AnnotoriousSpike {
         const visibilityAction = this.annotationsVisible ? "Hide annotations" : "Show annotations";
         this.visibilityButton.title = visibilityAction;
         this.visibilityButton.setAttribute("aria-label", visibilityAction);
+        this.visibilityButton.setAttribute("data-tooltip", visibilityAction);
         this.notifySelectionChanged();
     }
 }
