@@ -6,12 +6,16 @@ the WSI viewer.
 Reference documents:
 
 - [`RELEASE-CHEATSHEET.md`](RELEASE-CHEATSHEET.md) is the canonical online
-  quick reference rendered directly by GitHub.
+  quick reference rendered directly by GitHub (environments, cycle gates,
+  Cursor → `wsi-review` / `wsi-commit` workflow, and future QC-banner notes).
 - [`RELEASE-CHEATSHEET.html`](RELEASE-CHEATSHEET.html) is a standalone browser
   and print view.
 - `WSI-Release-Cheat-Sheet.pdf` is the verified two-page Letter print edition.
 - `render_cheatsheet.py` regenerates the PDF from the version-controlled
   operational content.
+- [`../docs/ROADMAP.md`](../docs/ROADMAP.md) records current production state,
+  priorities, and continuity guidance; it does not replace this ops command
+  reference.
 
 The renderer's only required Python package is
 [`ReportLab`](https://pypi.org/project/reportlab/). It uses ReportLab's bundled

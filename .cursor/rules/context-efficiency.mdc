@@ -5,6 +5,10 @@ alwaysApply: true
 
 # Context efficiency
 
+Companion ignore file: `.cursorignore` (build outputs, `.runtime/`, secrets,
+local ops state, WSI binaries, IDE noise). Human usage notes and release-workflow
+pointers: `docs/ROADMAP.md` and `ops/RELEASE-CHEATSHEET.md`.
+
 - Start with the smallest relevant context.
 - Do not scan or read the entire repository unless the task genuinely requires repository-wide understanding.
 - Prefer the named file, symbol, failing test, or immediate dependency chain.
@@ -18,3 +22,4 @@ alwaysApply: true
 - For bounded bug fixes, preserve existing architecture and behavior outside the failing path.
 - Prefer focused tests relevant to the change during implementation, but still run the repository's required full review gate before commit.
 - Respect ROADMAP.md, release-environment isolation, and human QC gates; context efficiency must never weaken safety or release controls.
+- Do not claim guaranteed token or credit savings; efficiency is an optimization, not permission to skip architecture, dependencies, tests, security, or release controls.

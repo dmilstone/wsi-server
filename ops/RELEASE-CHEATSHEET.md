@@ -2,6 +2,10 @@
 
 **Canonical flow:** Development -> Staging -> Production rehearsal -> Production -> Tag
 
+Current production tag (post `production-2026-08-09-compact-viewer-toolbar`):
+see `docs/ROADMAP.md` for commit and continuity priorities. Release cycles run
+on the configured feature branch; ops docs do not prescribe merge-to-main.
+
 ## Environments
 
 | Environment | Port | Runtime and identity | Data boundary |
@@ -13,6 +17,65 @@
 
 Rehearsal binds to `127.0.0.1` and is not user accessible. Production source
 edits do not affect users until an explicitly rehearsed artifact is promoted.
+
+## Cursor development → release workflow
+
+```text
+Cursor bounded task
+  → human scope review
+  → wsi-review
+  → wsi-commit "message"
+  → fresh release cycle
+  → Development QC → Staging QC → Production Rehearsal QC
+  → explicit PROMOTE → Production QC → production tag
+```
+
+Bounded Cursor tasks only. Human browser QC remains mandatory. Failed QC:
+enter `n`, stop safely, fix on the feature branch, review/test/commit, start a
+**fresh** cycle from the new HEAD. Changing HEAD after a cycle begins
+invalidates the recorded repository fingerprint; do not force-resume that
+cycle as the same candidate.
+
+### Local helpers: `wsi-review` / `wsi-commit`
+
+These are the developer's local zsh helpers (not yet in `./ops`).
+
+**`wsi-review`** (failure stops the chain):
+
+```bash
+git status &&
+git diff --stat &&
+git diff --check &&
+./mvnw clean test &&
+node --test src/test/js/*.test.js &&
+./ops/tests/run.sh
+```
+
+**`wsi-commit`**: requires a message; runs the full `wsi-review` gate first;
+stops on failure; refuses empty commits; stages with `git add -u` so
+**untracked files are not auto-committed**; runs `git diff --cached --check`;
+shows staged diff stat; commits only after checks pass; ends with `git status`.
+
+If Cursor creates an intentional new file: inspect it, then stage that path
+explicitly before `wsi-commit`. Do not weaken untracked-file safety by staging
+everything automatically.
+
+**Future (roadmap only):** consider `./ops/wsi-review` and `./ops/wsi-commit`
+so other developers are not tied to one `~/.zshrc`. Not implemented yet.
+
+### Future ops UX: prominent QC banners
+
+Desired terminal style for the four browser-QC gates (implementation later;
+do not weaken/bypass/automate `y`/`n`):
+
+```text
+============================================================
+APPROVE DEVELOPMENT BROWSER QC?
+============================================================
+Enter y to proceed or n to stop safely:
+```
+
+Equivalent banners for STAGING, REHEARSAL, and PRODUCTION.
 
 ## Normal monitored release
 
