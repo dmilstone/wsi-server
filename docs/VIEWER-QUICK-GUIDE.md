@@ -1,12 +1,9 @@
 # WSI Viewer Quick Guide
 
-Use the production address supplied by your administrator. Development and
-staging sites display a warning banner and are for validation only.
+Use the production address supplied by your administrator.
 
 ## Header and toolbar
 
-- The header shows **WSI Viewer** with **CURRENT IMAGE** and the filename
-  beneath it. There is no fluorescence subtitle.
 - All viewer tools are compact icon buttons in one header toolbar row. Hover or
   focus a button to see its name and short description.
 - **Help** (the rightmost `?` icon) opens the in-viewer quick guide.
@@ -16,16 +13,14 @@ staging sites display a warning banner and are for validation only.
 1. Choose an image in **Sample images** on the left.
 2. Use the **Images** toolbar icon to show or hide the image browser. There is
    no separate Open button.
-3. Drag the slide to pan; scroll or pinch to zoom. Normal drag-pan works without
-   a Pan mode button.
+3. Drag the slide to pan; scroll or pinch to zoom.
 4. Use **Zoom in**, **Zoom out**, or **Home** (reset to the initial home zoom).
 5. Collapse the side panels when you need more viewing space.
 
 ## 2. Adjust the displayed channels
 
 Use the **Settings** toolbar icon to show or hide the **Channels** panel on the
-right. Channel controls change presentation only; they do not modify the source
-image.
+right.
 
 - Use each channel checkbox to show or hide that channel.
 - Select a LUT color and adjust **Opacity** as needed.
@@ -37,7 +32,7 @@ image.
 
 - Click **Rectangle** to draw a rectangular annotation; click again to stop
   drawing.
-- Click an annotation directly to select it. There is no Select mode button.
+- Click an annotation directly to select it.
 - Press **Delete** or **Backspace** to remove the selected annotation.
 - Use **Annotations** and **Names** in the toolbar to show or hide geometry and
   on-slide name labels.
@@ -83,9 +78,6 @@ Confirm that the downloaded file opens before relying on it.
 
 ## 6. Environment and safety
 
-- Production normally has no environment warning banner.
-- A **DEVELOPMENT** or **STAGING** banner means validation only and not clinical
-  use.
 - Use only images and annotations appropriate for the environment you were
   assigned.
 - Do not copy sensitive production material into development or staging.
