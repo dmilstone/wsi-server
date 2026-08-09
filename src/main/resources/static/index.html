@@ -346,26 +346,24 @@
         .status-help { margin-left: auto; color: #708094; white-space: nowrap; }
 
 
-        .header-actions { display: flex; align-items: center; gap: 8px; }
-        .help-link {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            min-width: 40px;
-            min-height: 36px;
-            padding: 7px 10px;
-            color: var(--text-secondary);
-            background: var(--surface-raised);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            text-decoration: none;
-            font-size: 12px;
-            font-weight: 750;
-            white-space: nowrap;
+        .panel-secondary-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
         }
-        .help-link:hover { color: var(--text); background: var(--surface-hover); }
-        .help-link:focus-visible {
+        .panel-secondary-link {
+            color: var(--text-secondary);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            font-size: 12px;
+            font-weight: 650;
+        }
+        .panel-secondary-link:hover { color: var(--text); }
+        .panel-secondary-link:focus-visible {
             outline: 3px solid rgba(77, 148, 216, .45);
             outline-offset: 2px;
         }
@@ -767,9 +765,6 @@
         </div>
     </div>
     <input id="annotation-name" class="annotation-name-inline-input" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Unnamed annotation" hidden disabled>
-    <div class="header-actions">
-        <a id="local-operations" class="help-link" href="http://127.0.0.1:8084/" target="_blank" rel="noopener" title="Available only in a browser running on the image server">Local operations — Available only in a browser running on the image server</a>
-    </div>
 </header>
 <div class="workspace">
     <aside id="images-panel" aria-label="Image browser">
@@ -844,6 +839,10 @@
             <div class="panel-title-row"><h2>Channels</h2><button class="panel-toggle" data-collapse="right" title="Hide display controls" aria-label="Hide display controls">›</button></div>
             <div class="muted">Choose visible channels and adjust how signal is displayed.</div>
             <div class="display-actions"><button id="reset" class="action" disabled>Reset display</button><button id="recompute-auto" class="action" disabled>Recompute auto</button></div>
+            <div class="panel-secondary-actions">
+                <a id="local-operations" class="panel-secondary-link" href="http://127.0.0.1:8084/" target="_blank" rel="noopener" title="Available only in a browser running on the image server">Local operations</a>
+                <span class="muted">Image-server browser only</span>
+            </div>
         </div>
         <div id="channels"></div>
     </aside>

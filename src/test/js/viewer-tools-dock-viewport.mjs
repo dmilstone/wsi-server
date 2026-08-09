@@ -58,7 +58,6 @@ body { display:grid !important; grid-template-rows: 58px minmax(0,1fr) 30px !imp
   min-height:0 !important;
   height:100% !important;
 }
-.header-actions { display:none !important; }
 </style>
 </head>
 <body>

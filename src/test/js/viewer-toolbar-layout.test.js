@@ -103,10 +103,13 @@ assert.match(narrow, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
 assert.match(rule(".viewer-stage", "max-width:\\s*820px"), /grid-row:\s*1/);
 
 // Reference tool order (primary controls), then preserved extras.
-const toolbarHtml = html.slice(
-    html.indexOf('class="viewer-toolbar"'),
-    html.indexOf('class="header-actions"')
+const headerHtml = html.slice(
+    html.indexOf('class="app-header"'),
+    html.indexOf("</header>")
 );
+const toolbarStart = headerHtml.indexOf('class="viewer-toolbar"');
+assert.ok(toolbarStart >= 0, "header contains viewer toolbar");
+const toolbarHtml = headerHtml.slice(toolbarStart);
 const orderedIds = [
     "open-image", "toggle-left",
     "zoom-in", "zoom-out", "fit-view", "pan-mode", "select-mode",
@@ -121,6 +124,21 @@ for (const id of orderedIds) {
     assert.ok(idx > cursor, `toolbar order includes ${id}`);
     cursor = idx;
 }
+
+// Local operations stays available, but never as primary header/toolbar chrome.
+assert.doesNotMatch(headerHtml, /id="local-operations"/);
+assert.doesNotMatch(headerHtml, /header-actions/);
+assert.doesNotMatch(headerHtml, /Local operations/);
+const channelsPanelHtml = html.slice(
+    html.indexOf('id="channels-panel"'),
+    html.indexOf('id="channels"')
+);
+assert.match(
+    channelsPanelHtml,
+    /id="local-operations"[^>]*href="http:\/\/127\.0\.0\.1:8084\/"[^>]*target="_blank"[^>]*rel="noopener"/
+);
+assert.match(channelsPanelHtml, /class="panel-secondary-link"/);
+assert.match(channelsPanelHtml, />Local operations</);
 
 // Hover/focus tooltips and accessible labels on every toolbar control.
 const extraIds = [
