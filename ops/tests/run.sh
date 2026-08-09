@@ -211,6 +211,18 @@ grep -q 'remote feature commit (local tracking ref; no network)' "$TEST_ROOT/cyc
 grep -q 'tracked tree: clean' "$TEST_ROOT/cycle-dry-run"
 grep -q 'local/remote synchronization:' "$TEST_ROOT/cycle-dry-run"
 grep -q 'candidate JAR: not built' "$TEST_ROOT/cycle-dry-run"
+for qc_env_url in \
+    "DEVELOPMENT BROWSER QC|VALIDATE: http://localhost:8081" \
+    "STAGING BROWSER QC|VALIDATE: http://localhost:8082" \
+    "REHEARSAL BROWSER QC|VALIDATE: http://localhost:8083" \
+    "PRODUCTION BROWSER QC|VALIDATE: http://localhost:8080"
+do
+    IFS='|' read -r qc_banner qc_url <<<"$qc_env_url"
+    grep -q "$qc_banner" "$TEST_ROOT/cycle-dry-run"
+    grep -q "$qc_url" "$TEST_ROOT/cycle-dry-run"
+done
+grep -q '\[ \] correct banner/title; login; image discovery/opening/switching' "$TEST_ROOT/cycle-dry-run"
+grep -q '\[ \] annotation load/select/create/name/rename/delete/persist and global Show/Hide' "$TEST_ROOT/cycle-dry-run"
 pass "cycle dry-run is mutation-free and preserves complete safe phase ordering"
 
 # Regression: a non-default cycle branch still places DEVELOPMENT-PASS before the
@@ -261,12 +273,28 @@ source "$OPS_CYCLE_SCRIPT"
 
 for environment_token in "development DEVELOPMENT-PASS" "staging STAGING-PASS" "rehearsal REHEARSAL-PASS" "production PRODUCTION-PASS"; do
     read -r environment token <<<"$environment_token"
+    case "$environment" in
+        development) expected_label=DEVELOPMENT; expected_port=8081 ;;
+        staging) expected_label=STAGING; expected_port=8082 ;;
+        rehearsal) expected_label=REHEARSAL; expected_port=8083 ;;
+        production) expected_label=PRODUCTION; expected_port=8080 ;;
+    esac
     CYCLE_GATES=""
-    cycle_gate "$environment" "$token" <<<'y'
+    cycle_gate "$environment" "$token" <<<'y' >"$CYCLE_RUNTIME/gate.out"
+    [[ "$CYCLE_GATES" = "$token" ]]
+    grep -q "$expected_label BROWSER QC" "$CYCLE_RUNTIME/gate.out"
+    grep -q "VALIDATE: http://localhost:$expected_port" "$CYCLE_RUNTIME/gate.out"
+    grep -q "APPROVE $expected_label BROWSER QC?" "$CYCLE_RUNTIME/gate.out"
+    grep -q '\[ \] correct banner/title; login; image discovery/opening/switching' "$CYCLE_RUNTIME/gate.out"
+    grep -q "\[ \] exports; $environment annotation-directory isolation" "$CYCLE_RUNTIME/gate.out"
+    CYCLE_GATES=""
+    cycle_gate "$environment" "$token" <<<'Y' >"$CYCLE_RUNTIME/gate.out"
     [[ "$CYCLE_GATES" = "$token" ]]
     CYCLE_GATES=""
-    cycle_gate "$environment" "$token" <<<'Y'
+    printf '\n\ny\n' | cycle_gate "$environment" "$token" >"$CYCLE_RUNTIME/gate-blank.out"
     [[ "$CYCLE_GATES" = "$token" ]]
+    [[ "$(grep -c 'Blank response is not allowed.' "$CYCLE_RUNTIME/gate-blank.out")" -eq 2 ]]
+    [[ "$(grep -c "APPROVE $expected_label BROWSER QC?" "$CYCLE_RUNTIME/gate-blank.out")" -eq 3 ]]
 done
 
 check_stop() {
@@ -285,6 +313,10 @@ output="$(printf 'maybe\ny\n' | cycle_confirm "Approve development browser QC?" 
 [[ "$output" = *"Enter y or n."* ]]
 check_stop '' 'Input closed; stopped safely'
 
+output="$(printf '\n\ny\n' | cycle_confirm "Promote this candidate to production?" 2>&1)"
+[[ "$(grep -c 'Blank response is not allowed.' <<<"$output")" -eq 2 ]]
+[[ "$(grep -c 'Promote this candidate to production?' <<<"$output")" -eq 3 ]]
+
 # Canonical values already present in old state remain untouched and usable.
 CYCLE_GATES='DEVELOPMENT-PASS,STAGING-PASS,REHEARSAL-PASS,PRODUCTION-PASS'
 [[ ",$CYCLE_GATES," = *,DEVELOPMENT-PASS,* ]]
@@ -294,6 +326,12 @@ pass "central y/n helper enforces browser gates and preserves canonical tokens"
 grep -q 'cycle_confirm "Promote this candidate to production?"' "$OPS_DIR/wsi-release-cycle.sh"
 grep -q 'CYCLE_COMPLETED=6; cycle_save' "$OPS_DIR/wsi-release-cycle.sh"
 grep -q 'Choosing n stops without completing production QC or publishing a tag' "$OPS_DIR/wsi-release-cycle.sh"
+grep -q 'Type PROMOTE' "$RELEASE"
+grep -q 'Type ROLLBACK' "$RELEASE"
+blank_promote="$(printf '\n' | (read -r -p "Type PROMOTE to stop production and install this candidate: " answer; [[ "$answer" = PROMOTE ]] && printf PROCEEDED || printf REJECTED))"
+[[ "$blank_promote" = REJECTED ]]
+blank_rollback="$(printf '\n' | (read -r -p "Type ROLLBACK to restore this release: " answer; [[ "$answer" = ROLLBACK ]] && printf PROCEEDED || printf REJECTED))"
+[[ "$blank_rollback" = REJECTED ]]
 pass "promotion and production QC require explicit y before mutation or completion"
 
 # Exercise the real (non-dry-run) Phase 1 under nounset. The fixture has a
@@ -601,6 +639,92 @@ EOF
 [[ ! -d "$tag_production/failed-releases" ]]
 [[ ! -e "$tag_repo/.git/refs/tags/production-2026-08-05-live-image-discovery" ]]
 pass "cycle resume persists requested tags, handles conflicts and old state, and preserves SKIP prompts safely"
+
+# Suggested production-tag prompt: blank Enter accepts only the suggestion;
+# alternate names and SKIP work; publish still requires explicit confirmation;
+# suggestions follow production-YYYY-MM-DD-description and avoid existing tags.
+suggest_fixture="$TEST_ROOT/cycle-tag-suggest"
+suggest_repo="$suggest_fixture/repo"
+mkdir -p "$suggest_repo"
+git -C "$suggest_repo" init -q
+git -C "$suggest_repo" config user.name "WSI operations test"
+git -C "$suggest_repo" config user.email "wsi-operations-test@example.invalid"
+printf 'base\n' >"$suggest_repo/tracked.txt"
+git -C "$suggest_repo" add tracked.txt
+git -C "$suggest_repo" commit -q -m 'Initial fixture'
+git -C "$suggest_repo" tag -a production-2026-08-01-environment-safety -m 'previous production'
+printf 'change\n' >"$suggest_repo/tracked.txt"
+git -C "$suggest_repo" add tracked.txt
+git -C "$suggest_repo" commit -q -m 'Fix annotation label drag regression'
+suggest_runtime="$suggest_fixture/development"
+mkdir -p "$suggest_runtime"
+WSI_REPO="$suggest_repo" \
+REPO="$suggest_repo" \
+WSI_CYCLE_RUNTIME="$suggest_runtime" \
+WSI_CYCLE_BRANCH=fixture-release-cycle \
+OPS_CYCLE_SCRIPT="$OPS_DIR/wsi-release-cycle.sh" \
+bash <<'EOF'
+set -euo pipefail
+DRY_RUN=false
+CYCLE_LOG=""
+CYCLE_GATES=""
+TAG_NAME=""
+validate_tag_name() { git -C "$REPO" check-ref-format "refs/tags/$1"; }
+tag_release() { printf 'TAG_RELEASE:%s\n' "$TAG_NAME"; }
+source "$OPS_CYCLE_SCRIPT"
+CYCLE_HEAD="$(git -C "$REPO" rev-parse HEAD)"
+CYCLE_ID=tag-suggest
+CYCLE_REMOTE_COMMIT=unpublished
+CYCLE_COMPLETED=8
+CYCLE_JAR=""; CYCLE_SHA=""; CYCLE_BACKUP=""
+CYCLE_STAGING_ID=; CYCLE_REHEARSAL_ID=; CYCLE_PRODUCTION_ID=
+CYCLE_DEV_FP=x; CYCLE_STAGING_FP=x; CYCLE_REHEARSAL_FP=x; CYCLE_PROD_FP=x
+
+previous="$(cycle_previous_production_tag)"
+[[ "$previous" = production-2026-08-01-environment-safety ]]
+suggested="$(cycle_suggest_production_tag)"
+[[ "$suggested" = production-$(date +%Y-%m-%d)-fix-annotation-label-drag-regression ]] || \
+[[ "$suggested" =~ ^production-[0-9]{4}-[0-9]{2}-[0-9]{2}-fix-annotation-label-drag-regression$ ]]
+git -C "$REPO" check-ref-format "refs/tags/$suggested"
+
+TAG_NAME=""
+printf '\n' | cycle_prompt_production_tag >"$CYCLE_RUNTIME/accept-suggest.out"
+[[ "$TAG_NAME" = "$suggested" ]]
+grep -q 'PRODUCTION RELEASE TAG' "$CYCLE_RUNTIME/accept-suggest.out"
+grep -q "Previous tag: $previous" "$CYCLE_RUNTIME/accept-suggest.out"
+grep -q "Suggested:    $suggested" "$CYCLE_RUNTIME/accept-suggest.out"
+
+TAG_NAME=""
+printf 'production-2026-08-09-custom-override\n' | cycle_prompt_production_tag >"$CYCLE_RUNTIME/override.out"
+[[ "$TAG_NAME" = production-2026-08-09-custom-override ]]
+
+TAG_NAME=""
+printf 'SKIP\n' | cycle_prompt_production_tag >"$CYCLE_RUNTIME/skip.out"
+[[ "$TAG_NAME" = SKIP ]]
+
+git -C "$REPO" tag -a "$suggested" -m 'conflict fixture'
+TAG_NAME=""
+conflict_suggested="$(cycle_suggest_production_tag)"
+[[ "$conflict_suggested" != "$suggested" ]]
+[[ "$conflict_suggested" =~ ^production-[0-9]{4}-[0-9]{2}-[0-9]{2}-fix-annotation-label-drag-regression-2$ ]]
+
+TAG_NAME="$suggested"
+printf 'n\n' | if cycle_confirm "Publish tag $TAG_NAME?" "Enter y to publish or n to skip:"; then tag_release; else cycle_say "Tagging skipped"; fi >"$CYCLE_RUNTIME/no-auto-publish.out"
+grep -q 'Tagging skipped' "$CYCLE_RUNTIME/no-auto-publish.out"
+! grep -q 'TAG_RELEASE:' "$CYCLE_RUNTIME/no-auto-publish.out"
+
+TAG_NAME=production-2026-08-09-custom-override
+printf 'y\n' | if cycle_confirm "Publish tag $TAG_NAME?" "Enter y to publish or n to skip:"; then tag_release; else cycle_say "Tagging skipped"; fi >"$CYCLE_RUNTIME/explicit-publish.out"
+grep -q 'TAG_RELEASE:production-2026-08-09-custom-override' "$CYCLE_RUNTIME/explicit-publish.out"
+
+# Blank Enter must not publish; only the tag-name prompt accepts blank for the suggestion.
+TAG_NAME=production-2026-08-09-custom-override
+printf '\n\ny\n' | if cycle_confirm "Publish tag $TAG_NAME?" "Enter y to publish or n to skip:"; then tag_release; else cycle_say "Tagging skipped"; fi >"$CYCLE_RUNTIME/blank-publish.out"
+[[ "$(grep -c 'Blank response is not allowed.' "$CYCLE_RUNTIME/blank-publish.out")" -eq 2 ]]
+grep -q 'TAG_RELEASE:production-2026-08-09-custom-override' "$CYCLE_RUNTIME/blank-publish.out"
+EOF
+[[ ! -e "$suggest_repo/.git/refs/tags/production-2026-08-09-custom-override" ]]
+pass "suggested production tag prompt accepts blank Enter only for the suggestion and still requires publish confirmation"
 
 # Build a small, non-running fixture and prove that stage --dry-run traverses
 # preflight without producing a candidate or invoking process control.

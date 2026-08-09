@@ -110,19 +110,51 @@ everything automatically.
 **Future (roadmap only):** consider `./ops/wsi-review` and `./ops/wsi-commit`
 so other developers are not tied to one `~/.zshrc`. Not implemented yet.
 
-### Future ops UX: prominent QC banners
+### Browser QC gate display
 
-Desired terminal style for the four browser-QC gates (implementation later;
-do not weaken/bypass/automate `y`/`n`):
+Each human browser-QC gate prints a prominent banner with the environment name
+and exact validation URL immediately before the checklist and `y`/`n` approval.
+Do not weaken/bypass/automate `y`/`n`.
 
 ```text
 ============================================================
-APPROVE DEVELOPMENT BROWSER QC?
+DEVELOPMENT BROWSER QC
+VALIDATE: http://localhost:8081
 ============================================================
+[existing QC checklist]
+
+APPROVE DEVELOPMENT BROWSER QC?
 Enter y to proceed or n to stop safely:
 ```
 
-Equivalent banners for STAGING, REHEARSAL, and PRODUCTION.
+Equivalent banners:
+- Staging → `http://localhost:8082`
+- Rehearsal → `http://localhost:8083`
+- Production → `http://localhost:8080`
+
+### Production release tag prompt
+
+After successful Production QC, when no tag was supplied via `--tag` or resume
+state, the cycle shows the previous production tag and a suggested next tag
+(`production-YYYY-MM-DD-description`, derived from commits since the previous
+production tag when practical). Interaction:
+
+```text
+============================================================
+PRODUCTION RELEASE TAG
+============================================================
+Previous tag: production-2026-08-09-compact-viewer-toolbar
+Suggested:    production-2026-08-09-annotation-label-drag-fix
+
+Press Enter to accept the suggested tag,
+type another tag name to override,
+or type SKIP to publish no tag:
+```
+
+Blank Enter accepts the displayed suggestion **only** at this tag-name prompt.
+`SKIP` publishes no tag. Any selected tag still requires the existing explicit
+publish confirmation (`y`/`n`). Passing Production QC never implies a tag will
+be published. Tag conflicts are rejected safely; rollback behavior is unchanged.
 
 ## Normal monitored release
 
@@ -137,8 +169,9 @@ tests, candidate publication, staging, exact-artifact rehearsal, promotion
 preflight, verified production backup/promotion, and optional tagging. It pauses
 for explicit `y`/`n` gates at development, staging, rehearsal, promotion,
 production QC, and tag publication. Blank or invalid answers repeat the same
-question; Return alone never advances. Browser success is never inferred.
-State is `.runtime/run/release-cycle.state`; detailed non-sensitive
+question; Return alone never advances those gates. At the optional tag-name
+prompt only, blank Enter accepts the displayed suggestion. Browser success is
+never inferred. State is `.runtime/run/release-cycle.state`; detailed non-sensitive
 logs are `.runtime/log/cycle-*.log`.
 
 Human gates shown by the cycle include `Development browser QC: y/n`,
@@ -215,6 +248,10 @@ pan, zoom, channels, annotations and exports; no CSRF `403`, HTTP `500`, layout
 or persistence regression. Confirm `8081`, `8082` and `8083` remain isolated.
 
 ### 5. Tag only after production validation
+
+During `./ops/wsi-release cycle`, after Production QC, accept the suggested
+`production-YYYY-MM-DD-description` tag with Enter, type an override, or `SKIP`.
+Publish still requires an explicit `y`. Or tag later:
 
 ```bash
 ./ops/wsi-release tag production-YYYY-MM-DD-description

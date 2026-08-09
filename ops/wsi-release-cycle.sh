@@ -96,9 +96,22 @@ cycle_confirm() {
         esac
     done
 }
+cycle_qc_label_port() {
+    case "$1" in
+        development) printf '%s %s' DEVELOPMENT 8081 ;;
+        staging) printf '%s %s' STAGING 8082 ;;
+        rehearsal) printf '%s %s' REHEARSAL 8083 ;;
+        production) printf '%s %s' PRODUCTION 8080 ;;
+        *) cycle_fail "Unknown browser QC environment: $1" ;;
+    esac
+}
 cycle_gate() {
-    local environment="$1" token="$2" action
-    cycle_say "Browser QC — $environment"
+    local environment="$1" token="$2" action label port
+    read -r label port <<<"$(cycle_qc_label_port "$environment")"
+    cycle_say "============================================================"
+    cycle_say "$label BROWSER QC"
+    cycle_say "VALIDATE: http://localhost:$port"
+    cycle_say "============================================================"
     cycle_say "  [ ] correct banner/title; login; image discovery/opening/switching"
     cycle_say "  [ ] tiles, pan/zoom, channel and display controls"
     cycle_say "  [ ] annotation load/select/create/name/rename/delete/persist and global Show/Hide"
@@ -106,13 +119,100 @@ cycle_gate() {
     cycle_say "  [ ] console has no application Promise rejection or unexpected 403/400/500"
     cycle_say "  [ ] no sustained unexpected performance delay"
     $DRY_RUN && { cycle_say "  expected gate: $token"; return; }
-    action="Approve $environment browser QC?"
     if [[ "$environment" = production ]]; then
         cycle_say "  Choosing n stops without completing production QC or publishing a tag."
         cycle_say "  It does not roll back the installed candidate; resume this cycle or use the existing rollback command."
     fi
+    action="APPROVE $label BROWSER QC?"
     cycle_confirm "$action" || exit 0
     CYCLE_GATES="${CYCLE_GATES:+$CYCLE_GATES,}$token"
+}
+cycle_previous_production_tag() {
+    git -C "$REPO" tag -l 'production-*' --sort=-creatordate | sed -n '1p'
+}
+cycle_sanitize_tag_fragment() {
+    local fragment
+    fragment="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+    fragment="$(printf '%s' "$fragment" | cut -c1-60)"
+    fragment="${fragment%-}"
+    printf '%s' "$fragment"
+}
+cycle_suggest_production_tag() {
+    local previous date_part description subject suggested n
+    previous="$(cycle_previous_production_tag)"
+    date_part="$(date +%Y-%m-%d)"
+    description=""
+    if [[ -n "$previous" ]]; then
+        subject="$(git -C "$REPO" log --format=%s --no-merges "${previous}..HEAD" 2>/dev/null | sed -n '1p' || true)"
+    else
+        subject="$(git -C "$REPO" log --format=%s --no-merges -1 2>/dev/null || true)"
+    fi
+    if [[ -n "$subject" ]]; then
+        subject="$(printf '%s' "$subject" | sed -E 's/^(fix|feat|chore|docs|refactor|test|ci)(\([^)]*\))?:[[:space:]]*//I')"
+        description="$(cycle_sanitize_tag_fragment "$subject")"
+    fi
+    [[ -n "$description" ]] || description=release
+    suggested="production-${date_part}-${description}"
+    n=2
+    while git -C "$REPO" rev-parse -q --verify "refs/tags/$suggested" >/dev/null 2>&1; do
+        suggested="production-${date_part}-${description}-${n}"
+        n=$((n + 1))
+        [[ "$n" -lt 100 ]] || break
+    done
+    if ! git -C "$REPO" check-ref-format "refs/tags/$suggested" >/dev/null 2>&1; then
+        suggested="production-${date_part}-release"
+    fi
+    printf '%s' "$suggested"
+}
+cycle_prompt_production_tag() {
+    local previous suggested answer
+    previous="$(cycle_previous_production_tag)"
+    suggested="$(cycle_suggest_production_tag)"
+    cycle_say "============================================================"
+    cycle_say "PRODUCTION RELEASE TAG"
+    cycle_say "============================================================"
+    if [[ -n "$previous" ]]; then
+        cycle_say "Previous tag: $previous"
+    else
+        cycle_say "Previous tag: (none)"
+    fi
+    cycle_say "Suggested:    $suggested"
+    cycle_say ""
+    cycle_say "Press Enter to accept the suggested tag,"
+    cycle_say "type another tag name to override,"
+    cycle_say "or type SKIP to publish no tag:"
+    while true; do
+        if ! IFS= read -r answer; then
+            cycle_say "Input closed; tagging skipped safely."
+            TAG_NAME=SKIP
+            return 0
+        fi
+        case "$answer" in
+            SKIP)
+                TAG_NAME=SKIP
+                return 0
+                ;;
+            "")
+                TAG_NAME="$suggested"
+                ;;
+            *)
+                TAG_NAME="$answer"
+                ;;
+        esac
+        if ! git -C "$REPO" check-ref-format "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            cycle_say "Invalid tag name: $TAG_NAME"
+            cycle_say "Enter a valid tag name, press Enter for the suggestion, or type SKIP:"
+            continue
+        fi
+        if git -C "$REPO" rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            cycle_say "Tag already exists: $TAG_NAME"
+            cycle_say "Enter a different tag name, press Enter for the suggestion, or type SKIP:"
+            continue
+        fi
+        validate_tag_name "$TAG_NAME"
+        cycle_save
+        return 0
+    done
 }
 cycle_phase() { CYCLE_PHASE="$2"; cycle_say "PHASE $1 — $2"; }
 cycle_identity() { local root="$1"; printf '%s|%s|%s' "$(cat "$root/app/BUILD_COMMIT.txt" 2>/dev/null || :)" "$(cat "$root/app/BUILD_TAG.txt" 2>/dev/null || :)" "$(cycle_hash_file "$root/app/wsi-server.jar")"; }
@@ -301,8 +401,7 @@ cycle_release() {
     $DRY_RUN || [[ "$CYCLE_COMPLETED" -ge 8 ]] || { cycle_gate production PRODUCTION-PASS; CYCLE_COMPLETED=8; cycle_save; cycle_say "RELEASE COMPLETED SUCCESSFULLY"; }
     if $DRY_RUN; then cycle_gate production PRODUCTION-PASS; cycle_say "  expected optional tag prompt: TAG or SKIP"; return; fi
     if [[ -z "$TAG_NAME" ]]; then
-        read -r -p "Tag name, or SKIP: " TAG_NAME || { cycle_say "Input closed; tagging skipped safely."; return 0; }
-        [[ "$TAG_NAME" = SKIP ]] || { validate_tag_name "$TAG_NAME"; cycle_save; }
+        cycle_prompt_production_tag
     fi
     if [[ "$TAG_NAME" = SKIP ]]; then cycle_say "Tagging skipped; use ./ops/wsi-release tag later."; else
         cycle_confirm "Publish tag $TAG_NAME?" "Enter y to publish or n to skip:" || { cycle_say "Tagging skipped; use ./ops/wsi-release tag later."; return 0; }
