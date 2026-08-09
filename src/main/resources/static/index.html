@@ -694,42 +694,36 @@
     <div id="tools-tray" class="tools-tray" aria-label="Viewer tools">
         <div class="viewer-toolbar" role="toolbar" aria-label="Viewer tools">
             <div class="toolbar-group file-group" role="group" aria-label="Open and images">
-                <button id="open-image" class="toolbar-button" type="button" data-tooltip="Open&#10;Show the image browser" aria-label="Open">
+                <button id="open-image" class="toolbar-button" type="button" data-tooltip="Open&#10;Show the image browser" title="Open — Show the image browser" aria-label="Open">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h4l1 1.5h5V13H3z"/><path d="M8 7v4M6 9h4"/></svg>
                 </button>
-                <button id="toggle-left" class="toolbar-button" type="button" data-tooltip="Images&#10;Show or hide image browser" title="Show or hide image browser" aria-label="Images" aria-pressed="true">
+                <button id="toggle-left" class="toolbar-button" type="button" data-tooltip="Images&#10;Show or hide image browser" title="Images — Show or hide image browser" aria-label="Images" aria-pressed="true">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5"/><rect x="9" y="2.5" width="4.5" height="4.5"/><rect x="2.5" y="9" width="4.5" height="4.5"/><rect x="9" y="9" width="4.5" height="4.5"/></svg>
                 </button>
             </div>
             <div class="toolbar-group nav-group" role="group" aria-label="Zoom and navigation">
-                <button id="zoom-in" class="toolbar-button" type="button" data-tooltip="Zoom in" aria-label="Zoom in">
+                <button id="zoom-in" class="toolbar-button" type="button" data-tooltip="Zoom in" title="Zoom in" aria-label="Zoom in">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4M7 5v4"/></svg>
                 </button>
-                <button id="zoom-out" class="toolbar-button" type="button" data-tooltip="Zoom out" aria-label="Zoom out">
+                <button id="zoom-out" class="toolbar-button" type="button" data-tooltip="Zoom out" title="Zoom out" aria-label="Zoom out">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4"/></svg>
                 </button>
-                <button id="fit-view" class="toolbar-button" type="button" data-tooltip="Zoom fit&#10;Fit the whole slide in the viewport" aria-label="Zoom fit">
+                <button id="fit-view" class="toolbar-button" type="button" data-tooltip="Fit slide&#10;Fit the whole slide in the viewport" title="Fit slide — Fit the whole slide in the viewport" aria-label="Fit slide">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/><rect x="5.5" y="5.5" width="5" height="5"/></svg>
                 </button>
-                <button id="home-view" class="toolbar-button" type="button" data-tooltip="Home view&#10;Reset to the initial home zoom" aria-label="Home view">
+                <button id="home-view" class="toolbar-button" type="button" data-tooltip="Home&#10;Reset to the initial home zoom" title="Home — Reset to the initial home zoom" aria-label="Home">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 2.5l5.5 5V14H9.5V9.5h-3V14H2.5z"/></svg>
                 </button>
-                <button id="pan-mode" class="toolbar-button" type="button" data-tooltip="Pan&#10;Drag to move the slide" aria-label="Pan" aria-pressed="true">
+                <button id="pan-mode" class="toolbar-button" type="button" data-tooltip="Pan&#10;Drag to move the slide" title="Pan — Drag to move the slide" aria-label="Pan" aria-pressed="true">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5v5.2M5.2 4.2 7 2.5l1.8 1.7M7 7.7c-2.2 0-4 1.3-4 3.4V14h8v-2.9c0-2.1-1.8-3.4-4-3.4z"/></svg>
                 </button>
-                <button id="select-mode" class="toolbar-button" type="button" data-tooltip="Select&#10;Select annotations without drawing" aria-label="Select" aria-pressed="false">
+                <button id="select-mode" class="toolbar-button" type="button" data-tooltip="Select&#10;Select an annotation" title="Select — Select an annotation" aria-label="Select" aria-pressed="false">
                     <svg class="toolbar-icon filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.2 12.2 8.1l-3.4.7 1.6 4.3-1.7.7-1.6-4.2-2.7 2.4z"/></svg>
                 </button>
             </div>
             <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
-                <button id="annotation-mode" class="toolbar-button" type="button" data-tooltip="Rectangle&#10;Draw rectangle annotation" title="Draw rectangle annotation" aria-label="Draw rectangle annotation" aria-pressed="false" disabled>
+                <button id="annotation-mode" class="toolbar-button" type="button" data-tooltip="Rectangle&#10;Draw a rectangular annotation" title="Rectangle — Draw a rectangular annotation" aria-label="Rectangle" aria-pressed="false" disabled>
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="4" width="10" height="8" stroke-dasharray="2 1.5"/></svg>
-                </button>
-                <button id="polygon-mode" class="toolbar-button" type="button" data-tooltip="Polygon&#10;Polygon drawing is not available yet" aria-label="Polygon" disabled>
-                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 12.5 2.5 6.5 8 2.5l5.5 4-1.5 6z"/></svg>
-                </button>
-                <button id="freehand-mode" class="toolbar-button" type="button" data-tooltip="Freehand&#10;Freehand drawing is not available yet" aria-label="Freehand" disabled>
-                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12c2-3 3-5 4.2-5.2S9 9 10 9s2-2.5 3-4"/><path d="M11.5 2.5 13.5 4.5 6 12H4v-2z"/></svg>
                 </button>
             </div>
             <div class="toolbar-group visibility-group" role="group" aria-label="Annotation visibility">
@@ -737,28 +731,28 @@
                 <button id="annotation-names" class="toolbar-button annotation-names" type="button" data-tooltip="Hide annotation names" title="Hide annotation names" aria-label="Hide annotation names" aria-pressed="true" disabled>Names</button>
             </div>
             <div class="toolbar-group export-group" role="group" aria-label="Export actions">
-                <button id="export-visible-region" class="toolbar-button" type="button" data-tooltip="Export view&#10;Export the visible region at native resolution" aria-label="Export view" disabled>
+                <button id="export-visible-region" class="toolbar-button" type="button" data-tooltip="Export visible region&#10;Export the area currently visible in the viewer at native resolution" title="Export visible region — Export the area currently visible in the viewer at native resolution" aria-label="Export visible region" disabled>
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10"/><path d="M8 5.5v5M5.8 8.2 8 5.8l2.2 2.4"/></svg>
                 </button>
-                <button id="export-selected-annotation" class="toolbar-button" type="button" data-tooltip="Export annotations&#10;Export the selected annotation region" aria-label="Export annotations" disabled>
+                <button id="export-selected-annotation" class="toolbar-button" type="button" data-tooltip="Export selected annotation&#10;Export the selected annotation region" title="Export selected annotation — Export the selected annotation region" aria-label="Export selected annotation" disabled>
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3V13.5H4z"/><path d="M9 2.5v3h3M6.5 9h3M6.5 11h3"/></svg>
                 </button>
             </div>
             <div class="toolbar-group viewer-actions-group" role="group" aria-label="Viewer actions">
-                <a id="viewer-help" class="toolbar-button" href="/help/viewer-guide.html" target="_blank" rel="noopener" data-tooltip="Help" title="Open WSI Viewer quick guide in a new tab" aria-label="Open WSI Viewer quick guide in a new tab"><span class="help-link-symbol" aria-hidden="true">?</span><span class="visually-hidden">Help</span></a>
-                <button id="toggle-right" class="toolbar-button" type="button" data-tooltip="Settings&#10;Show or hide display controls" title="Show or hide display controls" aria-label="Settings" aria-pressed="true">
+                <a id="viewer-help" class="toolbar-button" href="/help/viewer-guide.html" target="_blank" rel="noopener" data-tooltip="Help&#10;Open the WSI Viewer quick guide" title="Help — Open the WSI Viewer quick guide" aria-label="Help"><span class="help-link-symbol" aria-hidden="true">?</span><span class="visually-hidden">Help</span></a>
+                <button id="toggle-right" class="toolbar-button" type="button" data-tooltip="Settings&#10;Show or hide display controls" title="Settings — Show or hide display controls" aria-label="Settings" aria-pressed="true">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.5v1.4M8 12.1v1.4M2.5 8h1.4M12.1 8h1.4M4.1 4.1l1 1M10.9 10.9l1 1M11.9 4.1l-1 1M5.1 10.9l-1 1"/></svg>
                 </button>
-                <button id="slide-overview-button" class="toolbar-button" type="button" data-tooltip="Slide overview&#10;Show slide label and thumbnail" aria-label="Show slide label and thumbnail overview" disabled>
+                <button id="slide-overview-button" class="toolbar-button" type="button" data-tooltip="Slide overview&#10;Show slide label and thumbnail" title="Slide overview — Show slide label and thumbnail" aria-label="Slide overview" disabled>
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10"/><path d="M2.5 10.5 6 7.5l2.2 2.2L11 6.5l2.5 3"/></svg>
                 </button>
-                <button id="full-screen" class="toolbar-button" type="button" data-tooltip="Full screen" aria-label="Browser full screen">
+                <button id="full-screen" class="toolbar-button" type="button" data-tooltip="Full screen&#10;Enter or exit browser full screen" title="Full screen — Enter or exit browser full screen" aria-label="Full screen">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg>
                 </button>
-                <button id="toggle-tools" class="toolbar-button" type="button" data-tooltip="Hide tools" title="Hide viewer tools" aria-label="Hide viewer tools" aria-pressed="true">
+                <button id="toggle-tools" class="toolbar-button" type="button" data-tooltip="Hide tools&#10;Hide the viewer toolbar" title="Hide tools — Hide the viewer toolbar" aria-label="Hide tools" aria-pressed="true">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5.5h10M3 8h10M3 10.5h10"/></svg>
                 </button>
-                <button id="presentation" class="toolbar-button" type="button" data-tooltip="Presentation mode" aria-label="Enter presentation mode">
+                <button id="presentation" class="toolbar-button" type="button" data-tooltip="Presentation&#10;Enter or exit presentation mode" title="Presentation — Enter or exit presentation mode" aria-label="Presentation">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="8"/><path d="M5 13.5h6"/></svg>
                 </button>
             </div>
@@ -1291,6 +1285,27 @@
     }
 
     const MAX_EXPORT_PIXELS = 16000000;
+    const MAX_EXPORT_FILENAME_PART = 80;
+
+    function sanitizeExportFilenamePart(value) {
+        const cleaned = String(value ?? "")
+            .normalize("NFKC")
+            .replace(/[\u0000-\u001f\u007f]/g, "")
+            .replace(/[\\/:*?"<>|]+/g, "-")
+            .replace(/\s+/g, "-")
+            .replace(/\.+/g, ".")
+            .replace(/-+/g, "-")
+            .replace(/^[.-]+|[.-]+$/g, "");
+        return cleaned.slice(0, MAX_EXPORT_FILENAME_PART).replace(/[.-]+$/g, "");
+    }
+
+    function buildExportDownloadName(slideName, annotationName) {
+        const slideBase = String(slideName ?? "").replace(/\.[^.]+$/, "");
+        const slidePart = sanitizeExportFilenamePart(slideBase) || "slide";
+        const annotationPart = sanitizeExportFilenamePart(annotationName);
+        if (annotationPart) return `${slidePart}-${annotationPart}.png`;
+        return `${slidePart}-region.png`;
+    }
 
     function normalizeExportBounds(bounds) {
         if (!bounds || !metadata) return null;
@@ -1324,8 +1339,9 @@
         return scale;
     }
 
-    // Bounds are accepted separately so annotation export can reuse this path later.
-    async function exportImageBounds(bounds) {
+    // Bounds are accepted separately so annotation export can reuse this path.
+    // Optional downloadName keeps fetch/blob/error handling in one place.
+    async function exportImageBounds(bounds, options = {}) {
         if (!selectedImage || !metadata) return;
         const region = normalizeExportBounds(bounds);
         if (!region) throw new Error("No image pixels are visible to export.");
@@ -1345,7 +1361,7 @@
         const blobUrl = URL.createObjectURL(await response.blob());
         const link = document.createElement("a");
         link.href = blobUrl;
-        link.download = `${selectedImage.name.replace(/\.[^.]+$/, "")}-region.png`;
+        link.download = options.downloadName || buildExportDownloadName(selectedImage.name);
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -1390,9 +1406,13 @@
 
         exportSelectedAnnotationButton.disabled = true;
         try {
-            const annotationBounds = annotationSpike.getAnnotationBounds(selected[0]);
+            const annotation = selected[0];
+            const annotationBounds = annotationSpike.getAnnotationBounds(annotation);
+            const annotationName = annotationSpike.adapter?.getAnnotationName?.(annotation.id);
             statusElement.textContent = "Exporting selected annotation at native resolution…";
-            await exportImageBounds(annotationBounds);
+            await exportImageBounds(annotationBounds, {
+                downloadName: buildExportDownloadName(selectedImage?.name, annotationName)
+            });
             statusElement.textContent = "Selected annotation exported.";
         } catch (error) {
             statusElement.textContent = error.message;
@@ -1785,9 +1805,11 @@
         localStorage.setItem(`${STORAGE_PREFIX}.toolsCollapsed`, String(collapsed));
         const headerToggle = document.getElementById("toggle-tools");
         headerToggle.setAttribute("aria-pressed", String(!collapsed));
-        headerToggle.title = collapsed ? "Show viewer tools" : "Hide viewer tools";
-        headerToggle.setAttribute("aria-label", headerToggle.title);
-        headerToggle.setAttribute("data-tooltip", collapsed ? "Show tools" : "Hide tools");
+        const shortLabel = collapsed ? "Show tools" : "Hide tools";
+        const detail = collapsed ? "Show the viewer toolbar" : "Hide the viewer toolbar";
+        headerToggle.title = `${shortLabel} — ${detail}`;
+        headerToggle.setAttribute("aria-label", shortLabel);
+        headerToggle.setAttribute("data-tooltip", `${shortLabel}\n${detail}`);
         setTimeout(() => viewer?.viewport?.resize(), 0);
     }
 
@@ -1799,12 +1821,10 @@
         const showLabel = side === "left" ? "Show image browser" : "Show display controls";
         const hideLabel = side === "left" ? "Hide image browser" : "Hide display controls";
         const shortLabel = side === "left" ? "Images" : "Settings";
-        headerToggle.title = collapsed ? showLabel : hideLabel;
+        const detail = collapsed ? showLabel : hideLabel;
+        headerToggle.title = `${shortLabel} — ${detail}`;
         headerToggle.setAttribute("aria-label", shortLabel);
-        headerToggle.setAttribute(
-            "data-tooltip",
-            collapsed ? `${shortLabel}\n${showLabel}` : `${shortLabel}\n${hideLabel}`
-        );
+        headerToggle.setAttribute("data-tooltip", `${shortLabel}\n${detail}`);
         setTimeout(() => viewer?.viewport?.resize(), 0);
     }
 
@@ -1919,7 +1939,12 @@
 
     function setPresentationMode(enabled) {
         document.body.classList.toggle("presentation-mode", enabled);
-        document.getElementById("presentation").setAttribute("aria-pressed", String(enabled));
+        const presentationButton = document.getElementById("presentation");
+        presentationButton.setAttribute("aria-pressed", String(enabled));
+        const detail = enabled ? "Exit presentation mode" : "Enter presentation mode";
+        presentationButton.title = `Presentation — ${detail}`;
+        presentationButton.setAttribute("aria-label", "Presentation");
+        presentationButton.setAttribute("data-tooltip", `Presentation\n${detail}`);
         setTimeout(() => viewer?.viewport?.resize(), 0);
     }
     document.getElementById("presentation").addEventListener("click", () => setPresentationMode(!document.body.classList.contains("presentation-mode")));

@@ -18,6 +18,12 @@ function rule(selector, mediaPattern = "") {
     return match[1];
 }
 
+function toolbarControlMarkup(id) {
+    const match = html.match(new RegExp(`<(?:button|a)\\s[^>]*id="${id}"[^>]*>`));
+    assert.ok(match, `missing toolbar control ${id}`);
+    return match[0];
+}
+
 // Compact icon hit target: consistent 28px contract, icons only (no label chrome).
 const button = rule(".toolbar-button, a.toolbar-button");
 assert.match(button, /min-width:\s*28px/);
@@ -113,7 +119,7 @@ const toolbarHtml = headerHtml.slice(toolbarStart);
 const orderedIds = [
     "open-image", "toggle-left",
     "zoom-in", "zoom-out", "fit-view", "pan-mode", "select-mode",
-    "annotation-mode", "polygon-mode", "freehand-mode",
+    "annotation-mode",
     "annotation-visibility",
     "export-visible-region", "export-selected-annotation",
     "viewer-help", "toggle-right"
@@ -140,16 +146,17 @@ assert.match(
 assert.match(channelsPanelHtml, /class="panel-secondary-link"/);
 assert.match(channelsPanelHtml, />Local operations</);
 
-// Hover/focus tooltips and accessible labels on every toolbar control.
+// Hover/focus tooltips and accessible labels on every visible toolbar control.
 const extraIds = [
     "home-view", "annotation-names", "slide-overview-button",
     "full-screen", "toggle-tools", "presentation"
 ];
-for (const id of [...orderedIds, ...extraIds]) {
-    const controlMatch = html.match(new RegExp(`id="${id}"[^>]*`));
-    assert.ok(controlMatch, `missing control ${id}`);
-    assert.match(controlMatch[0], /aria-label="/);
-    assert.match(controlMatch[0], /data-tooltip="/);
+const toolbarActionIds = [...orderedIds, ...extraIds];
+for (const id of toolbarActionIds) {
+    const markup = toolbarControlMarkup(id);
+    assert.match(markup, /aria-label="/, `${id} needs aria-label`);
+    assert.match(markup, /data-tooltip="/, `${id} needs data-tooltip`);
+    assert.match(markup, /\stitle="/, `${id} needs title fallback`);
 }
 assert.match(html, /id="annotation-name"[^>]*aria-label="Annotation name"/);
 assert.match(rule(".toolbar-button[data-tooltip]::after"), /content:\s*attr\(data-tooltip\)/);
@@ -162,20 +169,39 @@ assert.match(html, /id="annotation-visibility"[^>]*aria-label="Hide annotations"
 assert.match(html, /id="annotation-names"[^>]*aria-label="Hide annotation names"[^>]*aria-pressed="true"[^>]*>Names</);
 assert.match(rule(".annotation-visibility,\n        .annotation-names"), /font-size:\s*0/);
 
-// No floating export palette; exports are direct icon buttons.
-assert.match(html, /id="export-visible-region"[^>]*aria-label="Export view"/);
-assert.match(html, /id="export-selected-annotation"[^>]*aria-label="Export annotations"/);
+// No floating export palette; exports are direct adjacent icon buttons.
+assert.match(
+    html,
+    /id="export-visible-region"[^>]*aria-label="Export visible region"/
+);
+assert.match(
+    html,
+    /id="export-selected-annotation"[^>]*aria-label="Export selected annotation"/
+);
+assert.match(
+    html,
+    /id="export-visible-region"[^>]*data-tooltip="Export visible region&#10;Export the area currently visible in the viewer at native resolution"/
+);
+assert.match(
+    html,
+    /id="export-selected-annotation"[^>]*data-tooltip="Export selected annotation&#10;Export the selected annotation region"/
+);
 assert.doesNotMatch(html, /id="export-menu"/);
 assert.doesNotMatch(html, /function positionExportMenu/);
 assert.match(html, /function normalizeExportBounds\(/);
 assert.match(html, /function exportScaleForRegion\(/);
+assert.match(html, /function sanitizeExportFilenamePart\(/);
+assert.match(html, /function buildExportDownloadName\(/);
+assert.match(html, /function exportVisibleRegion\(/);
+assert.match(html, /function exportSelectedAnnotation\(/);
 assert.match(html, /zoomBy\(1\.25,\s*null\)/);
 assert.match(html, /zoomBy\(0\.8,\s*null\)/);
 assert.match(html, /function withReadyViewport\(/);
 
-// Polygon/freehand remain present but disabled (not implemented).
-assert.match(html, /id="polygon-mode"[^>]*disabled/);
-assert.match(html, /id="freehand-mode"[^>]*disabled/);
+// Unimplemented drawing tools must not appear as normal toolbar controls.
+assert.doesNotMatch(html, /id="polygon-mode"/);
+assert.doesNotMatch(html, /id="freehand-mode"/);
+assert.doesNotMatch(toolbarHtml, /not available yet/);
 
 // Stage overlays and environment banner contracts stay intact.
 assert.match(toolbar, /z-index:\s*16/);

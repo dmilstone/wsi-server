@@ -285,9 +285,10 @@ class AnnotoriousSpike {
         const shown = this.labelLayer.namesVisible;
         this.namesButton.setAttribute("aria-pressed", String(shown));
         this.namesButton.textContent = "Names";
-        this.namesButton.title = shown ? "Hide annotation names" : "Show annotation names";
-        this.namesButton.setAttribute("aria-label", this.namesButton.title);
-        this.namesButton.setAttribute("data-tooltip", this.namesButton.title);
+        const action = shown ? "Hide annotation names" : "Show annotation names";
+        this.namesButton.title = action;
+        this.namesButton.setAttribute("aria-label", action);
+        this.namesButton.setAttribute("data-tooltip", action);
     }
 
     getSelectedAnnotations() {
@@ -397,20 +398,12 @@ class AnnotoriousSpike {
             String(this.drawingEnabled)
         );
 
-        this.toggleButton.title = this.drawingEnabled
+        const detail = this.drawingEnabled
             ? "Exit rectangle annotation mode"
-            : "Draw rectangle annotation";
-
-        this.toggleButton.setAttribute(
-            "aria-label",
-            this.toggleButton.title
-        );
-        this.toggleButton.setAttribute(
-            "data-tooltip",
-            this.drawingEnabled
-                ? "Rectangle\nExit rectangle annotation mode"
-                : "Rectangle\nDraw rectangle annotation"
-        );
+            : "Draw a rectangular annotation";
+        this.toggleButton.title = `Rectangle — ${detail}`;
+        this.toggleButton.setAttribute("aria-label", "Rectangle");
+        this.toggleButton.setAttribute("data-tooltip", `Rectangle\n${detail}`);
     }
 
     setAnnotationsVisible(visible) {
