@@ -20,25 +20,62 @@ edits do not affect users until an explicitly rehearsed artifact is promoted.
 
 ## Cursor development → release workflow
 
+### After a Cursor task
+
+Cursor finishing a task does **not** start a release cycle. Choose the path
+from the change set:
+
+**Application/runtime change**
+
 ```text
-Cursor bounded task
-  → human scope review
-  → wsi-review
-  → wsi-commit "message"
-  → fresh release cycle
-  → Development QC → Staging QC → Production Rehearsal QC
-  → explicit PROMOTE → Production QC → production tag
+Cursor → wsi-review → wsi-commit → fresh release cycle
+  → Development 8081 QC → Staging 8082 QC → Rehearsal 8083 QC
+  → explicit PROMOTE → Production 8080 QC → production tag
 ```
 
-Bounded Cursor tasks only. Human browser QC remains mandatory. Failed QC:
-enter `n`, stop safely, fix on the feature branch, review/test/commit, start a
-**fresh** cycle from the new HEAD. Changing HEAD after a cycle begins
-invalidates the recorded repository fingerprint; do not force-resume that
-cycle as the same candidate.
+`wsi-review` / `wsi-commit` do **not** deploy anything. Start
+`./ops/wsi-release cycle` deliberately for application/runtime candidates.
+The cycle automates mechanical validation/deployment steps but intentionally
+stops at each human browser-QC gate; human `y`/`n` approval is never automatic.
 
-### Local helpers: `wsi-review` / `wsi-commit`
+**Documentation/developer-tooling-only change**
 
-These are the developer's local zsh helpers (not yet in `./ops`).
+```text
+Cursor → ./ops/wsi-doc-review → commit → push → done
+```
+
+Do **not** run Development/Staging/Rehearsal/Production merely for
+documentation-only changes that cannot affect the running application.
+
+If a tooling/configuration change can affect build, deployment, security,
+runtime behavior, or release semantics, treat it as a code/runtime change
+rather than assuming the docs-only path.
+
+Bounded Cursor tasks only. Failed QC: enter `n`, stop safely, fix on the
+feature branch, review/test/commit, start a **fresh** cycle from the new HEAD.
+Changing HEAD after a cycle begins invalidates the recorded repository
+fingerprint; do not force-resume that cycle as the same candidate.
+
+### Local helpers: `wsi-review` / `wsi-commit` / `./ops/wsi-doc-review`
+
+**When to use which review gate** (see paths above for whether a release
+cycle follows)
+
+| Change set | Review command |
+|---|---|
+| Application / Java / JavaScript / Maven / release semantics | `wsi-review` (full gate) |
+| Documentation and workflow-configuration only | `./ops/wsi-doc-review` |
+
+Use **`wsi-review`** for code and application changes. Use
+**`./ops/wsi-doc-review`** when the working tree is documentation-only (for
+example `docs/**`, Markdown, `.cursorignore`, `.cursor/rules/*.mdc`, ops
+cheatsheets / README, and the doc-review helper or its tests). It refuses
+`src/main/**`, `src/test/**`, `pom.xml` / `.mvn/` / `mvnw*`, and
+`ops/wsi-release` / `ops/wsi-release-cycle.sh` changes. It does **not** run
+Maven, JavaScript, or application suites.
+
+`wsi-review` and `wsi-commit` are the developer's local zsh helpers (not yet
+in `./ops`). `./ops/wsi-doc-review` is repository-level.
 
 **`wsi-review`** (failure stops the chain):
 
@@ -50,6 +87,16 @@ git diff --check &&
 node --test src/test/js/*.test.js &&
 ./ops/tests/run.sh
 ```
+
+**`./ops/wsi-doc-review`** (documentation-only; failure stops the chain):
+
+```bash
+./ops/wsi-doc-review
+```
+
+Runs `git status`, `git diff --stat`, `git diff --check`, path allowlisting
+for docs/workflow-configuration changes, and lightweight Markdown sanity
+checks. Prints `DOC REVIEW PASSED` on success.
 
 **`wsi-commit`**: requires a message; runs the full `wsi-review` gate first;
 stops on failure; refuses empty commits; stages with `git add -u` so

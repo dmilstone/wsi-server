@@ -1,0 +1,320 @@
+#!/bin/bash
+
+# Lightweight documentation-only review gate.
+# Validates that the working tree (staged, unstaged, and untracked) contains only
+# documentation / workflow-configuration changes, then runs lightweight Markdown
+# sanity checks. Does not run Maven, JavaScript, or application test suites.
+
+set -euo pipefail
+
+OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="${WSI_REPO:-$(cd "$OPS_DIR/.." && pwd)}"
+
+fail() {
+    printf '\nERROR: %s\n' "$1" >&2
+    exit 1
+}
+
+usage() {
+    cat <<'EOF'
+Usage: ./ops/wsi-doc-review
+
+Validate documentation-only changes without Maven/JavaScript/application suites.
+
+Checks:
+  - working tree paths are docs/workflow-configuration only
+  - git status / git diff --stat / git diff --check
+  - lightweight Markdown formatting sanity on changed .md / .mdc files
+
+Environment:
+  WSI_REPO   Repository root (default: parent of this script)
+EOF
+    exit 2
+}
+
+[[ $# -eq 0 ]] || usage
+
+[[ -d "$REPO/.git" ]] || fail "Not a git repository: $REPO"
+
+cd "$REPO"
+
+# --- path classification -----------------------------------------------------
+# Deny-by-default. Explicit forbidden paths win over the allowlist so application
+# and release-semantics changes never slip through via a broad pattern.
+
+path_is_forbidden() {
+    local path="$1"
+    path="${path#./}"
+
+    case "$path" in
+        pom.xml|.mvn|.mvn/*|mvnw|mvnw.cmd|mvnw.*)
+            return 0
+            ;;
+        src/main|src/main/*|src/test|src/test/*)
+            return 0
+            ;;
+        ops/wsi-release|ops/wsi-release-cycle.sh)
+            return 0
+            ;;
+        *.java)
+            return 0
+            ;;
+    esac
+
+    # Application JavaScript / frontend sources under src/ (already covered by
+    # src/main|src/test above). Extra guard for misplaced app JS at repo root.
+    case "$path" in
+        src/*.js|src/*.jsx|src/*.ts|src/*.tsx)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+path_is_allowed() {
+    local path="$1"
+    path="${path#./}"
+
+    case "$path" in
+        docs|docs/*)
+            return 0
+            ;;
+        .cursorignore)
+            return 0
+            ;;
+        .cursor/rules/*.mdc)
+            return 0
+            ;;
+        ops/wsi-doc-review)
+            return 0
+            ;;
+        ops/tests|ops/tests/*)
+            return 0
+            ;;
+    esac
+
+    # Any Markdown documentation file (root, docs, ops cheatsheets, etc.).
+    case "$path" in
+        *.md)
+            return 0
+            ;;
+    esac
+
+    # Cursor workflow rules.
+    case "$path" in
+        .cursor/rules/*)
+            [[ "$path" == *.mdc ]] && return 0
+            ;;
+    esac
+
+    return 1
+}
+
+classify_path() {
+    local path="$1"
+    if path_is_forbidden "$path"; then
+        printf 'forbidden'
+    elif path_is_allowed "$path"; then
+        printf 'allowed'
+    else
+        printf 'forbidden'
+    fi
+}
+
+collect_changed_paths() {
+    {
+        # Staged + unstaged tracked changes versus HEAD.
+        git -C "$REPO" diff --name-only --diff-filter=ACDMRTUXB HEAD
+        # Untracked files that would be part of the change set.
+        git -C "$REPO" ls-files --others --exclude-standard
+    } | sed '/^$/d' | sort -u
+}
+
+# --- Markdown lightweight validation -----------------------------------------
+# No extra dependencies. Catches unbalanced fences and the recent
+# **\`command\`:** style broken bold/backtick nesting.
+
+validate_markdown_file() {
+    local file="$1"
+    python3 - "$file" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    text = open(path, encoding="utf-8").read()
+except OSError as exc:
+    print(f"{path}: cannot read ({exc})", file=sys.stderr)
+    sys.exit(1)
+
+errors = []
+lines = text.splitlines()
+in_fence = False
+fence_line = None
+fence_marker = None
+bold_open = False
+bold_open_line = None
+
+# Broken bold/backtick nesting, e.g. **\`wsi-commit\`:** or **\`foo\`**
+broken_bold_backtick = re.compile(r"\*\*\\`|\\`\*\*")
+# Inline code spans (single backticks). Keep this simple / lightweight.
+inline_code = re.compile(r"`[^`]*`")
+
+for idx, line in enumerate(lines, start=1):
+    fence_match = re.match(r"^(```+|~~~+)(.*)$", line)
+    if fence_match:
+        marker = fence_match.group(1)[0]
+        if not in_fence:
+            in_fence = True
+            fence_line = idx
+            fence_marker = marker
+        elif marker == fence_marker:
+            in_fence = False
+            fence_line = None
+            fence_marker = None
+        continue
+
+    if in_fence:
+        continue
+
+    if broken_bold_backtick.search(line):
+        errors.append(
+            f"{path}:{idx}: broken bold/backtick nesting "
+            r"(avoid **\`...\`:** style; use **`...`** or plain `...`)"
+        )
+
+    # Ignore horizontal rules; strip inline code so globs like docs/** inside
+    # backticks do not look like bold markers. Track ** across lines.
+    if re.fullmatch(r"\s*(\*{3,}|_{3,}|\-{3,})\s*", line):
+        continue
+    stripped = inline_code.sub("", line)
+    for _ in re.findall(r"\*\*", stripped):
+        if bold_open:
+            bold_open = False
+            bold_open_line = None
+        else:
+            bold_open = True
+            bold_open_line = idx
+
+if in_fence:
+    errors.append(
+        f"{path}:{fence_line}: unclosed fenced code block "
+        f"(opened with {fence_marker * 3})"
+    )
+
+if bold_open:
+    errors.append(
+        f"{path}:{bold_open_line}: unclosed ** bold markers"
+    )
+
+if errors:
+    for err in errors:
+        print(err, file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+# --- main --------------------------------------------------------------------
+
+echo "=== Documentation-only review ==="
+echo "Repository: $REPO"
+echo
+
+echo "--- git status ---"
+git status
+echo
+
+echo "--- git diff --stat ---"
+git diff --stat HEAD
+echo
+
+echo "--- git diff --check ---"
+git diff --check HEAD
+echo
+
+changed_paths=()
+while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    changed_paths+=("$path")
+done < <(collect_changed_paths)
+
+if [[ ${#changed_paths[@]} -eq 0 ]]; then
+    echo "No staged, unstaged, or untracked changes."
+    echo
+    echo "DOC REVIEW PASSED"
+    exit 0
+fi
+
+echo "--- path classification ---"
+forbidden_paths=()
+allowed_paths=()
+for path in "${changed_paths[@]}"; do
+    kind="$(classify_path "$path")"
+    if [[ "$kind" == "allowed" ]]; then
+        printf '  ALLOW  %s\n' "$path"
+        allowed_paths+=("$path")
+    else
+        printf '  REFUSE %s\n' "$path"
+        forbidden_paths+=("$path")
+    fi
+done
+echo
+
+if [[ ${#forbidden_paths[@]} -gt 0 ]]; then
+    {
+        echo "Documentation-only review refused. Forbidden paths:"
+        for path in "${forbidden_paths[@]}"; do
+            printf '  - %s\n' "$path"
+        done
+        echo
+        echo "Allowed for this helper (summary):"
+        echo "  - docs/**"
+        echo "  - *.md (any path)"
+        echo "  - .cursorignore"
+        echo "  - .cursor/rules/*.mdc"
+        echo "  - ops/wsi-doc-review"
+        echo "  - ops/tests/** (harness / fixtures for this helper)"
+        echo
+        echo "Forbidden examples:"
+        echo "  - src/main/**, src/test/** (application code and tests)"
+        echo "  - *.java, application JavaScript under src/"
+        echo "  - pom.xml, .mvn/**, mvnw*"
+        echo "  - ops/wsi-release, ops/wsi-release-cycle.sh (release semantics)"
+        echo
+        echo "For application or release changes use the full wsi-review gate."
+    } >&2
+    exit 1
+fi
+
+echo "--- Markdown sanity ---"
+md_checked=0
+md_failed=0
+for path in "${allowed_paths[@]}"; do
+    case "$path" in
+        *.md|*.mdc)
+            if [[ -f "$REPO/$path" ]]; then
+                if validate_markdown_file "$REPO/$path"; then
+                    printf '  OK  %s\n' "$path"
+                    md_checked=$((md_checked + 1))
+                else
+                    printf '  FAIL %s\n' "$path"
+                    md_failed=$((md_failed + 1))
+                fi
+            else
+                printf '  SKIP %s (deleted or missing)\n' "$path"
+            fi
+            ;;
+    esac
+done
+if [[ "$md_checked" -eq 0 && "$md_failed" -eq 0 ]]; then
+    echo "  (no Markdown files to validate)"
+fi
+echo
+
+if [[ "$md_failed" -gt 0 ]]; then
+    fail "Markdown sanity failed for $md_failed file(s). Fix formatting and re-run."
+fi
+
+echo "DOC REVIEW PASSED"
+exit 0

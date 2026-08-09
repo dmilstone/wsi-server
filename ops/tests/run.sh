@@ -31,9 +31,111 @@ expect_failure() {
     pass "$description"
 }
 
-bash -n "$RELEASE" "$OPS_DIR/wsi-release-cycle.sh"
+DOC_REVIEW="$OPS_DIR/wsi-doc-review"
+
+bash -n "$RELEASE" "$OPS_DIR/wsi-release-cycle.sh" "$DOC_REVIEW"
 if command -v zsh >/dev/null 2>&1; then zsh -n "$CONTROL"; else bash -n "$CONTROL"; fi
+[[ -x "$DOC_REVIEW" ]]
 pass "shell syntax"
+
+# --- wsi-doc-review: documentation-only gate ---------------------------------
+# Fixtures use isolated repositories via WSI_REPO. Inherited WSI_* must not
+# point the helper at a real working tree (already unset above).
+
+init_doc_fixture() {
+    local root="$1"
+    mkdir -p "$root"
+    git -C "$root" init -q
+    git -C "$root" config user.name "WSI operations test"
+    git -C "$root" config user.email "wsi-operations-test@example.invalid"
+    printf 'fixture\n' >"$root/tracked.txt"
+    git -C "$root" add tracked.txt
+    git -C "$root" commit -q -m fixture
+}
+
+doc_fixture="$TEST_ROOT/doc-review"
+init_doc_fixture "$doc_fixture"
+
+# Clean tree passes.
+WSI_REPO="$doc_fixture" "$DOC_REVIEW" >"$TEST_ROOT/doc-clean.out"
+grep -q 'DOC REVIEW PASSED' "$TEST_ROOT/doc-clean.out"
+pass "doc-review passes on a clean tree"
+
+# Allowed docs / workflow-configuration paths (tracked + untracked).
+mkdir -p "$doc_fixture/docs" "$doc_fixture/.cursor/rules" "$doc_fixture/ops/tests"
+printf '# Doc\n\nUse **`wsi-doc-review`** for docs.\n' >"$doc_fixture/docs/NOTES.md"
+printf 'ignore-me\n' >"$doc_fixture/.cursorignore"
+printf '# rule\n' >"$doc_fixture/.cursor/rules/example.mdc"
+printf '# Ops README\n' >"$doc_fixture/ops/README.md"
+printf '#!/bin/bash\necho helper\n' >"$doc_fixture/ops/wsi-doc-review"
+chmod +x "$doc_fixture/ops/wsi-doc-review"
+printf '# harness note\n' >"$doc_fixture/ops/tests/README.md"
+printf '# Root note\n' >"$doc_fixture/ROOT-NOTE.md"
+WSI_REPO="$doc_fixture" "$DOC_REVIEW" >"$TEST_ROOT/doc-allowed.out"
+grep -q 'DOC REVIEW PASSED' "$TEST_ROOT/doc-allowed.out"
+grep -q 'ALLOW  docs/NOTES.md' "$TEST_ROOT/doc-allowed.out"
+grep -q 'ALLOW  .cursorignore' "$TEST_ROOT/doc-allowed.out"
+grep -q 'ALLOW  .cursor/rules/example.mdc' "$TEST_ROOT/doc-allowed.out"
+grep -q 'ALLOW  ops/wsi-doc-review' "$TEST_ROOT/doc-allowed.out"
+pass "doc-review allows docs, cursor config, ops markdown, helper, and tests"
+
+# Forbidden application / Maven / release-semantics paths.
+rm -f "$doc_fixture/docs/NOTES.md" "$doc_fixture/.cursorignore" \
+    "$doc_fixture/.cursor/rules/example.mdc" "$doc_fixture/ops/README.md" \
+    "$doc_fixture/ops/wsi-doc-review" "$doc_fixture/ops/tests/README.md" \
+    "$doc_fixture/ROOT-NOTE.md"
+mkdir -p "$doc_fixture/src/main/java" "$doc_fixture/.mvn"
+printf 'class X {}\n' >"$doc_fixture/src/main/java/X.java"
+printf '<project/>\n' >"$doc_fixture/pom.xml"
+printf 'wrapper\n' >"$doc_fixture/mvnw"
+printf 'release\n' >"$doc_fixture/ops/wsi-release"
+printf 'cycle\n' >"$doc_fixture/ops/wsi-release-cycle.sh"
+expect_failure "doc-review refuses application and release changes" \
+    env WSI_REPO="$doc_fixture" "$DOC_REVIEW"
+grep -q 'src/main/java/X.java' "$TEST_ROOT/output"
+grep -q 'pom.xml' "$TEST_ROOT/output"
+grep -q 'ops/wsi-release' "$TEST_ROOT/output"
+grep -q 'ops/wsi-release-cycle.sh' "$TEST_ROOT/output"
+pass "doc-review refuses Java, Maven, and release-semantics paths"
+
+# Mixed tree: one docs file plus one forbidden file still fails.
+rm -f "$doc_fixture/src/main/java/X.java" "$doc_fixture/pom.xml" \
+    "$doc_fixture/mvnw" "$doc_fixture/ops/wsi-release" \
+    "$doc_fixture/ops/wsi-release-cycle.sh"
+printf '# ok\n' >"$doc_fixture/docs/OK.md"
+printf 'bad\n' >"$doc_fixture/ops/wsi-release"
+expect_failure "doc-review refuses mixed docs and release changes" \
+    env WSI_REPO="$doc_fixture" "$DOC_REVIEW"
+grep -q 'REFUSE ops/wsi-release' "$TEST_ROOT/output"
+pass "doc-review refuses mixed documentation and forbidden paths"
+
+# Lightweight Markdown validation catches broken bold/backtick nesting and
+# unclosed fences without a heavy linter dependency.
+rm -f "$doc_fixture/ops/wsi-release"
+printf '# Bad bold\n\nSee **\`wsi-commit\`:** for details.\n' >"$doc_fixture/docs/BAD.md"
+expect_failure "doc-review rejects broken bold/backtick Markdown" \
+    env WSI_REPO="$doc_fixture" "$DOC_REVIEW"
+grep -q 'broken bold/backtick' "$TEST_ROOT/output"
+pass "doc-review rejects broken bold/backtick nesting"
+
+printf '# Bad fence\n\n```text\nnot closed\n' >"$doc_fixture/docs/BAD.md"
+expect_failure "doc-review rejects unclosed Markdown fences" \
+    env WSI_REPO="$doc_fixture" "$DOC_REVIEW"
+grep -q 'unclosed fenced code block' "$TEST_ROOT/output"
+pass "doc-review rejects unclosed fenced code blocks"
+
+# Staged-only docs change is still classified (not only unstaged/untracked).
+rm -f "$doc_fixture/docs/BAD.md"
+printf '# Staged\n\n`ok`\n' >"$doc_fixture/docs/STAGED.md"
+git -C "$doc_fixture" add docs/STAGED.md
+WSI_REPO="$doc_fixture" "$DOC_REVIEW" >"$TEST_ROOT/doc-staged.out"
+grep -q 'DOC REVIEW PASSED' "$TEST_ROOT/doc-staged.out"
+grep -q 'ALLOW  docs/STAGED.md' "$TEST_ROOT/doc-staged.out"
+pass "doc-review includes staged documentation changes"
+
+# Helper must not mention or invoke release mutation entry points as its gate.
+! grep -Eq 'wsi-release cycle|mvnw clean test' "$DOC_REVIEW"
+pass "doc-review does not run Maven or release-cycle commands"
 
 PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache" \
     python3 -m py_compile "$OPS_DIR/render_cheatsheet.py" "$OPS_DIR/tests/test_renderer.py"
