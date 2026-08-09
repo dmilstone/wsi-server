@@ -38,9 +38,14 @@ branch, review/test/commit, and start a **fresh** release cycle.
 - Global annotation visibility.
 - Persistent user-editable annotation names.
 - Optional on-slide annotation name labels.
-- Compact, responsive viewer toolbar with separate viewer/export and annotation
-  palettes.
+- Compact header-row viewer toolbar (icon-only controls, fast hover/focus
+  tooltips, direct export buttons; removed Open, Fit, Pan, Select, and Hide
+  tools).
+- Header cleanup: **CURRENT IMAGE** and filename beneath **WSI Viewer**; no
+  fluorescence subtitle.
 - Authenticated in-viewer Help guide with a printable PDF.
+- Actionable **EXPORT_TOO_LARGE** dialog and annotation-name-based export
+  filenames.
 - Safe live discovery of newly added images and directories without restarting
   the server.
 - Scanner-independent, manually authorized, crash-safe atomic promotion of
@@ -66,12 +71,12 @@ branch, review/test/commit, and start a **fresh** release cycle.
 ### Near-term usability / workflow
 
 1. Systematic UI inventory → proposed specification → human approval → bounded
-   implementation (toolbar first; see below). No speculative redesign.
-2. Header cleanup after inventory/approval (see Header guidance below).
-3. More prominent uppercase terminal banners for the four browser-QC `y`/`n`
+   implementation for left panel, right panel, status/footer, and responsive
+   chrome (toolbar/header decisions are implemented; see Deferred section).
+2. More prominent uppercase terminal banners for the four browser-QC `y`/`n`
    prompts (ops UX only; do not weaken or automate gates). See
    `ops/RELEASE-CHEATSHEET.md`.
-4. Consider repository-level `./ops/wsi-review` and `./ops/wsi-commit` so
+3. Consider repository-level `./ops/wsi-review` and `./ops/wsi-commit` so
    review/commit does not depend on one user's `~/.zshrc`. Documented locally
    today; **do not implement those scripts until scheduled**.
 
@@ -103,11 +108,11 @@ the limit without understanding memory, Bio-Formats, encoding, and concurrency.
    later download, safe cleanup; especially relevant for eventual NAS
    deployment.
 
-Also retain earlier export polish still unfinished: rename **Entire View** to
-**Current view** / **Visible region**; surface server export errors (partially
-addressed by `EXPORT_TOO_LARGE` UX); document browser download/save-location
-behavior; reject unexpected HTML (or other) responses instead of saving them as
-`.png`.
+Also retain earlier export polish still unfinished: surface remaining server
+export errors beyond `EXPORT_TOO_LARGE`; reject unexpected HTML (or other)
+responses instead of saving them as `.png`. Viewer help and toolbar now use
+**Export visible region** / **Export selected annotation**; reduced-resolution
+fallback remains future work.
 
 ### Infrastructure / deployment
 
@@ -119,11 +124,12 @@ behavior; reject unexpected HTML (or other) responses instead of saving them as
 
 ### Longer-term UI cleanup
 
-After toolbar inventory/approval and any approved bounded toolbar work:
+After the completed toolbar/header work:
 
 - Left panel, right panel, status/footer/auxiliary chrome, Presentation-mode
-  clean-view behavior, and responsive narrowing — same
-  inventory → proposal → approval process.
+  **clean-view** behavior (hide overview and other chrome beyond today's
+  header/panel hiding), and responsive narrowing — same inventory → proposal →
+  approval process.
 - Local ops stays outside the primary viewer toolbar.
 - Existing layout backlog (red development banner vs yellow staging,
   narrow-screen layouts, movable panels, user layout preferences) remains.
@@ -135,13 +141,13 @@ approval → bounded implementation → automated tests → 8081 Development QC.
 Do not change UI code until the inventory and exact proposed control list are
 approved.
 
-### Top toolbar (inventory first)
+### Top toolbar (implemented)
 
-READ-ONLY inventory every control: icon → implementation/function → user value
-→ tooltip → accessibility label → active/disabled behavior → position. Then
-propose an exact final left-to-right list for approval **before** code changes.
+Toolbar/header inventory decisions below are **implemented** in production
+(`production-2026-08-09-compact-viewer-toolbar` and validated follow-on work).
+Retained for continuity and for any later systematic icon/terms review:
 
-Decisions already made (guidance for the future proposal; not implementation):
+Decisions (implemented):
 
 | Topic | Guidance |
 |---|---|
@@ -163,12 +169,10 @@ Ordering principle for the **proposal** (do not implement blindly):
 Home/nav → zoom/view → annotation → visibility → export → utilities →
 Settings → Help.
 
-### Header (after inventory/approval)
+### Header (implemented)
 
-- Remove “Whole-slide fluorescence imaging”.
-- Put current-image info under “WSI Viewer”.
-- Show **CURRENT IMAGE** then the filename; no horizontal competition with the
-  title; no overlap with the toolbar.
+- Removed “Whole-slide fluorescence imaging”.
+- Current-image info is under “WSI Viewer”: **CURRENT IMAGE** then the filename.
 
 ### Left panel / right panel / status-footer / responsive
 

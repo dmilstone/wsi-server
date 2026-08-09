@@ -3,17 +3,28 @@
 Use the production address supplied by your administrator. Development and
 staging sites display a warning banner and are for validation only.
 
+## Header and toolbar
+
+- The header shows **WSI Viewer** with **CURRENT IMAGE** and the filename
+  beneath it. There is no fluorescence subtitle.
+- All viewer tools are compact icon buttons in one header toolbar row. Hover or
+  focus a button to see its name and short description.
+- **Help** (the rightmost `?` icon) opens the in-viewer quick guide.
+
 ## 1. Open and navigate an image
 
 1. Choose an image in **Sample images** on the left.
-2. Drag the image to pan.
-3. Scroll or pinch to zoom.
-4. Use the viewer controls to reset the view or enter fullscreen.
+2. Use the **Images** toolbar icon to show or hide the image browser. There is
+   no separate Open button.
+3. Drag the slide to pan; scroll or pinch to zoom. Normal drag-pan works without
+   a Pan mode button.
+4. Use **Zoom in**, **Zoom out**, or **Home** (reset to the initial home zoom).
 5. Collapse the side panels when you need more viewing space.
 
 ## 2. Adjust the displayed channels
 
-The **Channels** panel controls presentation only; it does not modify the source
+Use the **Settings** toolbar icon to show or hide the **Channels** panel on the
+right. Channel controls change presentation only; they do not modify the source
 image.
 
 - Use each channel checkbox to show or hide that channel.
@@ -22,36 +33,55 @@ image.
 - **Recompute auto** recalculates automatic intensity settings for the current
   image.
 
-## 3. View and edit annotations
+## 3. Create, select, and edit annotations
 
-The lower floating palette contains annotation tools.
-
-- Use **Annotations** to show or hide annotation geometry.
-- Use **Names** to show or hide annotation names on the image.
-- Select one annotation to display and edit its name.
-- Enter or leave the name field to save a change; Escape cancels an unfinished
-  name edit.
-- Use the drawing tools to create annotations and the available delete control
-  to remove the selected annotation.
+- Click **Rectangle** to draw a rectangular annotation; click again to stop
+  drawing.
+- Click an annotation directly to select it. There is no Select mode button.
+- Press **Delete** or **Backspace** to remove the selected annotation.
+- Use **Annotations** and **Names** in the toolbar to show or hide geometry and
+  on-slide name labels.
+- With one annotation selected, click its on-slide name label to edit inline.
+  Enter or leave the name field to save a change; **Escape** cancels an
+  unfinished name edit.
 
 **Important:** annotation saving is asynchronous. After creating, moving,
 renaming, or deleting an annotation, pause several seconds before refreshing,
 closing the page, or switching images. Visible Saving/Saved feedback is planned
-but is not yet available.
+but is not yet available. Annotations are stored per image and should persist
+when you switch away and return.
 
 ## 4. Export an image region
 
-Open **Export** in the upper floating palette.
+Use the two export icons in the header toolbar:
 
-- **Selected annotation** exports the selected annotation region.
-- **Entire View** currently exports the region visible in the viewer. It does
-  not necessarily export the entire native slide.
-- Native exports are limited to **16,000,000 pixels**. If a visible-region
-  export produces no file, zoom in and try again.
-- Your browser or operating system may ask where to save the exported PNG.
-- Confirm that the downloaded file opens before relying on it.
+- **Export visible region** exports the area currently visible in the viewer at
+  native resolution. It does not necessarily export the entire native slide.
+- **Export selected annotation** exports the selected rectangle (select exactly
+  one annotation first).
 
-## 5. Environment and safety
+Download filenames use the slide name plus `-region.png`, or
+`-annotation-name.png` when the annotation has a name.
+
+Native exports are limited to **16,000,000 pixels**. If the region is too large,
+the viewer shows an actionable **Export failed** dialog asking you to zoom in or
+choose a smaller region. Reduced-resolution export fallback is planned but not
+yet available.
+
+Your browser or operating system may ask where to save the exported PNG.
+Confirm that the downloaded file opens before relying on it.
+
+## 5. Slide overview, full screen, and presentation
+
+- **Slide overview** opens the slide label and whole-slide thumbnail when
+  available for the current image.
+- **Full screen** enters or exits browser full-screen mode.
+- **Presentation** hides the header, toolbar, side panels, and status bar so the
+  slide uses more of the window. Click **Exit presentation** or press
+  **Escape** to leave. This is not yet a dedicated clean-view layout (future
+  roadmap).
+
+## 6. Environment and safety
 
 - Production normally has no environment warning banner.
 - A **DEVELOPMENT** or **STAGING** banner means validation only and not clinical

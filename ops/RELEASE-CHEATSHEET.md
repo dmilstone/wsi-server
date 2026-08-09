@@ -8,12 +8,12 @@ on the configured feature branch; ops docs do not prescribe merge-to-main.
 
 ## Environments
 
-| Environment | Port | Runtime and identity | Data boundary |
-|---|---:|---|---|
-| Development | 8081 | Live Maven source; red banner | Deidentified development images and annotations |
-| Staging | 8082 | Candidate JAR; yellow banner | Deidentified staging images and annotations |
-| Rehearsal | 8083 | Exact staging JAR; production mode; loopback only | Deidentified production-marked images; rehearsal annotations |
-| Production | 8080 | Frozen validated JAR; no banner | Authorized clinical images and production annotations |
+| Environment | Port | URL (local) | Runtime and identity | Data boundary |
+|---|---:|---|---|---|
+| Development | 8081 | http://localhost:8081 | Live Maven source; red banner | Deidentified development images and annotations |
+| Staging | 8082 | http://localhost:8082 | Candidate JAR; yellow banner | Deidentified staging images and annotations |
+| Rehearsal | 8083 | http://localhost:8083 | Exact staging JAR; production mode; loopback only | Deidentified production-marked images; rehearsal annotations |
+| Production | 8080 | http://localhost:8080 | Frozen validated JAR; no banner | Authorized clinical images and production annotations |
 
 Rehearsal binds to `127.0.0.1` and is not user accessible. Production source
 edits do not affect users until an explicitly rehearsed artifact is promoted.
@@ -28,7 +28,7 @@ from the change set:
 **Application/runtime change**
 
 ```text
-Cursor → wsi-review → wsi-commit → fresh release cycle
+Cursor bounded task → wsi-review → wsi-commit "message" → ./ops/wsi-release cycle
   → Development 8081 QC → Staging 8082 QC → Rehearsal 8083 QC
   → explicit PROMOTE → Production 8080 QC → production tag
 ```
@@ -41,20 +41,34 @@ stops at each human browser-QC gate; human `y`/`n` approval is never automatic.
 **Documentation/developer-tooling-only change**
 
 ```text
-Cursor → ./ops/wsi-doc-review → commit → push → done
+Cursor bounded docs task → ./ops/wsi-doc-review → commit → git push → done
 ```
 
 Do **not** run Development/Staging/Rehearsal/Production merely for
 documentation-only changes that cannot affect the running application.
+
+Application-served help under `src/main/resources/static/help/**` (for example
+`viewer-guide.html`) is **not** docs-only: it is packaged into the JAR and
+requires the normal application/runtime release path above.
 
 If a tooling/configuration change can affect build, deployment, security,
 runtime behavior, or release semantics, treat it as a code/runtime change
 rather than assuming the docs-only path.
 
 Bounded Cursor tasks only. Failed QC: enter `n`, stop safely, fix on the
-feature branch, review/test/commit, start a **fresh** cycle from the new HEAD.
+feature branch (`WSI_CYCLE_BRANCH`; default historically
+`feature/multichannel-viewer`), review/test/commit, start a **fresh**
+`./ops/wsi-release cycle` from the new HEAD.
 Changing HEAD after a cycle begins invalidates the recorded repository
 fingerprint; do not force-resume that cycle as the same candidate.
+
+Useful Git checks before review or a cycle:
+
+```bash
+git status --short
+git log --oneline -5
+git diff --stat HEAD
+```
 
 ### Local helpers: `wsi-review` / `wsi-commit` / `./ops/wsi-doc-review`
 
