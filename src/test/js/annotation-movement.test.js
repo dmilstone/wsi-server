@@ -113,13 +113,50 @@ const other = at("other", 160, 170);
 annotator.annotations = [moved, other];
 annotator.selected = [moved];
 
+const nameLabelTarget = {
+    closest(selector) {
+        return /annotation-name-label|annotation-name-inline-input/.test(selector) ? this : null;
+    }
+};
+const geometryTarget = {
+    closest() { return null; }
+};
+
+// Dragging the annotation-name label (pointer-events:auto when selected) must
+// never start presentation-only displacement — that would translate the label
+// without Annotorious moving the geometry.
+pointerHandlers.get("pointerdown")({
+    button: 0, pointerId: 6, clientX: 15, clientY: 25, target: nameLabelTarget
+});
+pointerHandlers.get("pointermove")({ pointerId: 6, clientX: 45, clientY: 55, target: nameLabelTarget });
+pointerHandlers.get("pointerup")({ pointerId: 6, clientX: 45, clientY: 55, target: nameLabelTarget });
+assert.equal(spike.labelLayer.displacements.size, 0,
+    "name-label drag cannot independently translate the label");
+assert.equal(persistenceUpdates, 0);
+assert.equal(setSelectedCalls, 0);
+
+const inlineInputTarget = {
+    closest(selector) {
+        return /annotation-name-inline-input/.test(selector) ? this : null;
+    }
+};
+pointerHandlers.get("pointerdown")({
+    button: 0, pointerId: 61, clientX: 15, clientY: 25, target: inlineInputTarget
+});
+pointerHandlers.get("pointermove")({ pointerId: 61, clientX: 45, clientY: 55, target: inlineInputTarget });
+pointerHandlers.get("pointerup")({ pointerId: 61, clientX: 45, clientY: 55, target: inlineInputTarget });
+assert.equal(spike.labelLayer.displacements.size, 0,
+    "inline name editor pointer activity cannot independently translate the label");
+
 // Match the browser lifecycle: dragging and releasing emits no update event.
 // The label follows a presentation-only image-coordinate displacement and the
 // integration never asks Annotorious to alter or finalize its selection.
-pointerHandlers.get("pointerdown")({ button: 0, pointerId: 7, clientX: 15, clientY: 25 });
-pointerHandlers.get("pointermove")({ pointerId: 7, clientX: 45, clientY: 55 });
+pointerHandlers.get("pointerdown")({
+    button: 0, pointerId: 7, clientX: 15, clientY: 25, target: geometryTarget
+});
+pointerHandlers.get("pointermove")({ pointerId: 7, clientX: 45, clientY: 55, target: geometryTarget });
 assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 30, y: 30 });
-pointerHandlers.get("pointerup")({ pointerId: 7, clientX: 45, clientY: 55 });
+pointerHandlers.get("pointerup")({ pointerId: 7, clientX: 45, clientY: 55, target: geometryTarget });
 assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 30, y: 30 },
     "release retains the visual move until the native commit");
 assert.equal(setSelectedCalls, 0, "label movement never manipulates selection");

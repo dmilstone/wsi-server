@@ -183,4 +183,35 @@ layer.destroy();
 assert.equal(root.children.length, 0);
 assert.equal(handlers.size, 0);
 
+// Click-to-rename remains available on the selected label; the layer itself never
+// stores an independent visual translation from that interaction.
+const editRequests = [];
+const editLayer = new context.AnnotationLabelLayer(
+    viewer, annotator, id => names.get(id), storage, (id, host) => editRequests.push({ id, host }));
+names.set("blank", "Editable");
+if (!annotations.includes(unnamed)) annotations.push(unnamed);
+editLayer.beginImage("image-click-edit");
+editLayer.sync("image-click-edit");
+editLayer.setSelectedAnnotationId("blank");
+const clickHost = editLayer.labels.get("blank").element;
+const beforeTransform = clickHost.style.transform;
+let prevented = false;
+let stopped = false;
+for (const listener of clickHost.listeners.click || []) {
+    listener({
+        preventDefault() { prevented = true; },
+        stopPropagation() { stopped = true; }
+    });
+}
+assert.equal(editRequests.length, 1);
+assert.equal(editRequests[0].id, "blank");
+assert.equal(editRequests[0].host, clickHost);
+assert.equal(prevented, true);
+assert.equal(stopped, true);
+assert.equal(clickHost.style.transform, beforeTransform,
+    "click-to-rename must not independently translate the label");
+assert.equal(editLayer.getTemporaryDisplacement("blank").x, 0);
+assert.equal(editLayer.getTemporaryDisplacement("blank").y, 0);
+editLayer.destroy();
+
 console.log("annotation label layer checks passed");

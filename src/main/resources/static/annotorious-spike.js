@@ -177,6 +177,14 @@ class AnnotoriousSpike {
         element.addEventListener("pointerdown", event => {
             this.annotationPointerEdit = null;
             if (this.drawingEnabled || event.button !== 0) return;
+            // Selected labels use pointer-events:auto for click-to-rename. A
+            // capture-phase hit inside annotation bounds would otherwise start
+            // presentation-only label displacement without Annotorious moving
+            // the geometry — an independent, non-persistent label drag.
+            if (typeof event.target?.closest === "function" &&
+                event.target.closest(".annotation-name-label, .annotation-name-inline-input")) {
+                return;
+            }
             const selected = this.getSelectedAnnotations();
             if (selected.length !== 1 || !this.annotationContainsClientPoint(selected[0], event)) return;
             const point = this.clientToImagePoint(event);
