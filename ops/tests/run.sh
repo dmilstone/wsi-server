@@ -8,6 +8,11 @@ CONTROL="$OPS_DIR/wsi"
 TEST_ROOT="$(mktemp -d /tmp/wsi-ops-tests.XXXXXX)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
+# Fixtures own repository and cycle-branch configuration. Clear caller exports
+# so inherited WSI_REPO / WSI_CYCLE_BRANCH (and related cycle overrides) cannot
+# change assertions or point the harness at a real working tree.
+unset WSI_REPO WSI_CYCLE_BRANCH WSI_CYCLE_REMOTE WSI_CYCLE_RUNTIME
+
 pass_count=0
 
 pass() {
@@ -72,9 +77,15 @@ pass "cycle and all individual diagnostic commands remain available"
 
 # The end-to-end dry-run is deliberately runnable without configurations or a
 # remote. It must describe every gate in order and leave even its runtime state
-# and log directories untouched.
+# and log directories untouched. The fixture sets the cycle branch explicitly and
+# derives the expected push command from that configured branch.
 cycle_runtime="$TEST_ROOT/cycle-runtime"
-WSI_REPO="$TEST_ROOT/repo" WSI_CYCLE_RUNTIME="$cycle_runtime" \
+cycle_branch="feature/ops-test-cycle-branch"
+cycle_remote="origin"
+WSI_REPO="$TEST_ROOT/repo" \
+WSI_CYCLE_BRANCH="$cycle_branch" \
+WSI_CYCLE_REMOTE="$cycle_remote" \
+WSI_CYCLE_RUNTIME="$cycle_runtime" \
     "$RELEASE" cycle --dry-run >"$TEST_ROOT/cycle-dry-run"
 [[ ! -e "$cycle_runtime" ]]
 previous=0
@@ -84,7 +95,8 @@ for phase in 1 2 3 4 5 6 7 8; do
     previous="$line"
 done
 dev_gate="$(grep -n 'expected gate: DEVELOPMENT-PASS' "$TEST_ROOT/cycle-dry-run" | cut -d: -f1)"
-push_line="$(grep -n 'git push origin feature/multichannel-viewer' "$TEST_ROOT/cycle-dry-run" | cut -d: -f1)"
+expected_push="git push ${cycle_remote} ${cycle_branch}"
+push_line="$(grep -n "$expected_push" "$TEST_ROOT/cycle-dry-run" | cut -d: -f1)"
 [[ "$dev_gate" -lt "$push_line" ]]
 grep -q 'expected gate: STAGING-PASS' "$TEST_ROOT/cycle-dry-run"
 grep -q 'expected gate: REHEARSAL-PASS' "$TEST_ROOT/cycle-dry-run"
@@ -98,6 +110,23 @@ grep -q 'tracked tree: clean' "$TEST_ROOT/cycle-dry-run"
 grep -q 'local/remote synchronization:' "$TEST_ROOT/cycle-dry-run"
 grep -q 'candidate JAR: not built' "$TEST_ROOT/cycle-dry-run"
 pass "cycle dry-run is mutation-free and preserves complete safe phase ordering"
+
+# Regression: a non-default cycle branch still places DEVELOPMENT-PASS before the
+# derived feature-branch push, proving the harness does not hard-code the
+# production default branch name.
+alt_cycle_runtime="$TEST_ROOT/cycle-runtime-alt"
+alt_cycle_branch="feature/non-obscuring-viewer-controls"
+WSI_REPO="$TEST_ROOT/repo" \
+WSI_CYCLE_BRANCH="$alt_cycle_branch" \
+WSI_CYCLE_REMOTE=origin \
+WSI_CYCLE_RUNTIME="$alt_cycle_runtime" \
+    "$RELEASE" cycle --dry-run >"$TEST_ROOT/cycle-dry-run-alt"
+[[ ! -e "$alt_cycle_runtime" ]]
+alt_dev_gate="$(grep -n 'expected gate: DEVELOPMENT-PASS' "$TEST_ROOT/cycle-dry-run-alt" | cut -d: -f1)"
+alt_push_line="$(grep -n "git push origin ${alt_cycle_branch}" "$TEST_ROOT/cycle-dry-run-alt" | cut -d: -f1)"
+[[ "$alt_dev_gate" -lt "$alt_push_line" ]]
+! grep -q 'git push origin feature/multichannel-viewer' "$TEST_ROOT/cycle-dry-run-alt"
+pass "cycle dry-run push follows configured branch with development approval first"
 
 expect_failure "cycle rejects an unknown option" "$RELEASE" cycle --not-a-mode
 expect_failure "cycle tag requires a name" "$RELEASE" cycle --tag
@@ -117,7 +146,10 @@ pass "cycle has no eval or broad destructive operation"
 # and browser-token mapping in isolation so no operational function can run.
 gate_fixture="$TEST_ROOT/cycle-gates"
 mkdir -p "$gate_fixture"
-REPO="$TEST_ROOT/repo" WSI_CYCLE_RUNTIME="$gate_fixture" \
+WSI_REPO="$TEST_ROOT/repo" \
+REPO="$TEST_ROOT/repo" \
+WSI_CYCLE_BRANCH=fixture-release-cycle \
+WSI_CYCLE_RUNTIME="$gate_fixture" \
 OPS_CYCLE_SCRIPT="$OPS_DIR/wsi-release-cycle.sh" bash <<'EOF'
 set -euo pipefail
 DRY_RUN=false
@@ -277,6 +309,7 @@ printf 'production fixture jar\n' >"$fingerprint_production/app/wsi-server.jar"
 printf 'fixture-build\n' >"$fingerprint_production/app/BUILD_TAG.txt"
 git -C "$fingerprint_repo" rev-parse HEAD >"$fingerprint_production/app/BUILD_COMMIT.txt"
 
+WSI_REPO="$fingerprint_repo" \
 REPO="$fingerprint_repo" \
 STAGING="$fingerprint_staging" \
 REHEARSAL="$fingerprint_rehearsal" \
@@ -369,6 +402,7 @@ for root in "$tag_staging" "$tag_rehearsal" "$tag_production"; do
     git -C "$tag_repo" rev-parse HEAD >"$root/app/BUILD_COMMIT.txt"
 done
 
+WSI_REPO="$tag_repo" \
 REPO="$tag_repo" \
 STAGING="$tag_staging" \
 REHEARSAL="$tag_rehearsal" \
