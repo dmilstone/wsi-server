@@ -24,6 +24,19 @@ assert.match(button, /min-width:\s*28px/);
 assert.match(button, /height:\s*28px/);
 assert.match(button, /min-height:\s*28px/);
 assert.match(button, /width:\s*28px/);
+assert.match(button, /background:\s*transparent/);
+
+// Inactive/active/disabled chrome is normalized in the compact toolbar.
+assert.match(
+    html,
+    /\.viewer-toolbar \.toolbar-button\[aria-pressed="true"\]:not\(:disabled\)[^{]*\{[^}]*background:\s*rgba\(77,\s*148,\s*216,\s*\.22\)/
+);
+assert.match(html, /\.toolbar-button:disabled[^{]*\{[^}]*opacity:\s*\.38/);
+assert.match(html, /\.toolbar-button:hover:not\(:disabled\)/);
+assert.doesNotMatch(
+    html,
+    /\.viewer-toolbar \.toolbar-button\[aria-pressed="true"\]:not\(:disabled\)[^{]*\{[^}]*background:\s*var\(--accent\)/
+);
 
 // Header-row toolbar above the viewer stage — never overlays WSI pixels.
 const viewerMain = rule(".viewer-main");
@@ -36,14 +49,22 @@ assert.ok(
     html.indexOf('id="tools-tray"') < html.indexOf('class="viewer-stage"'),
     "toolbar must appear before the viewer stage"
 );
-assert.match(rule(".tools-tray"), /justify-content:\s*center/);
+assert.match(rule(".tools-tray"), /justify-content:\s*safe center/);
 assert.match(rule(".tools-tray.tools-collapsed"), /visibility:\s*hidden/);
-assert.match(html, /id="collapse-tools"/);
 assert.match(html, /id="toggle-tools"/);
+assert.doesNotMatch(html, /id="collapse-tools"/);
 assert.match(html, /id="reveal-tools"/);
 assert.match(html, /function setToolsCollapsed\(collapsed\)/);
 assert.match(html, /tools-tray"\)\.classList\.toggle\("tools-collapsed"/);
 assert.match(html, /localStorage\.setItem\(`\$\{STORAGE_PREFIX\}\.toolsCollapsed`/);
+
+// CURRENT IMAGE is a bounded, non-overlapping header region.
+const headerContext = rule(".header-context");
+assert.match(headerContext, /max-width:\s*220px/);
+assert.match(headerContext, /overflow:\s*hidden/);
+assert.match(headerContext, /min-width:\s*96px/);
+assert.match(rule("#selected-name"), /max-width:\s*100%/);
+assert.match(rule("#selected-name"), /text-overflow:\s*ellipsis/);
 
 // Toolbar is a single horizontal in-flow row in the header (not over #viewer).
 const toolbar = rule(".viewer-toolbar");
@@ -61,10 +82,20 @@ for (const [width, height] of [[1440, 900], [1024, 768], [768, 1024]]) {
     assert.ok(stageHeight > 480, `header toolbar leaves usable stage at ${width}x${height} (${stageHeight}px)`);
 }
 
-// Groups remain atomic; name editor stays compact in the toolbar row.
+// Annotation name editor is not a toolbar field; inline label editing is used.
 assert.match(rule(".toolbar-group"), /flex:\s*0 0 auto/);
-assert.match(rule(".annotation-name-group"), /flex:\s*0 1 160px/);
-assert.match(rule(".annotation-name-control input"), /height:\s*28px/);
+assert.doesNotMatch(html, /annotation-name-group/);
+assert.doesNotMatch(html, /annotation-name-control/);
+assert.match(html, /id="annotation-name"[^>]*class="annotation-name-inline-input"/);
+assert.match(html, /id="annotation-name"[^>]*hidden/);
+assert.match(rule(".annotation-name-label.is-editable"), /pointer-events:\s*auto/);
+const nameEditorSource = fs.readFileSync(
+    path.join(__dirname, "../../main/resources/static/annotation-name-editor.js"), "utf8");
+const spikeSource = fs.readFileSync(
+    path.join(__dirname, "../../main/resources/static/annotorious-spike.js"), "utf8");
+assert.match(spikeSource, /beginInlineEdit/);
+assert.match(nameEditorSource, /beginEdit\(/);
+assert.match(nameEditorSource, /this\.input\.select\?\.\(\)/);
 
 // Narrow viewports keep stage full-height under the header toolbar.
 const narrow = rule(".viewer-main", "max-width:\\s*820px");
@@ -94,7 +125,7 @@ for (const id of orderedIds) {
 // Hover/focus tooltips and accessible labels on every toolbar control.
 const extraIds = [
     "home-view", "annotation-names", "slide-overview-button",
-    "full-screen", "toggle-tools", "collapse-tools", "presentation"
+    "full-screen", "toggle-tools", "presentation"
 ];
 for (const id of [...orderedIds, ...extraIds]) {
     const controlMatch = html.match(new RegExp(`id="${id}"[^>]*`));
@@ -118,6 +149,11 @@ assert.match(html, /id="export-visible-region"[^>]*aria-label="Export view"/);
 assert.match(html, /id="export-selected-annotation"[^>]*aria-label="Export annotations"/);
 assert.doesNotMatch(html, /id="export-menu"/);
 assert.doesNotMatch(html, /function positionExportMenu/);
+assert.match(html, /function normalizeExportBounds\(/);
+assert.match(html, /function exportScaleForRegion\(/);
+assert.match(html, /zoomBy\(1\.25,\s*null\)/);
+assert.match(html, /zoomBy\(0\.8,\s*null\)/);
+assert.match(html, /function withReadyViewport\(/);
 
 // Polygon/freehand remain present but disabled (not implemented).
 assert.match(html, /id="polygon-mode"[^>]*disabled/);
@@ -148,12 +184,12 @@ assert.doesNotMatch(
 
 for (const label of [
     "Annotation drawing and editing tools", "Annotation visibility",
-    "Selected annotation name", "Zoom and navigation", "Export actions",
+    "Zoom and navigation", "Export actions",
     "Open and images"
 ]) {
     assert.match(html, new RegExp(`role="group" aria-label="${label}"`));
 }
-assert.match(html, /\.toolbar-button\[aria-pressed="true"\][^{]*\{[^}]*background:\s*var\(--accent\)/);
+assert.doesNotMatch(html, /role="group" aria-label="Selected annotation name"/);
 assert.match(rule("button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible"), /outline:\s*3px solid/);
 
 console.log("viewer compact header-toolbar layout checks passed at 1440px, 1024px, and 768px");

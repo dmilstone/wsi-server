@@ -2,12 +2,15 @@
 class AnnotationLabelLayer {
     static PREFERENCE_KEY = "wsi.annotationNames.visible";
 
-    constructor(viewer, annotator, getName, storage = window.localStorage) {
+    constructor(viewer, annotator, getName, storage = window.localStorage, onEditRequest = null) {
         this.viewer = viewer;
         this.annotator = annotator;
         this.getName = getName;
         this.storage = storage;
+        this.onEditRequest = onEditRequest;
         this.currentImageId = null;
+        this.selectedId = null;
+        this.editingId = null;
         this.labels = new Map();
         this.temporaryDisplacements = new Map();
         this.namesVisible = this.readPreference();
@@ -56,7 +59,37 @@ class AnnotationLabelLayer {
 
     beginImage(imageId) {
         this.currentImageId = imageId;
+        this.selectedId = null;
+        this.editingId = null;
         this.clear();
+    }
+
+    setSelectedAnnotationId(id) {
+        const nextId = id || null;
+        if (this.selectedId === nextId) {
+            this.refreshSelectionPresentation();
+            return;
+        }
+        this.selectedId = nextId;
+        this.refreshSelectionPresentation();
+    }
+
+    setEditingAnnotationId(id) {
+        this.editingId = id || null;
+        this.refreshSelectionPresentation();
+    }
+
+    refreshSelectionPresentation() {
+        const annotations = this.annotator?.getAnnotations?.() || [];
+        const liveIds = new Set(annotations.map(item => item?.id).filter(Boolean));
+        if (this.selectedId && !liveIds.has(this.selectedId)) this.selectedId = null;
+        annotations.forEach(annotation => {
+            if (annotation?.id) this.syncAnnotation(annotation);
+        });
+        for (const id of [...this.labels.keys()]) {
+            if (!liveIds.has(id) && id !== this.selectedId) this.remove(id);
+        }
+        this.updatePositions();
     }
 
     sync(imageId) {
@@ -77,8 +110,10 @@ class AnnotationLabelLayer {
 
     syncAnnotation(annotation) {
         if (!annotation?.id) return;
+        if (this.editingId === annotation.id) return;
         const name = String(this.getName(annotation.id) || "").trim();
-        if (!name) {
+        const selected = annotation.id === this.selectedId;
+        if (!name && !selected) {
             this.remove(annotation.id);
             return;
         }
@@ -87,13 +122,26 @@ class AnnotationLabelLayer {
             const element = document.createElement("span");
             element.className = "annotation-name-label";
             element.style.pointerEvents = "none";
+            const onClick = event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (entry.annotation?.id !== this.selectedId) return;
+                this.onEditRequest?.(entry.annotation.id, entry.element);
+            };
+            element.addEventListener("click", onClick);
             this.layer.appendChild(element);
-            entry = { annotation, element };
+            entry = { annotation, element, onClick };
             this.labels.set(annotation.id, entry);
         }
         entry.annotation = annotation;
-        entry.element.textContent = name;
-        entry.element.title = name;
+        const displayName = name || "Unnamed annotation";
+        entry.element.textContent = displayName;
+        entry.element.title = selected
+            ? (name ? `${name} — click to rename` : "Click to name this annotation")
+            : displayName;
+        entry.element.classList.toggle("is-placeholder", !name);
+        entry.element.classList.toggle("is-editable", selected);
+        entry.element.style.pointerEvents = selected ? "auto" : "none";
         this.position(entry);
     }
 
@@ -108,9 +156,30 @@ class AnnotationLabelLayer {
             entry.element.hidden = true;
             return;
         }
+        // During image open/switch OpenSeadragon can briefly lack content bounds;
+        // skip placement instead of letting viewport.js throw on undefined.x.
+        const tiledImage = this.viewer?.world?.getItemCount?.()
+            ? this.viewer.world.getItemAt(0)
+            : null;
+        if (!tiledImage || !this.viewer?.viewport) {
+            entry.element.hidden = true;
+            return;
+        }
         const displacement = this.temporaryDisplacements.get(entry.annotation.id) || { x: 0, y: 0 };
-        const point = this.viewer.viewport.imageToViewerElementCoordinates(
-            new OpenSeadragon.Point(x + displacement.x, y + displacement.y));
+        let point;
+        try {
+            const imagePoint = new OpenSeadragon.Point(x + displacement.x, y + displacement.y);
+            point = typeof tiledImage.imageToViewerElementCoordinates === "function"
+                ? tiledImage.imageToViewerElementCoordinates(imagePoint)
+                : this.viewer.viewport.imageToViewerElementCoordinates(imagePoint);
+        } catch (_) {
+            entry.element.hidden = true;
+            return;
+        }
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+            entry.element.hidden = true;
+            return;
+        }
         entry.element.hidden = false;
         entry.element.style.transform = `translate(${Math.round(point.x + 6)}px, ${Math.round(point.y + 6)}px)`;
     }
@@ -143,9 +212,11 @@ class AnnotationLabelLayer {
     remove(id) {
         const entry = this.labels.get(id);
         if (!entry) return;
+        if (entry.onClick) entry.element.removeEventListener("click", entry.onClick);
         entry.element.remove();
         this.labels.delete(id);
         this.temporaryDisplacements.delete(id);
+        if (this.editingId === id) this.editingId = null;
     }
 
     clear() {

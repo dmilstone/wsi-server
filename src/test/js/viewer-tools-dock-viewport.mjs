@@ -64,7 +64,12 @@ body { display:grid !important; grid-template-rows: 58px minmax(0,1fr) 30px !imp
 <body>
 <header class="app-header">
   <div class="brand"><div class="brand-title">WSI Viewer</div></div>
-  <div id="tools-tray" class="tools-tray"><div class="viewer-toolbar" role="toolbar"></div></div>
+  <div class="header-context"><div class="header-label">Current image</div><div id="selected-name">Sample_Slide_Long_Name_ABCDEFG.vsi</div></div>
+  <div id="tools-tray" class="tools-tray"><div class="viewer-toolbar" role="toolbar">
+    <button id="open-image" class="toolbar-button" type="button" data-tooltip="Open" aria-label="Open"></button>
+    <button id="toggle-left" class="toolbar-button" type="button" data-tooltip="Images" aria-label="Images" aria-pressed="true"></button>
+    <button id="zoom-in" class="toolbar-button" type="button" data-tooltip="Zoom in" aria-label="Zoom in"></button>
+  </div></div>
 </header>
 <div class="workspace">
   <main class="viewer-main" aria-label="Whole-slide image viewer">
@@ -77,8 +82,22 @@ body { display:grid !important; grid-template-rows: 58px minmax(0,1fr) 30px !imp
 (() => {
   const stage = document.querySelector(".viewer-stage").getBoundingClientRect();
   const tray = document.querySelector(".tools-tray").getBoundingClientRect();
+  const ctx = document.querySelector(".header-context").getBoundingClientRect();
   const viewer = document.getElementById("viewer").getBoundingClientRect();
   const annotation = document.querySelector(".annotation-overlay").getBoundingClientRect();
+  const buttons = [...document.querySelectorAll(".toolbar-button")].map((button) => {
+    const rect = button.getBoundingClientRect();
+    const style = getComputedStyle(button);
+    return {
+      id: button.id,
+      left: rect.left,
+      right: rect.right,
+      bg: style.backgroundColor,
+      ariaPressed: button.getAttribute("aria-pressed"),
+      overlapsContext: !(rect.right <= ctx.left + 0.5 || rect.left >= ctx.right - 0.5 ||
+                        rect.bottom <= ctx.top + 0.5 || rect.top >= ctx.bottom - 0.5)
+    };
+  });
   const overlapTrayStage = !(stage.right <= tray.left + 0.5 || tray.right <= stage.left + 0.5 ||
                             stage.bottom <= tray.top + 0.5 || tray.bottom <= stage.top + 0.5);
   const overlapTrayViewer = !(viewer.right <= tray.left + 0.5 || tray.right <= viewer.left + 0.5 ||
@@ -89,11 +108,15 @@ body { display:grid !important; grid-template-rows: 58px minmax(0,1fr) 30px !imp
     vh: window.innerHeight,
     stage: { width: stage.width, height: stage.height, top: stage.top, bottom: stage.bottom },
     tray: { width: tray.width, height: tray.height, top: tray.top, bottom: tray.bottom },
+    ctx: { left: ctx.left, right: ctx.right, width: ctx.width },
     viewer: { width: viewer.width, height: viewer.height },
     annotation: { width: annotation.width, height: annotation.height },
     overlapTrayStage,
     overlapTrayViewer,
-    above
+    above,
+    overlappingContextButtons: buttons.filter((button) => button.overlapsContext),
+    pressedBg: buttons.filter((button) => button.ariaPressed === "true").map((button) => button.bg),
+    inactiveBg: buttons.filter((button) => button.ariaPressed !== "true").map((button) => button.bg)
   });
 })();
 </script>
@@ -133,6 +156,16 @@ for (const viewport of viewports) {
     assert.equal(measured.overlapTrayStage, false, `${viewport.name} toolbar/stage must not overlap`);
     assert.equal(measured.overlapTrayViewer, false, `${viewport.name} toolbar/viewer must not overlap`);
     assert.equal(measured.above, true, `${viewport.name} toolbar should sit above stage`);
+    assert.equal(measured.overlappingContextButtons.length, 0,
+        `${viewport.name} CURRENT IMAGE must not overlap toolbar controls`);
+    assert.ok(measured.ctx.width <= 220 + 1, `${viewport.name} CURRENT IMAGE stays bounded`);
+    for (const bg of measured.inactiveBg) {
+        assert.equal(bg, "rgba(0, 0, 0, 0)", `${viewport.name} inactive toolbar chrome is transparent`);
+    }
+    for (const bg of measured.pressedBg) {
+        assert.notEqual(bg, "rgba(0, 0, 0, 0)", `${viewport.name} pressed toolbar chrome is visible`);
+        assert.notEqual(bg, "rgb(77, 148, 216)", `${viewport.name} pressed chrome is subtle, not solid accent fill`);
+    }
     assert.ok(measured.stage.height >= 400, `${viewport.name} usable stage height`);
     assert.ok(measured.tray.height > 0 && measured.tray.height <= 64, `${viewport.name} compact toolbar height`);
     assert.ok(Math.abs(measured.annotation.height - measured.viewer.height) < 2,

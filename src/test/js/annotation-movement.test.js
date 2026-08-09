@@ -36,6 +36,8 @@ class FakeLabelLayer {
         this.displacements = new Map();
         this.synced = [];
         this.positionUpdates = 0;
+        this.selectedId = null;
+        this.editingId = null;
     }
     syncAnnotation(annotation) { this.synced.push(annotation); }
     setTemporaryDisplacement(id, x, y) { this.displacements.set(id, { x, y }); }
@@ -46,9 +48,16 @@ class FakeLabelLayer {
     beginImage() { this.displacements.clear(); }
     remove(id) { this.displacements.delete(id); }
     setAnnotationsVisible() {}
+    setSelectedAnnotationId(id) { this.selectedId = id || null; }
+    setEditingAnnotationId(id) { this.editingId = id || null; }
+    refreshSelectionPresentation() {}
 }
 
-class FakeNameEditor { setSelection() {} }
+class FakeNameEditor {
+    setSelection() {}
+    beginInlineEdit() { return false; }
+    endInlineEdit() {}
+}
 const button = () => ({ disabled: true, addEventListener() {}, setAttribute() {} });
 const context = vm.createContext({
     console,
@@ -56,7 +65,8 @@ const context = vm.createContext({
     document: { addEventListener() {} },
     window: {
         AnnotoriousOSD: { createOSDAnnotator: () => annotator },
-        requestAnimationFrame(callback) { animationFrames.push(callback); }
+        requestAnimationFrame(callback) { animationFrames.push(callback); },
+        localStorage: { getItem() { return null; }, setItem() {} }
     },
     OpenSeadragon: { Point: class Point { constructor(x, y) { this.x = x; this.y = y; } } },
     AnnotationAdapter: FakeAdapter,

@@ -9,6 +9,20 @@ class Element {
     constructor(tag = "div") {
         this.tag = tag; this.children = []; this.attributes = {}; this.style = {};
         this.hidden = false; this.textContent = ""; this.title = ""; this.parent = null;
+        this.classList = {
+            values: new Set(),
+            toggle(name, force) {
+                if (force === undefined) {
+                    this.values.has(name) ? this.values.delete(name) : this.values.add(name);
+                    return;
+                }
+                force ? this.values.add(name) : this.values.delete(name);
+            },
+            add(name) { this.values.add(name); },
+            remove(name) { this.values.delete(name); },
+            contains(name) { return this.values.has(name); }
+        };
+        this.listeners = {};
     }
     appendChild(child) { child.parent = this; this.children.push(child); return child; }
     remove() {
@@ -16,6 +30,18 @@ class Element {
         this.parent = null;
     }
     setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
+    removeEventListener(type, listener) {
+        this.listeners[type] = (this.listeners[type] || []).filter(item => item !== listener);
+    }
+    replaceChildren(...nodes) {
+        this.children = [];
+        this.textContent = "";
+        for (const node of nodes) {
+            if (typeof node === "string") this.textContent += node;
+            else this.appendChild(node);
+        }
+    }
 }
 
 const storageValues = new Map();
@@ -26,8 +52,17 @@ const storage = {
 const root = new Element();
 const handlers = new Map();
 let scale = 1;
+const tiledImage = {
+    imageToViewerElementCoordinates(point) {
+        return { x: point.x * scale, y: point.y * scale };
+    }
+};
 const viewer = {
     element: root,
+    world: {
+        getItemCount() { return 1; },
+        getItemAt() { return tiledImage; }
+    },
     viewport: { imageToViewerElementCoordinates(point) {
         return { x: point.x * scale, y: point.y * scale };
     } },
@@ -130,8 +165,17 @@ assert.equal(layer.labels.size, 0);
 assert.equal(layer.sync("image-one"), false);
 assert.equal(layer.labels.size, 0);
 
-// Labels are non-interactive viewer children, not canvas/export inputs, and clean up fully.
+// Labels are non-interactive by default; the selected label becomes click-to-edit.
 assert.equal(layer.layer.style.pointerEvents, "none");
+names.set("blank", "Editable");
+if (!annotations.includes(unnamed)) annotations.push(unnamed);
+layer.beginImage("image-edit");
+layer.sync("image-edit");
+layer.setSelectedAnnotationId("blank");
+const editable = layer.labels.get("blank").element;
+assert.equal(editable.classList.contains("is-editable"), true);
+assert.equal(editable.style.pointerEvents, "auto");
+assert.match(editable.title, /click to rename/i);
 assert(!source.includes("innerHTML"));
 assert(!source.includes(".setAnnotations("));
 assert(!source.includes("export"));

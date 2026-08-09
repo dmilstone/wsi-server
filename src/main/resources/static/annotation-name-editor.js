@@ -2,13 +2,16 @@
 class AnnotationNameEditor {
     static MAX_LENGTH = 200;
 
-    constructor(input, adapter, nameCommitted = () => {}) {
+    constructor(input, adapter, nameCommitted = () => {}, editingEnded = () => {}) {
         this.input = input;
         this.adapter = adapter;
         this.nameCommitted = nameCommitted;
+        this.editingEnded = editingEnded;
         this.selectedId = null;
         this.storedValue = "";
         this.visible = true;
+        this.hostElement = null;
+        this.editing = false;
 
         input.addEventListener("keydown", event => {
             // Handle editor keys here so they never reach viewer drawing shortcuts.
@@ -22,10 +25,16 @@ class AnnotationNameEditor {
                 event.stopPropagation();
                 input.value = this.storedValue;
                 input.setCustomValidity("");
+                input.blur();
             }
         });
         input.addEventListener("input", () => this.validate());
-        input.addEventListener("blur", () => this.commit());
+        input.addEventListener("blur", () => {
+            this.commit();
+            this.endInlineEdit();
+        });
+        input.addEventListener("click", event => event.stopPropagation());
+        input.addEventListener("pointerdown", event => event.stopPropagation());
     }
 
     setSelection(annotations, visible = this.visible) {
@@ -34,6 +43,11 @@ class AnnotationNameEditor {
             ? annotations[0]
             : null;
         const nextId = selected?.id || null;
+
+        if (this.editing && nextId !== this.selectedId) {
+            this.commit();
+            this.endInlineEdit();
+        }
 
         // Deliberately discard the draft before changing selection/image.
         this.selectedId = nextId;
@@ -44,6 +58,7 @@ class AnnotationNameEditor {
         this.input.setCustomValidity("");
         this.input.setAttribute("aria-invalid", "false");
         this.input.title = "";
+        if (!nextId) this.endInlineEdit();
     }
 
     setVisible(visible, annotations) {
@@ -56,6 +71,48 @@ class AnnotationNameEditor {
         this.input.setAttribute("aria-invalid", String(tooLong));
         this.input.title = tooLong ? "Name must be at most 200 Unicode characters." : "";
         return !tooLong;
+    }
+
+    beginEdit() {
+        if (!this.selectedId || this.input.disabled) return false;
+        this.input.focus?.();
+        this.input.select?.();
+        return true;
+    }
+
+    beginInlineEdit(hostElement) {
+        if (!this.selectedId || this.input.disabled || !hostElement) return false;
+        if (this.editing && this.hostElement === hostElement) {
+            return this.beginEdit();
+        }
+        if (this.editing) {
+            this.commit();
+            this.endInlineEdit();
+        }
+        this.hostElement = hostElement;
+        this.editing = true;
+        hostElement.classList.add("is-editing");
+        hostElement.replaceChildren(this.input);
+        this.input.hidden = false;
+        this.input.disabled = false;
+        this.input.value = this.storedValue;
+        this.beginEdit();
+        return true;
+    }
+
+    endInlineEdit() {
+        if (!this.editing && !this.hostElement) {
+            this.input.hidden = true;
+            return;
+        }
+        const host = this.hostElement;
+        const wasEditing = this.editing;
+        this.editing = false;
+        this.hostElement = null;
+        if (this.input.parentElement) this.input.remove();
+        this.input.hidden = true;
+        host?.classList.remove("is-editing");
+        if (wasEditing) this.editingEnded(this.selectedId);
     }
 
     commit() {

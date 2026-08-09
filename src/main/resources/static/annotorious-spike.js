@@ -87,12 +87,31 @@ class AnnotoriousSpike {
                 this.notifySelectionChanged();
             }
         });
+        this.nameEditor = new AnnotationNameEditor(
+            this.nameInput,
+            this.adapter,
+            id => {
+                this.labelLayer?.setEditingAnnotationId(null);
+                const annotation = this.annotator.getAnnotations().find(item => item.id === id);
+                if (annotation) this.labelLayer?.syncAnnotation(annotation);
+                else this.labelLayer?.refreshSelectionPresentation();
+            },
+            () => {
+                this.labelLayer?.setEditingAnnotationId(null);
+                this.labelLayer?.refreshSelectionPresentation();
+            }
+        );
         this.labelLayer = new AnnotationLabelLayer(
-            this.viewer, this.annotator, id => this.adapter.getAnnotationName(id));
-        this.nameEditor = new AnnotationNameEditor(this.nameInput, this.adapter, id => {
-            const annotation = this.annotator.getAnnotations().find(item => item.id === id);
-            if (annotation) this.labelLayer.syncAnnotation(annotation);
-        });
+            this.viewer,
+            this.annotator,
+            id => this.adapter.getAnnotationName(id),
+            window.localStorage,
+            (id, host) => {
+                this.labelLayer.setEditingAnnotationId(id);
+                const started = this.nameEditor.beginInlineEdit(host);
+                if (!started) this.labelLayer.setEditingAnnotationId(null);
+            }
+        );
 
         this.annotator.on("createAnnotation", annotation => {
             this.adapter.annotationCreated(annotation);
@@ -202,8 +221,15 @@ class AnnotoriousSpike {
 
     clientToImagePoint(event) {
         const rect = this.viewer.element.getBoundingClientRect();
-        return this.viewer.viewport.viewerElementToImageCoordinates(
-            new OpenSeadragon.Point(event.clientX - rect.left, event.clientY - rect.top));
+        const elementPoint = new OpenSeadragon.Point(
+            event.clientX - rect.left, event.clientY - rect.top);
+        const tiledImage = this.viewer.world?.getItemCount?.()
+            ? this.viewer.world.getItemAt(0)
+            : null;
+        if (tiledImage && typeof tiledImage.viewerElementToImageCoordinates === "function") {
+            return tiledImage.viewerElementToImageCoordinates(elementPoint);
+        }
+        return this.viewer.viewport.viewerElementToImageCoordinates(elementPoint);
     }
 
     annotationContainsClientPoint(annotation, event) {
@@ -273,6 +299,8 @@ class AnnotoriousSpike {
     notifySelectionChanged() {
         const selected = this.getSelectedAnnotations();
         this.nameEditor?.setSelection(selected, this.annotationsVisible);
+        const selectedId = selected.length === 1 ? selected[0].id : null;
+        this.labelLayer?.setSelectedAnnotationId(selectedId);
         this.timingCallbacks.selectionChanged?.(selected);
     }
 

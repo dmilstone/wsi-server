@@ -93,9 +93,23 @@
         .brand-copy { min-width: 0; }
         .brand-title { margin: 0; font-size: 18px; line-height: 1.1; letter-spacing: .01em; }
         .brand-subtitle { margin-top: 3px; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
-        .header-context { min-width: 0; text-align: right; }
+        .header-context {
+            flex: 0 1 200px;
+            min-width: 96px;
+            max-width: 220px;
+            overflow: hidden;
+            text-align: left;
+        }
         .header-label { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-        #selected-name { max-width: min(42vw, 620px); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; }
+        #selected-name {
+            max-width: 100%;
+            margin-top: 3px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
 
         .workspace { display: grid; grid-template-columns: 280px minmax(360px, 1fr) 360px; min-height: 0; }
         aside { min-width: 0; background: var(--surface); overflow: auto; scrollbar-color: #405064 transparent; }
@@ -188,7 +202,7 @@
             display: flex;
             flex-direction: row;
             align-items: center;
-            justify-content: center;
+            justify-content: safe center;
             overflow-x: auto;
             overflow-y: hidden;
             scrollbar-width: thin;
@@ -413,10 +427,33 @@
             background: transparent; border: 1px solid transparent; border-radius: 6px;
             color: rgba(255,255,255,.84); cursor: pointer;
         }
-        .toolbar-button:hover, a.toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
-        .toolbar-button:disabled { opacity: .38; cursor: default; }
+        /* Inactive chrome is identical for every control; active is a subtle toggle cue. */
+        .viewer-toolbar .toolbar-button[aria-pressed="true"]:not(:disabled),
+        .viewer-toolbar a.toolbar-button[aria-pressed="true"] {
+            color: #fff;
+            background: rgba(77, 148, 216, .22);
+            border-color: rgba(77, 148, 216, .48);
+        }
+        .toolbar-button:hover:not(:disabled), a.toolbar-button:hover { background: rgba(255,255,255,.10); color: white; }
+        .viewer-toolbar .toolbar-button[aria-pressed="true"]:not(:disabled):hover,
+        .viewer-toolbar a.toolbar-button[aria-pressed="true"]:hover {
+            background: rgba(77, 148, 216, .32);
+            border-color: rgba(77, 148, 216, .62);
+            color: #fff;
+        }
+        .toolbar-button:disabled,
+        .toolbar-button:disabled:hover {
+            opacity: .38;
+            cursor: default;
+            background: transparent;
+            border-color: transparent;
+            color: rgba(255,255,255,.84);
+        }
         .toolbar-icon { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
         .toolbar-icon.filled { fill: currentColor; stroke: none; }
+        .viewer-toolbar .help-link-symbol {
+            width: 16px; height: 16px; border: 0; border-radius: 0; font-size: 13px; font-weight: 750;
+        }
         /* Tooltip uses ::after only so icon buttons may keep ::before glyphs. */
         .toolbar-button[data-tooltip]::after {
             content: attr(data-tooltip); pointer-events: none; opacity: 0;
@@ -451,15 +488,25 @@
             box-shadow: 0 1px 3px rgba(0,0,0,.9); font: 700 11px/1.25 system-ui, sans-serif;
             overflow-wrap: anywhere; pointer-events: none; user-select: none;
         }
-        .annotation-name-group { flex: 0 1 160px; min-width: 88px; max-width: 180px; }
-        .annotation-name-control { display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-width: 0; width: 100%; color: rgba(255,255,255,.72); font-size: 11px; font-weight: 700; white-space: nowrap; }
-        .annotation-name-control input {
-            flex: 1 1 auto; width: 100%; min-width: 0; height: 28px; box-sizing: border-box;
-            padding: 3px 7px; color: white; background: rgba(0,0,0,.28);
-            border: 1px solid rgba(255,255,255,.18); border-radius: 6px; font-size: 12px;
+        .annotation-name-label.is-editable {
+            pointer-events: auto;
+            cursor: text;
+            user-select: text;
         }
-        .annotation-name-control input:disabled { opacity: .55; }
-        .header-context { flex: 0 1 auto; }
+        .annotation-name-label.is-editable:hover,
+        .annotation-name-label.is-editing {
+            border-color: rgba(77, 148, 216, .9);
+            box-shadow: 0 0 0 1px rgba(77, 148, 216, .35), 0 1px 3px rgba(0,0,0,.9);
+        }
+        .annotation-name-label.is-placeholder { font-style: italic; font-weight: 650; color: rgba(255,255,255,.82); }
+        .annotation-name-inline-input {
+            display: block; width: min(200px, 36vw); min-width: 72px; max-width: 220px;
+            height: 22px; box-sizing: border-box; margin: 0; padding: 1px 4px;
+            color: #fff; background: rgba(0,0,0,.55);
+            border: 1px solid rgba(77, 148, 216, .85); border-radius: 3px;
+            font: 700 11px/1.25 system-ui, sans-serif;
+        }
+        .annotation-name-inline-input:focus { outline: 2px solid rgba(77, 148, 216, .65); outline-offset: 1px; }
         /* Annotorious renders all geometry, handles, and selections in its a9s
            overlay. Visibility is suppressed at the display boundary so no live
            annotation data or persistence state is touched. */
@@ -602,7 +649,6 @@
             .workspace { display:grid; grid-template-columns:1fr; grid-template-rows:230px minmax(480px,70vh) auto; }
             .viewer-main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
             .viewer-stage { grid-column: 1; grid-row: 1; }
-            .annotation-name-group { max-width: 120px; min-width: 72px; }
             #reveal-left, #reveal-right { grid-column: 1; grid-row: 1; }
             .resize-handle { display:none; }
             #images-panel { border-right: 0; border-bottom: 1px solid var(--border); }
@@ -714,20 +760,13 @@
                 <button id="toggle-tools" class="toolbar-button" type="button" data-tooltip="Hide tools" title="Hide viewer tools" aria-label="Hide viewer tools" aria-pressed="true">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5.5h10M3 8h10M3 10.5h10"/></svg>
                 </button>
-                <button id="collapse-tools" class="toolbar-button" type="button" data-tooltip="Hide tools" aria-label="Hide viewer tools">
-                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 9.5 8 4.5l5 5"/></svg>
-                </button>
                 <button id="presentation" class="toolbar-button" type="button" data-tooltip="Presentation mode" aria-label="Enter presentation mode">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="8"/><path d="M5 13.5h6"/></svg>
                 </button>
             </div>
-            <div class="toolbar-group annotation-name-group" role="group" aria-label="Selected annotation name">
-                <label class="annotation-name-control"><span class="visually-hidden">Selected name</span>
-                    <input id="annotation-name" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Annotation name" disabled>
-                </label>
-            </div>
         </div>
     </div>
+    <input id="annotation-name" class="annotation-name-inline-input" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Unnamed annotation" hidden disabled>
     <div class="header-actions">
         <a id="local-operations" class="help-link" href="http://127.0.0.1:8084/" target="_blank" rel="noopener" title="Available only in a browser running on the image server">Local operations — Available only in a browser running on the image server</a>
     </div>
@@ -1252,22 +1291,58 @@
         }
     }
 
+    const MAX_EXPORT_PIXELS = 16000000;
+
+    function normalizeExportBounds(bounds) {
+        if (!bounds || !metadata) return null;
+        const box = typeof bounds.getBoundingBox === "function" ? bounds.getBoundingBox() : bounds;
+        const x = Number(box.x);
+        const y = Number(box.y);
+        const width = Number(box.width);
+        const height = Number(box.height);
+        if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+        const left = Math.max(0, Math.floor(x));
+        const top = Math.max(0, Math.floor(y));
+        const right = Math.min(metadata.width, Math.ceil(x + width));
+        const bottom = Math.min(metadata.height, Math.ceil(y + height));
+        if (!(right > left && bottom > top)) return null;
+        if (left < 0 || top < 0 || right > metadata.width || bottom > metadata.height) return null;
+        return { x: left, y: top, width: right - left, height: bottom - top };
+    }
+
+    function exportScaleForRegion(width, height) {
+        const sourcePixels = width * height;
+        if (sourcePixels <= MAX_EXPORT_PIXELS) return 1;
+        // Keep the request inside the server pixel budget when the (now wider)
+        // header-toolbar stage exposes a larger native visible region.
+        const scale = Math.sqrt(MAX_EXPORT_PIXELS / sourcePixels);
+        const scaledWidth = Math.max(1, Math.round(width * scale));
+        const scaledHeight = Math.max(1, Math.round(height * scale));
+        if (scaledWidth * scaledHeight > MAX_EXPORT_PIXELS) {
+            const tight = Math.sqrt(MAX_EXPORT_PIXELS / (scaledWidth * scaledHeight)) * scale;
+            return Math.max(Number.EPSILON, tight);
+        }
+        return scale;
+    }
+
     // Bounds are accepted separately so annotation export can reuse this path later.
     async function exportImageBounds(bounds) {
         if (!selectedImage || !metadata) return;
-        const left = Math.max(0, Math.floor(bounds.x));
-        const top = Math.max(0, Math.floor(bounds.y));
-        const right = Math.min(metadata.width, Math.ceil(bounds.x + bounds.width));
-        const bottom = Math.min(metadata.height, Math.ceil(bounds.y + bounds.height));
-        if (right <= left || bottom <= top) throw new Error("No image pixels are visible to export.");
-
+        const region = normalizeExportBounds(bounds);
+        if (!region) throw new Error("No image pixels are visible to export.");
+        const scale = exportScaleForRegion(region.width, region.height);
         const parameters = new URLSearchParams({
             image: selectedImage.id,
-            x: String(left), y: String(top),
-            width: String(right - left), height: String(bottom - top)
+            x: String(region.x), y: String(region.y),
+            width: String(region.width), height: String(region.height),
+            scale: String(scale)
         });
         const response = await fetch(`/export?${parameters}`);
-        if (!response.ok) throw new Error(await response.text() || `Export failed (${response.status})`);
+        if (!response.ok) {
+            let detail = "";
+            try { detail = (await response.text()).trim(); } catch (_) { /* ignore */ }
+            throw new Error(detail || `Export failed (${response.status})`);
+        }
         const blobUrl = URL.createObjectURL(await response.blob());
         const link = document.createElement("a");
         link.href = blobUrl;
@@ -1276,6 +1351,7 @@
         link.click();
         link.remove();
         setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+        return scale;
     }
 
     async function exportVisibleRegion() {
@@ -1283,10 +1359,16 @@
         exportVisibleRegionButton.disabled = true;
         try {
             const viewportBounds = viewer.viewport.getBounds(true);
+            if (!viewportBounds) throw new Error("The viewer viewport is not ready to export.");
             const imageBounds = viewer.world.getItemAt(0).viewportToImageRectangle(viewportBounds);
+            if (!normalizeExportBounds(imageBounds)) {
+                throw new Error("No image pixels are visible to export.");
+            }
             statusElement.textContent = "Exporting visible region at native resolution…";
-            await exportImageBounds(imageBounds);
-            statusElement.textContent = "Visible region exported.";
+            const scale = await exportImageBounds(imageBounds);
+            statusElement.textContent = scale < 1
+                ? "Visible region exported (scaled to fit the export pixel limit)."
+                : "Visible region exported.";
         } catch (error) {
             statusElement.textContent = error.message;
         } finally {
@@ -1748,7 +1830,6 @@
     document.getElementById("reveal-left").addEventListener("click", () => setPanelCollapsed("left", false));
     document.getElementById("reveal-right").addEventListener("click", () => setPanelCollapsed("right", false));
     document.getElementById("reveal-tools").addEventListener("click", () => setToolsCollapsed(false));
-    document.getElementById("collapse-tools").addEventListener("click", () => setToolsCollapsed(true));
     document.querySelectorAll("[data-collapse]").forEach(button => button.addEventListener("click", () => setPanelCollapsed(button.dataset.collapse, true)));
 
     function enableResizer(handleId, side) {
@@ -1784,22 +1865,35 @@
     }
     setToolsCollapsed(localStorage.getItem(`${STORAGE_PREFIX}.toolsCollapsed`) === "true");
 
+    function withReadyViewport(action) {
+        if (!viewer?.viewport || !viewer.world?.getItemCount?.()) return;
+        try {
+            action(viewer.viewport);
+        } catch (error) {
+            console.warn("Viewer viewport action skipped:", error);
+        }
+    }
+
     document.getElementById("open-image").addEventListener("click", () => {
         setPanelCollapsed("left", false);
         document.getElementById("refresh-images")?.focus();
     });
-    document.getElementById("home-view").addEventListener("click", () => viewer?.viewport?.goHome());
-    document.getElementById("zoom-in").addEventListener("click", () => {
-        if (!viewer?.viewport) return;
-        viewer.viewport.zoomBy(1.25);
-        viewer.viewport.applyConstraints();
-    });
-    document.getElementById("zoom-out").addEventListener("click", () => {
-        if (!viewer?.viewport) return;
-        viewer.viewport.zoomBy(0.8);
-        viewer.viewport.applyConstraints();
-    });
-    document.getElementById("fit-view").addEventListener("click", () => viewer?.viewport?.fitBounds(viewer.viewport.getHomeBounds(), false));
+    document.getElementById("home-view").addEventListener("click", () => withReadyViewport(viewport => viewport.goHome()));
+    document.getElementById("zoom-in").addEventListener("click", () => withReadyViewport(viewport => {
+        // Pass null so OpenSeadragon zooms about the viewport center; omitting the
+        // ref-point has historically thrown in viewport.js when reading refPoint.x.
+        viewport.zoomBy(1.25, null);
+        viewport.applyConstraints();
+    }));
+    document.getElementById("zoom-out").addEventListener("click", () => withReadyViewport(viewport => {
+        viewport.zoomBy(0.8, null);
+        viewport.applyConstraints();
+    }));
+    document.getElementById("fit-view").addEventListener("click", () => withReadyViewport(viewport => {
+        const home = viewport.getHomeBounds?.();
+        if (!home || ![home.x, home.y, home.width, home.height].every(Number.isFinite)) return;
+        viewport.fitBounds(home, false);
+    }));
     panModeButton.addEventListener("click", () => {
         navigateMode = "pan";
         annotationSpike?.setDrawingEnabled(false);
