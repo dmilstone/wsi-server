@@ -10,5 +10,7 @@ public record ImageMetadataResponse(
         int tileSize,
         long revision,
         Double micronsPerPixelX,
-        Double micronsPerPixelY
+        Double micronsPerPixelY,
+        /** Total focal-plane count (Bio-Formats sizeZ). Standard 2D images report 1. */
+        int zPlanes
 ) {}

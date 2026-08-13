@@ -102,8 +102,13 @@ public class BioFormatsTileService {
             return new ImageMetadataResponse(imageId, context.entry().relativePath(),
                     reader.getSizeX(), reader.getSizeY(), reader.getSizeC(),
                     reader.getResolutionCount(), ImageContext.TILE_SIZE, state.revision(),
-                    micronsPerPixelX, micronsPerPixelY);
+                    micronsPerPixelX, micronsPerPixelY, zPlaneCount(reader.getSizeZ()));
         }
+    }
+
+    /** Bio-Formats sizeZ for 2D slides is often 0/1; always expose at least one focal plane. */
+    static int zPlaneCount(int sizeZ) {
+        return Math.max(1, sizeZ);
     }
 
     private Double physicalSizeMicrons(IFormatReader reader, boolean horizontal) {
@@ -293,7 +298,7 @@ public class BioFormatsTileService {
                 throw new IllegalArgumentException("Pixel coordinates are outside the image.");
             }
             if (context.isRgb()) {
-                int[] rgb = readRgbRegion(reader, x, y, 1, 1);
+                int[] rgb = readRgbRegion(reader, x, y, 1, 1, 0);
                 int value = rgb[0];
                 return new PixelSampleResponse(x, y, List.of(
                         (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff));
@@ -322,7 +327,7 @@ public class BioFormatsTileService {
             int width = Math.min(size, reader.getSizeX() - blockX);
             int height = Math.min(size, reader.getSizeY() - blockY);
             if (context.isRgb()) {
-                int[] rgb = readRgbRegion(reader, blockX, blockY, width, height);
+                int[] rgb = readRgbRegion(reader, blockX, blockY, width, height, 0);
                 List<Integer> values = new ArrayList<>(width * height * 3);
                 for (int channel = 0; channel < 3; channel++) {
                     int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
@@ -398,16 +403,17 @@ public class BioFormatsTileService {
     }
 
     public byte[] getTile(String imageId, int viewerLevel, int channel,
-                          int tileX, int tileY, HttpSession session) throws Exception {
+                          int tileX, int tileY, int z, HttpSession session) throws Exception {
         ImageContext context = context(imageId);
         SessionDisplayState state = sessionState(session, imageId, context);
         synchronized (context) {
             IFormatReader reader = context.reader();
             validateChannel(channel, reader.getSizeC());
+            validateZ(z, reader.getSizeZ());
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
-            byte[] pixels = reader.openBytes(reader.getIndex(0, channel, 0),
+            byte[] pixels = reader.openBytes(reader.getIndex(z, channel, 0),
                     region.x(), region.y(), region.width(), region.height());
             ChannelDisplaySettings channelSettings;
             synchronized (state) { channelSettings = copySettings(state.model().getChannel(channel)); }
@@ -420,7 +426,7 @@ public class BioFormatsTileService {
     }
 
     public byte[] getCompositeTile(String imageId, int viewerLevel, int tileX, int tileY,
-                                   HttpSession session) throws Exception {
+                                   int z, HttpSession session) throws Exception {
         ImageContext context = context(imageId);
         SessionDisplayState state = sessionState(session, imageId, context);
         List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
@@ -431,11 +437,12 @@ public class BioFormatsTileService {
         }
         synchronized (context) {
             IFormatReader reader = context.reader();
+            validateZ(z, reader.getSizeZ());
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
             return encodePng(renderCompositeRegion(context, reader, settingsSnapshot,
-                    region.x(), region.y(), region.width(), region.height()));
+                    region.x(), region.y(), region.width(), region.height(), z));
         }
     }
 
@@ -463,7 +470,7 @@ public class BioFormatsTileService {
                     reader.getSizeX(), reader.getSizeY());
 
             BufferedImage image = renderCompositeRegion(context, reader, settingsSnapshot,
-                    x, y, width, height, timings);
+                    x, y, width, height, 0, timings);
             long scalingStarted = System.nanoTime();
             BufferedImage output = scale == 1.0 ? image : scaleImage(image, scale);
             timings.scalingNanos = System.nanoTime() - scalingStarted;
@@ -481,17 +488,18 @@ public class BioFormatsTileService {
 
     private BufferedImage renderCompositeRegion(ImageContext context, IFormatReader reader,
                                                 List<ChannelDisplaySettings> settings,
-                                                int x, int y, int width, int height) throws Exception {
-        return renderCompositeRegion(context, reader, settings, x, y, width, height, null);
+                                                int x, int y, int width, int height,
+                                                int z) throws Exception {
+        return renderCompositeRegion(context, reader, settings, x, y, width, height, z, null);
     }
 
     private BufferedImage renderCompositeRegion(ImageContext context, IFormatReader reader,
                                                 List<ChannelDisplaySettings> settings,
                                                 int x, int y, int width, int height,
-                                                ExportTimings timings) throws Exception {
+                                                int z, ExportTimings timings) throws Exception {
         long decodingStarted = System.nanoTime();
         if (context.isRgb()) {
-            int[] rgb = readRgbRegion(reader, x, y, width, height);
+            int[] rgb = readRgbRegion(reader, x, y, width, height, z);
             if (timings != null) timings.decodingNanos = System.nanoTime() - decodingStarted;
             long compositingStarted = System.nanoTime();
             BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
@@ -506,7 +514,7 @@ public class BioFormatsTileService {
         for (int channel = 0; channel < settings.size(); channel++) {
             ChannelDisplaySettings channelSettings = settings.get(channel);
             if (!channelSettings.isVisible() || channelSettings.getOpacity() <= 0) continue;
-            channelPixels.add(reader.openBytes(reader.getIndex(0, channel, 0), x, y, width, height));
+            channelPixels.add(reader.openBytes(reader.getIndex(z, channel, 0), x, y, width, height));
             mappers.add(new LinearWindowPixelMapper(channelSettings.getWindow(),
                     channelSettings.getLut(), channelSettings.getGamma()));
             opacities.add(channelSettings.getOpacity());
@@ -545,7 +553,8 @@ public class BioFormatsTileService {
     }
 
 
-    private int[] readRgbRegion(IFormatReader reader, int x, int y, int width, int height) throws Exception {
+    private int[] readRgbRegion(IFormatReader reader, int x, int y, int width, int height, int z)
+            throws Exception {
         int pixelCount = width * height;
         int[] rgb = new int[pixelCount];
         int bytesPerSample = FormatTools.getBytesPerPixel(reader.getPixelType());
@@ -554,7 +563,7 @@ public class BioFormatsTileService {
         }
         if (reader.isRGB()) {
             int samples = Math.max(3, reader.getRGBChannelCount());
-            byte[] bytes = reader.openBytes(reader.getIndex(0, 0, 0), x, y, width, height);
+            byte[] bytes = reader.openBytes(reader.getIndex(z, 0, 0), x, y, width, height);
             if (reader.isInterleaved()) {
                 for (int i = 0; i < pixelCount; i++) {
                     int offset = i * samples;
@@ -576,7 +585,7 @@ public class BioFormatsTileService {
         }
         byte[][] channels = new byte[3][];
         for (int channel = 0; channel < 3; channel++) {
-            channels[channel] = reader.openBytes(reader.getIndex(0, channel, 0), x, y, width, height);
+            channels[channel] = reader.openBytes(reader.getIndex(z, channel, 0), x, y, width, height);
         }
         for (int i = 0; i < pixelCount; i++) {
             rgb[i] = ((channels[0][i] & 0xff) << 16)
@@ -656,6 +665,13 @@ public class BioFormatsTileService {
     private void validateChannel(int channel, int count) {
         if (channel < 0 || channel >= count) {
             throw new IllegalArgumentException("Channel must be between 0 and " + (count - 1) + ".");
+        }
+    }
+
+    private void validateZ(int z, int sizeZ) {
+        int planes = zPlaneCount(sizeZ);
+        if (z < 0 || z >= planes) {
+            throw new IllegalArgumentException("Z-plane must be between 0 and " + (planes - 1) + ".");
         }
     }
 

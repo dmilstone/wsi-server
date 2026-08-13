@@ -13,28 +13,33 @@ public class TileController {
     public byte[] tile(@PathVariable String imageId, @PathVariable int level,
                        @PathVariable int x, @PathVariable int y,
                        @RequestParam(defaultValue="0") int channel,
+                       @RequestParam(value = "z", defaultValue = "0") int z,
                        HttpSession session) throws Exception {
-        return service.getTile(imageId, level, channel, x, y, session);
+        return service.getTile(imageId, level, channel, x, y, z, session);
     }
 
     @GetMapping(value="/tile/{imageId}/composite/{level}/{x}/{y}.png", produces=MediaType.IMAGE_PNG_VALUE)
     public byte[] compositeTile(@PathVariable String imageId, @PathVariable int level,
                                 @PathVariable int x, @PathVariable int y,
                                 @RequestParam(defaultValue="0") long revision,
+                                @RequestParam(value = "z", defaultValue = "0") int z,
                                 HttpSession session) throws Exception {
-        return service.getCompositeTile(imageId, level, x, y, session);
+        return service.getCompositeTile(imageId, level, x, y, z, session);
     }
 
     @GetMapping(value="/tile/{level}/{x}/{y}.png", produces=MediaType.IMAGE_PNG_VALUE)
     public byte[] legacyTile(@PathVariable int level, @PathVariable int x, @PathVariable int y,
                              @RequestParam(defaultValue="0") int channel,
+                             @RequestParam(value = "z", defaultValue = "0") int z,
                              HttpSession session) throws Exception {
-        return service.getTile(service.firstImageId(), level, channel, x, y, session);
+        return service.getTile(service.firstImageId(), level, channel, x, y, z, session);
     }
 
     @GetMapping(value="/tile/composite/{level}/{x}/{y}.png", produces=MediaType.IMAGE_PNG_VALUE)
     public byte[] legacyCompositeTile(@PathVariable int level, @PathVariable int x,
-                                      @PathVariable int y, HttpSession session) throws Exception {
-        return service.getCompositeTile(service.firstImageId(), level, x, y, session);
+                                      @PathVariable int y,
+                                      @RequestParam(value = "z", defaultValue = "0") int z,
+                                      HttpSession session) throws Exception {
+        return service.getCompositeTile(service.firstImageId(), level, x, y, z, session);
     }
 }
