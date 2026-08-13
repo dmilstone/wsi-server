@@ -14,6 +14,9 @@ class AnnotationAdapter {
     static WORKSTATION_STORAGE_KEY = "wsi.workstation.id";
     static USER_HEADER = "X-WSI-User";
 
+    /** Active focal-plane index for tile fetches (0-based). */
+    static currentZ = 0;
+
     constructor(annotator, timingCallbacks = {}) {
         this.annotator = annotator;
         this.timingCallbacks = timingCallbacks;
@@ -99,19 +102,47 @@ class AnnotationAdapter {
         return merged;
     }
 
+    static setCurrentZ(z) {
+        const next = Number.parseInt(z, 10);
+        AnnotationAdapter.currentZ = Number.isFinite(next) && next >= 0 ? next : 0;
+        return AnnotationAdapter.currentZ;
+    }
+
+    /**
+     * Ensures /tile/ requests carry the active focal plane as {@code z}.
+     * Non-tile URLs are returned unchanged.
+     */
+    static appendTileDepthQuery(url) {
+        const text = String(url ?? "");
+        if (!text.includes("/tile/")) return text;
+        try {
+            const parsed = new URL(text, "http://local.invalid");
+            parsed.searchParams.set("z", String(AnnotationAdapter.currentZ || 0));
+            return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+        } catch {
+            const z = AnnotationAdapter.currentZ || 0;
+            if (/[?&]z=\d+/.test(text)) {
+                return text.replace(/([?&])z=\d+/, `$1z=${z}`);
+            }
+            return `${text}${text.includes("?") ? "&" : "?"}z=${z}`;
+        }
+    }
+
     /**
      * GET/PUT fetch wrapper: always injects X-WSI-User from localStorage.
+     * Tile URLs also receive the active {@code z} focal-plane query parameter.
      * Mutating methods keep going through WsiCsrf.csrfFetch.
      */
     static workstationFetch(url, options = {}) {
         const opts = options || {};
         const headers = AnnotationAdapter.workstationRequestHeaders(opts.headers);
         const method = String(opts.method || "GET").toUpperCase();
+        const nextUrl = AnnotationAdapter.appendTileDepthQuery(url);
         const next = { ...opts, headers };
         if (method === "GET" || method === "HEAD") {
-            return fetch(url, next);
+            return fetch(nextUrl, next);
         }
-        return WsiCsrf.csrfFetch(url, next);
+        return WsiCsrf.csrfFetch(nextUrl, next);
     }
 
     async loadCurrentImage(imageId) {

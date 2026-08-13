@@ -12,7 +12,7 @@
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260812-ws2"></script>
+    <script src="/annotation-adapter.js?v=20260813-z1"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -246,6 +246,75 @@
         .scale-bar[hidden] { display: none; }
         .scale-bar-label { display: block; margin-bottom: 4px; text-align: center; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
         .scale-bar-line { height: 8px; border-left: 2px solid currentColor; border-right: 2px solid currentColor; border-bottom: 3px solid currentColor; }
+
+        /* Floating Z focal-plane control — visible only when metadata.zPlanes > 1. */
+        .z-stack-control {
+            position: absolute;
+            right: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 18;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            min-width: 52px;
+            padding: 12px 10px;
+            border: 1px solid rgba(255,255,255,.16);
+            border-radius: 12px;
+            color: #e8eef7;
+            background: rgba(9, 13, 18, .72);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 10px 28px rgba(0,0,0,.35);
+            user-select: none;
+        }
+        .z-stack-control[hidden] { display: none !important; }
+        .z-stack-control-label {
+            display: block;
+            max-width: 4.5rem;
+            text-align: center;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            line-height: 1.25;
+            color: #c5d0de;
+        }
+        .z-stack-control input[type="range"] {
+            writing-mode: vertical-lr;
+            direction: rtl;
+            appearance: slider-vertical;
+            -webkit-appearance: slider-vertical;
+            width: 28px;
+            height: 168px;
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            cursor: pointer;
+        }
+        .z-stack-control input[type="range"]::-webkit-slider-runnable-track {
+            width: 4px;
+            background: rgba(77, 148, 216, .35);
+            border-radius: 999px;
+        }
+        .z-stack-control input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            margin-left: -6px;
+            border-radius: 50%;
+            background: #4d94d8;
+            border: 2px solid #e8eef7;
+            box-shadow: 0 0 0 1px rgba(0,0,0,.35);
+        }
+        .z-stack-control-value {
+            min-width: 2ch;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: #fff;
+        }
 
         .slide-overview {
             position: absolute;
@@ -887,6 +956,12 @@
         </div>
         <button id="presentation-exit" class="toolbar-button presentation-exit" aria-label="Exit presentation mode">Exit presentation</button>
         <div id="scale-bar" class="scale-bar" hidden aria-label="Image scale"><span id="scale-bar-label" class="scale-bar-label"></span><div id="scale-bar-line" class="scale-bar-line"></div></div>
+        <div id="z-stack-control" class="z-stack-control" hidden>
+            <label class="z-stack-control-label" for="z-stack-slider">Focal Depth (Z)</label>
+            <input id="z-stack-slider" type="range" min="0" max="0" value="0" step="1"
+                   orient="vertical" aria-label="Focal Depth (Z)" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+            <output id="z-stack-value" class="z-stack-control-value" for="z-stack-slider">0</output>
+        </div>
         <div class="viewer-badge">Drag to pan · Scroll to zoom</div>
         </div>
         <button id="reveal-left" class="panel-reveal" type="button" aria-label="Show image browser">Show images</button>
@@ -927,11 +1002,15 @@
     let selectedImage;
     let metadata;
     let display;
+    let currentZ = 0;
     let updateTimer;
     let updateSequence = 0;
     let liveDiscovery;
     const STORAGE_PREFIX = "wsi.viewer.v1";
     const DISPLAY_CALIBRATION_VERSION = 3;
+    const zStackControl = document.getElementById("z-stack-control");
+    const zStackSlider = document.getElementById("z-stack-slider");
+    const zStackValue = document.getElementById("z-stack-value");
 
     const statusElement = document.getElementById("status");
     const imageListElement = document.getElementById("image-list");
@@ -1246,6 +1325,7 @@
             document.getElementById("info-levels").textContent = metadata.resolutionCount;
             document.getElementById("info-tile").textContent = `${metadata.tileSize} px`;
             document.getElementById("info-pixel-size").textContent = formatPixelSize(metadata);
+            syncZStackControl(metadata);
             resetButton.disabled = false;
             recomputeAutoButton.disabled = false;
             slideOverviewButton.disabled = false;
@@ -1336,6 +1416,71 @@
     document.getElementById("image-lightbox-close").addEventListener("click", closeImageLightbox);
     imageLightbox.addEventListener("click", event => { if (event.target === imageLightbox) closeImageLightbox(); });
 
+    function zPlaneCountFromMetadata(imageMetadata) {
+        const planes = Number(imageMetadata?.zPlanes);
+        return Number.isFinite(planes) && planes >= 1 ? Math.floor(planes) : 1;
+    }
+
+    function setCurrentZ(nextZ) {
+        const planes = zPlaneCountFromMetadata(metadata);
+        const maxZ = Math.max(0, planes - 1);
+        const parsed = Number.parseInt(nextZ, 10);
+        currentZ = Number.isFinite(parsed) ? Math.min(maxZ, Math.max(0, parsed)) : 0;
+        AnnotationAdapter.setCurrentZ(currentZ);
+        if (zStackSlider) {
+            zStackSlider.value = String(currentZ);
+            zStackSlider.setAttribute("aria-valuenow", String(currentZ));
+        }
+        if (zStackValue) zStackValue.textContent = String(currentZ);
+        return currentZ;
+    }
+
+    function syncZStackControl(imageMetadata) {
+        const planes = zPlaneCountFromMetadata(imageMetadata);
+        if (!zStackControl || !zStackSlider) return;
+        if (planes <= 1) {
+            zStackControl.hidden = true;
+            setCurrentZ(0);
+            return;
+        }
+        const maxZ = planes - 1;
+        zStackSlider.min = "0";
+        zStackSlider.max = String(maxZ);
+        zStackSlider.setAttribute("aria-valuemin", "0");
+        zStackSlider.setAttribute("aria-valuemax", String(maxZ));
+        zStackControl.hidden = false;
+        setCurrentZ(0);
+    }
+
+    function flushViewerTileCache() {
+        if (!viewer) return;
+        try {
+            if (viewer.tileCache && typeof viewer.tileCache.clearCache === "function") {
+                viewer.tileCache.clearCache();
+            }
+        } catch (_) { /* older OSD builds may omit clearCache */ }
+        const itemCount = viewer.world?.getItemCount?.() || 0;
+        for (let index = 0; index < itemCount; index++) {
+            const item = viewer.world.getItemAt(index);
+            if (item && typeof item.reset === "function") {
+                try { item.reset(); } catch (_) { /* ignore */ }
+            }
+        }
+        if (typeof viewer.forceRedraw === "function") viewer.forceRedraw();
+    }
+
+    function onZStackSliderInput() {
+        const previous = currentZ;
+        setCurrentZ(zStackSlider.value);
+        if (currentZ === previous) return;
+        flushViewerTileCache();
+        // Re-open the same viewport so OSD re-requests tiles for the new plane.
+        if (viewer && viewer.world?.getItemCount?.()) openViewer(true);
+    }
+
+    zStackSlider?.addEventListener("input", onZStackSliderInput);
+    zStackSlider?.addEventListener("change", onZStackSliderInput);
+
     function tileSource() {
         const imageId = encodeURIComponent(selectedImage.id);
         return {
@@ -1346,7 +1491,8 @@
             minLevel: 0,
             maxLevel: metadata.resolutionCount - 1,
             getTileUrl(level, x, y) {
-                return `/tile/${imageId}/composite/${level}/${x}/${y}.png?revision=${display.revision}`;
+                const base = `/tile/${imageId}/composite/${level}/${x}/${y}.png?revision=${display.revision}`;
+                return AnnotationAdapter.appendTileDepthQuery(base);
             }
         };
     }

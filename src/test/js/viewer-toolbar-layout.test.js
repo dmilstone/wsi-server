@@ -49,6 +49,15 @@ const viewerMain = rule(".viewer-main");
 assert.match(viewerMain, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
 assert.match(viewerMain, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
 assert.match(rule(".viewer-stage"), /grid-row:\s*1/);
+assert.match(html, /id="z-stack-control"[^>]*class="z-stack-control"/);
+assert.match(html, /id="z-stack-slider"[^>]*type="range"/);
+assert.match(html, /Focal Depth \(Z\)/);
+assert.match(html, /function syncZStackControl\(/);
+assert.match(html, /function flushViewerTileCache\(/);
+assert.match(html, /AnnotationAdapter\.appendTileDepthQuery/);
+assert.match(html, /zPlanes/);
+assert.match(rule(".z-stack-control"), /position:\s*absolute/);
+assert.match(rule('.z-stack-control input[type="range"]'), /writing-mode:\s*vertical-lr/);
 assert.match(html, /class="app-header"/);
 assert.match(html, /id="tools-tray"[^>]*class="tools-tray"/);
 assert.ok(
