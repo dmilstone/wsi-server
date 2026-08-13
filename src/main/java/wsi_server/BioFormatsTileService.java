@@ -125,16 +125,19 @@ public class BioFormatsTileService {
         try {
             for (int series = 0; series < reader.getSeriesCount(); series++) {
                 reader.setSeries(series);
+                String name = seriesName(metadata, series);
+                boolean thumbnail = reader.isThumbnailSeries();
                 profiles.add(new ImageSeriesProfile(
                         series,
-                        seriesName(metadata, series),
+                        name,
                         reader.getSizeX(),
                         reader.getSizeY(),
                         reader.getSizeC(),
                         zPlaneCount(reader.getSizeZ()),
                         reader.getResolutionCount(),
                         reader.isRGB(),
-                        reader.isThumbnailSeries()));
+                        thumbnail,
+                        AssociatedImageSelection.isDiagnosticSpecimen(name, thumbnail)));
             }
         } finally {
             reader.setSeries(previous);

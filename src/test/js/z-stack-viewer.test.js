@@ -77,6 +77,28 @@ assert.match(html, /planes <= 1/);
 assert.match(html, /flushViewerTileCache\(/);
 assert.match(html, /viewer\.tileCache\.clearCache/);
 assert.match(html, /onZStackSliderInput/);
-assert.match(html, /seriesProfiles/);
+assert.match(html, /AnnotationAdapter\.diagnosticSpecimenProfiles/);
+assert.match(html, /AnnotationAdapter\.shouldShowSeriesSelector/);
+assert.match(adapterSource, /isDiagnosticSpecimen === true/);
+assert.match(adapterSource, /static diagnosticSpecimenProfiles\(/);
+assert.match(adapterSource, /static shouldShowSeriesSelector\(/);
+
+assert.deepEqual(
+    AnnotationAdapter.diagnosticSpecimenProfiles([
+        { index: 0, isDiagnosticSpecimen: false },
+        { index: 1, isDiagnosticSpecimen: false },
+        { index: 2, isDiagnosticSpecimen: true },
+        { index: 3, isDiagnosticSpecimen: true }
+    ]).map(p => p.index),
+    [2, 3]
+);
+assert.equal(AnnotationAdapter.shouldShowSeriesSelector([
+    { index: 0, isDiagnosticSpecimen: false },
+    { index: 2, isDiagnosticSpecimen: true }
+]), false);
+assert.equal(AnnotationAdapter.shouldShowSeriesSelector([
+    { index: 2, isDiagnosticSpecimen: true },
+    { index: 3, isDiagnosticSpecimen: true }
+]), true);
 
 console.log("z-stack-viewer.test.js: ok");

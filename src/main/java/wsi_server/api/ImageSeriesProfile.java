@@ -12,5 +12,11 @@ public record ImageSeriesProfile(
         int zPlanes,
         int resolutionCount,
         boolean rgb,
-        boolean thumbnail
+        boolean thumbnail,
+        /**
+         * False for Label / Macro / Overview / Thumbnail / Preview series identified by
+         * the same authoritative name and thumbnail metadata checks used for associated images.
+         * True for actual specimen / diagnostic scans (size is never used to exclude specimens).
+         */
+        boolean isDiagnosticSpecimen
 ) {}

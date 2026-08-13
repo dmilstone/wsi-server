@@ -12,7 +12,7 @@
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260813-series1"></script>
+    <script src="/annotation-adapter.js?v=20260813-series2"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -1471,19 +1471,20 @@
     }
 
     function chooseDefaultSeries(profiles) {
-        if (!Array.isArray(profiles) || profiles.length === 0) return 0;
-        if (profiles.length === 1) return Number(profiles[0].index) || 0;
-        const fluorescence = profiles.find(profile =>
-            Number(profile.index) === 2 && !profile.thumbnail && Number(profile.width) >= 512);
+        const specimens = AnnotationAdapter.diagnosticSpecimenProfiles(profiles);
+        const pool = specimens.length > 0 ? specimens : (Array.isArray(profiles) ? profiles : []);
+        if (pool.length === 0) return 0;
+        if (pool.length === 1) return Number(pool[0].index) || 0;
+        const fluorescence = pool.find(profile =>
+            Number(profile.index) === 2 && Number(profile.width) >= 512);
         if (fluorescence) return 2;
         let best = null;
-        for (const profile of profiles) {
-            if (profile.thumbnail) continue;
+        for (const profile of pool) {
             const area = Number(profile.width) * Number(profile.height);
             const bestArea = best ? Number(best.width) * Number(best.height) : -1;
             if (!best || area > bestArea) best = profile;
         }
-        return best ? Number(best.index) || 0 : Number(profiles[0].index) || 0;
+        return best ? Number(best.index) || 0 : Number(pool[0].index) || 0;
     }
 
     function setCurrentSeries(nextSeries) {
@@ -1506,15 +1507,13 @@
 
     function syncSeriesSelectControl(imageMetadata) {
         if (!seriesSelectControl || !seriesSelect) return;
-        const profiles = Array.isArray(imageMetadata?.seriesProfiles)
-            ? imageMetadata.seriesProfiles
-            : [];
+        const specimens = AnnotationAdapter.diagnosticSpecimenProfiles(imageMetadata?.seriesProfiles);
         seriesSelect.replaceChildren();
-        if (profiles.length <= 1) {
+        if (!AnnotationAdapter.shouldShowSeriesSelector(imageMetadata?.seriesProfiles)) {
             seriesSelectControl.hidden = true;
             return;
         }
-        for (const profile of profiles) {
+        for (const profile of specimens) {
             const option = document.createElement("option");
             option.value = String(profile.index);
             option.textContent = seriesLabel(profile);

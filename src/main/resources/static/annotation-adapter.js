@@ -20,6 +20,20 @@ class AnnotationAdapter {
     /** Active Bio-Formats series/sub-image index for tile fetches. */
     static currentSeries = 0;
 
+    /**
+     * Specimen / diagnostic scan profiles only. Label, Macro, Overview, Thumbnail,
+     * and Preview series (isDiagnosticSpecimen === false) are excluded.
+     */
+    static diagnosticSpecimenProfiles(profiles) {
+        if (!Array.isArray(profiles)) return [];
+        return profiles.filter(profile => profile && profile.isDiagnosticSpecimen === true);
+    }
+
+    /** Show the series dropdown only when more than one diagnostic specimen scan exists. */
+    static shouldShowSeriesSelector(profiles) {
+        return AnnotationAdapter.diagnosticSpecimenProfiles(profiles).length > 1;
+    }
+
     constructor(annotator, timingCallbacks = {}) {
         this.annotator = annotator;
         this.timingCallbacks = timingCallbacks;

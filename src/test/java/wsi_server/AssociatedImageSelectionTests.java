@@ -61,6 +61,21 @@ class AssociatedImageSelectionTests {
         assertFalse(selection.isLabel(selection.overviewSeries()));
     }
 
+    @Test
+    void diagnosticSpecimenFlagUsesAuthoritativeLabelMacroOverviewRules() {
+        assertFalse(AssociatedImageSelection.isDiagnosticSpecimen("Slide Label", false));
+        assertFalse(AssociatedImageSelection.isDiagnosticSpecimen("BARCODE image", false));
+        assertFalse(AssociatedImageSelection.isDiagnosticSpecimen("Macro", false));
+        assertFalse(AssociatedImageSelection.isDiagnosticSpecimen("OVERVIEW", false));
+        assertFalse(AssociatedImageSelection.isDiagnosticSpecimen("slide thumbnail", false));
+        assertFalse(AssociatedImageSelection.isDiagnosticSpecimen("Preview image", false));
+        assertFalse(AssociatedImageSelection.isDiagnosticSpecimen("", true));
+        // Size is never used: tiny unnamed non-thumbnail series remain diagnostic specimens.
+        assertTrue(AssociatedImageSelection.isDiagnosticSpecimen("", false));
+        assertTrue(AssociatedImageSelection.isDiagnosticSpecimen("Scan region A", false));
+        assertTrue(AssociatedImageSelection.isDiagnosticSpecimen(null, false));
+    }
+
     private static AssociatedImageSelection select(AssociatedImageSelection.SeriesIdentity... series) {
         return AssociatedImageSelection.select(List.of(series));
     }
