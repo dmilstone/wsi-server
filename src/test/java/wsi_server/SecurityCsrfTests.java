@@ -16,6 +16,7 @@ import wsi_server.api.DisplayResponse;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -48,7 +49,7 @@ class SecurityCsrfTests {
 
     @Test
     void stateChangingRequestWithCsrfTokenSucceedsForAuthenticatedUser() throws Exception {
-        when(imageService.updateDisplay(eq("sample"), any(), any()))
+        when(imageService.updateDisplay(eq("sample"), anyInt(), any(), any()))
                 .thenReturn(new DisplayResponse(1, List.of()));
         AcquiredCsrf csrf = acquireCsrfToken();
 

@@ -29,13 +29,19 @@ final class ImageContext implements AutoCloseable {
     private static final long MIN_SIGNAL_PIXELS = 256;
 
     private final ImageRegistry.ImageEntry entry;
+    private final int series;
     private final IFormatReader reader;
     private final DisplayWindow[] automaticWindows;
     private final boolean rgb;
     private final String[] channelLabels;
 
     ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing) throws Exception {
+        this(entry, timing, FLUORESCENCE_SERIES);
+    }
+
+    ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing, int series) throws Exception {
         this.entry = entry;
+        this.series = series;
         String imageId = entry.id();
         DiagnosticTiming.CheckedSupplier<ImageReader> readerFactory = ImageReader::new;
         this.reader = timing.measure("metadata", "reader_create", imageId, readerFactory);
@@ -43,8 +49,12 @@ final class ImageContext implements AutoCloseable {
         reader.setFlattenedResolutions(false);
         timing.measureVoid("metadata", "set_id_metadata_parse", imageId,
                 () -> reader.setId(entry.path().toString()));
+        if (series < 0 || series >= reader.getSeriesCount()) {
+            throw new IllegalArgumentException(
+                    "Series must be between 0 and " + (reader.getSeriesCount() - 1) + ".");
+        }
         timing.measureVoid("metadata", "series_select", imageId,
-                () -> reader.setSeries(FLUORESCENCE_SERIES));
+                () -> reader.setSeries(series));
         this.rgb = reader.getPixelType() == FormatTools.UINT8 && (reader.isRGB() || reader.getSizeC() >= 3);
         validatePixelType();
         this.channelLabels = timing.measure("metadata", "metadata_extract", imageId,
@@ -60,8 +70,12 @@ final class ImageContext implements AutoCloseable {
         }
     }
 
+    int series() {
+        return series;
+    }
+
     synchronized IFormatReader reader() {
-        reader.setSeries(FLUORESCENCE_SERIES);
+        reader.setSeries(series);
         return reader;
     }
 
@@ -192,7 +206,7 @@ final class ImageContext implements AutoCloseable {
 
     synchronized void recomputeAutomaticWindows() throws Exception {
         if (rgb) return;
-        reader.setSeries(FLUORESCENCE_SERIES);
+        reader.setSeries(series);
         reader.setResolution(reader.getResolutionCount() - 1);
         boolean littleEndian = reader.isLittleEndian();
         for (int channel = 0; channel < reader.getSizeC(); channel++) {

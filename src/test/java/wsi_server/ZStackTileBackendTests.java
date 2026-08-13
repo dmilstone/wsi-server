@@ -26,23 +26,23 @@ class ZStackTileBackendTests {
     }
 
     @Test
-    void tileEndpointForwardsOptionalZQueryToReaderService() throws Exception {
+    void tileEndpointForwardsOptionalZAndSeriesQueryToReaderService() throws Exception {
         BioFormatsTileService service = mock(BioFormatsTileService.class);
-        when(service.getTile(eq("slide-a"), eq(2), eq(0), eq(3), eq(4), eq(5), any(HttpSession.class)))
+        when(service.getTile(eq("slide-a"), eq(2), eq(0), eq(3), eq(4), eq(5), eq(2), any(HttpSession.class)))
                 .thenReturn(new byte[] {1, 2, 3});
         MockMvc mvc = MockMvcBuilders.standaloneSetup(new TileController(service)).build();
 
-        mvc.perform(get("/tile/slide-a/2/3/4.png").param("z", "5"))
+        mvc.perform(get("/tile/slide-a/2/3/4.png").param("z", "5").param("series", "2"))
                 .andExpect(status().isOk())
                 .andExpect(content().bytes(new byte[] {1, 2, 3}));
 
-        verify(service).getTile(eq("slide-a"), eq(2), eq(0), eq(3), eq(4), eq(5), any(HttpSession.class));
+        verify(service).getTile(eq("slide-a"), eq(2), eq(0), eq(3), eq(4), eq(5), eq(2), any(HttpSession.class));
     }
 
     @Test
-    void compositeTileEndpointDefaultsZToZeroWhenOmitted() throws Exception {
+    void compositeTileEndpointDefaultsZAndSeriesToZeroWhenOmitted() throws Exception {
         BioFormatsTileService service = mock(BioFormatsTileService.class);
-        when(service.getCompositeTile(eq("slide-a"), eq(1), eq(0), eq(0), eq(0), any(HttpSession.class)))
+        when(service.getCompositeTile(eq("slide-a"), eq(1), eq(0), eq(0), eq(0), eq(0), any(HttpSession.class)))
                 .thenReturn(new byte[] {9});
         MockMvc mvc = MockMvcBuilders.standaloneSetup(new TileController(service)).build();
 
@@ -50,7 +50,13 @@ class ZStackTileBackendTests {
                 .andExpect(status().isOk())
                 .andExpect(content().bytes(new byte[] {9}));
 
-        verify(service).getCompositeTile(eq("slide-a"), eq(1), eq(0), eq(0), eq(0), any(HttpSession.class));
+        verify(service).getCompositeTile(eq("slide-a"), eq(1), eq(0), eq(0), eq(0), eq(0), any(HttpSession.class));
+    }
+
+    @Test
+    void sessionStateKeyIsolatesSeriesDisplayState() {
+        assertThat(BioFormatsTileService.sessionStateKey("img", 0)).isEqualTo("img#0");
+        assertThat(BioFormatsTileService.sessionStateKey("img", 2)).isEqualTo("img#2");
     }
 
     @Test

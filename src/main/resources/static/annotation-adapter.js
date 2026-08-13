@@ -17,6 +17,9 @@ class AnnotationAdapter {
     /** Active focal-plane index for tile fetches (0-based). */
     static currentZ = 0;
 
+    /** Active Bio-Formats series/sub-image index for tile fetches. */
+    static currentSeries = 0;
+
     constructor(annotator, timingCallbacks = {}) {
         this.annotator = annotator;
         this.timingCallbacks = timingCallbacks;
@@ -108,9 +111,15 @@ class AnnotationAdapter {
         return AnnotationAdapter.currentZ;
     }
 
+    static setCurrentSeries(series) {
+        const next = Number.parseInt(series, 10);
+        AnnotationAdapter.currentSeries = Number.isFinite(next) && next >= 0 ? next : 0;
+        return AnnotationAdapter.currentSeries;
+    }
+
     /**
-     * Ensures /tile/ requests carry the active focal plane as {@code z}.
-     * Non-tile URLs are returned unchanged.
+     * Ensures /tile/ requests carry the active focal plane ({@code z}) and
+     * Bio-Formats series ({@code series}). Non-tile URLs are returned unchanged.
      */
     static appendTileDepthQuery(url) {
         const text = String(url ?? "");
@@ -118,19 +127,23 @@ class AnnotationAdapter {
         try {
             const parsed = new URL(text, "http://local.invalid");
             parsed.searchParams.set("z", String(AnnotationAdapter.currentZ || 0));
+            parsed.searchParams.set("series", String(AnnotationAdapter.currentSeries || 0));
             return `${parsed.pathname}${parsed.search}${parsed.hash}`;
         } catch {
             const z = AnnotationAdapter.currentZ || 0;
-            if (/[?&]z=\d+/.test(text)) {
-                return text.replace(/([?&])z=\d+/, `$1z=${z}`);
-            }
-            return `${text}${text.includes("?") ? "&" : "?"}z=${z}`;
+            const series = AnnotationAdapter.currentSeries || 0;
+            let next = text;
+            if (/[?&]z=\d+/.test(next)) next = next.replace(/([?&])z=\d+/, `$1z=${z}`);
+            else next = `${next}${next.includes("?") ? "&" : "?"}z=${z}`;
+            if (/[?&]series=\d+/.test(next)) next = next.replace(/([?&])series=\d+/, `$1series=${series}`);
+            else next = `${next}&series=${series}`;
+            return next;
         }
     }
 
     /**
      * GET/PUT fetch wrapper: always injects X-WSI-User from localStorage.
-     * Tile URLs also receive the active {@code z} focal-plane query parameter.
+     * Tile URLs also receive the active {@code z} and {@code series} query parameters.
      * Mutating methods keep going through WsiCsrf.csrfFetch.
      */
     static workstationFetch(url, options = {}) {

@@ -12,7 +12,7 @@
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260813-z1"></script>
+    <script src="/annotation-adapter.js?v=20260813-series1"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -314,6 +314,43 @@
             font-weight: 700;
             font-variant-numeric: tabular-nums;
             color: #fff;
+        }
+
+        .series-select-control {
+            position: absolute;
+            right: 18px;
+            top: 16px;
+            z-index: 18;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 190px;
+            max-width: min(280px, calc(100% - 36px));
+            padding: 10px 12px;
+            border: 1px solid rgba(255,255,255,.16);
+            border-radius: 12px;
+            color: #e8eef7;
+            background: rgba(9, 13, 18, .72);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 10px 28px rgba(0,0,0,.35);
+        }
+        .series-select-control[hidden] { display: none !important; }
+        .series-select-control label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            color: #c5d0de;
+        }
+        .series-select-control select {
+            width: 100%;
+            min-height: 30px;
+            padding: 4px 8px;
+            border: 1px solid rgba(77, 148, 216, .55);
+            border-radius: 6px;
+            color: #fff;
+            background: rgba(0, 0, 0, .45);
+            font: 600 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif;
         }
 
         .slide-overview {
@@ -956,6 +993,10 @@
         </div>
         <button id="presentation-exit" class="toolbar-button presentation-exit" aria-label="Exit presentation mode">Exit presentation</button>
         <div id="scale-bar" class="scale-bar" hidden aria-label="Image scale"><span id="scale-bar-label" class="scale-bar-label"></span><div id="scale-bar-line" class="scale-bar-line"></div></div>
+        <div id="series-select-control" class="series-select-control" hidden>
+            <label for="series-select">Select Scan Section / Series</label>
+            <select id="series-select" aria-label="Select Scan Section / Series"></select>
+        </div>
         <div id="z-stack-control" class="z-stack-control" hidden>
             <label class="z-stack-control-label" for="z-stack-slider">Focal Depth (Z)</label>
             <input id="z-stack-slider" type="range" min="0" max="0" value="0" step="1"
@@ -1003,6 +1044,7 @@
     let metadata;
     let display;
     let currentZ = 0;
+    let currentSeries = 0;
     let updateTimer;
     let updateSequence = 0;
     let liveDiscovery;
@@ -1011,6 +1053,8 @@
     const zStackControl = document.getElementById("z-stack-control");
     const zStackSlider = document.getElementById("z-stack-slider");
     const zStackValue = document.getElementById("z-stack-value");
+    const seriesSelectControl = document.getElementById("series-select-control");
+    const seriesSelect = document.getElementById("series-select");
 
     const statusElement = document.getElementById("status");
     const imageListElement = document.getElementById("image-list");
@@ -1298,19 +1342,28 @@
             document.querySelectorAll(".image-button").forEach(button =>
                 button.classList.toggle("active", button.dataset.imageId === image.id)
             );
+            const catalog = await request(`/api/images/${encodeURIComponent(image.id)}?series=0`);
+            const preferredSeries = chooseDefaultSeries(catalog.seriesProfiles);
+            setCurrentSeries(preferredSeries);
             [metadata, display] = await Promise.all([
-                request(`/api/images/${encodeURIComponent(image.id)}`).then(result => {
-                    markImageSwitchTiming(image.id, "metadata loaded");
-                    return result;
-                }),
-                request(`/api/images/${encodeURIComponent(image.id)}/display`).then(result => {
+                preferredSeries === 0
+                    ? Promise.resolve(catalog).then(result => {
+                        markImageSwitchTiming(image.id, "metadata loaded");
+                        return result;
+                    })
+                    : request(imageApiPath(image.id, "")).then(result => {
+                        markImageSwitchTiming(image.id, "metadata loaded");
+                        return result;
+                    }),
+                request(imageApiPath(image.id, "/display")).then(result => {
                     markImageSwitchTiming(image.id, "display loaded");
                     return result;
                 })
             ]);
-            const saved = loadLocalDisplay(image.id);
+            syncSeriesSelectControl(metadata);
+            const saved = loadLocalDisplay(image.id, currentSeries);
             if (saved && compatibleDisplay(saved, display)) {
-                display = await request(`/api/images/${encodeURIComponent(image.id)}/display`, {
+                display = await request(imageApiPath(image.id, "/display"), {
                     method: "PUT",
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({channels: saved.channels})
@@ -1319,12 +1372,7 @@
             localStorage.setItem(`${STORAGE_PREFIX}.selectedImage`, image.id);
             document.getElementById("selected-name").textContent = image.name;
             imageInfoElement.hidden = false;
-            document.getElementById("info-name").textContent = image.name;
-            document.getElementById("info-size").textContent = `${metadata.width.toLocaleString()} × ${metadata.height.toLocaleString()} px`;
-            document.getElementById("info-channels").textContent = metadata.channels;
-            document.getElementById("info-levels").textContent = metadata.resolutionCount;
-            document.getElementById("info-tile").textContent = `${metadata.tileSize} px`;
-            document.getElementById("info-pixel-size").textContent = formatPixelSize(metadata);
+            applyMetadataInfoPanel();
             syncZStackControl(metadata);
             resetButton.disabled = false;
             recomputeAutoButton.disabled = false;
@@ -1332,7 +1380,7 @@
             if (!slideOverview.hidden) refreshSlideOverview();
             renderChannels();
             openViewer();
-            statusElement.textContent = `${metadata.width} × ${metadata.height} · ${metadata.channels} channels`;
+            statusElement.textContent = `${metadata.width} × ${metadata.height} · ${metadata.channels} channels · series ${currentSeries}`;
         } catch (error) {
             showError(error);
         }
@@ -1416,6 +1464,77 @@
     document.getElementById("image-lightbox-close").addEventListener("click", closeImageLightbox);
     imageLightbox.addEventListener("click", event => { if (event.target === imageLightbox) closeImageLightbox(); });
 
+    function imageApiPath(imageId, suffix = "") {
+        const base = `/api/images/${encodeURIComponent(imageId)}${suffix}`;
+        const joiner = base.includes("?") ? "&" : "?";
+        return `${base}${joiner}series=${currentSeries || 0}`;
+    }
+
+    function chooseDefaultSeries(profiles) {
+        if (!Array.isArray(profiles) || profiles.length === 0) return 0;
+        if (profiles.length === 1) return Number(profiles[0].index) || 0;
+        const fluorescence = profiles.find(profile =>
+            Number(profile.index) === 2 && !profile.thumbnail && Number(profile.width) >= 512);
+        if (fluorescence) return 2;
+        let best = null;
+        for (const profile of profiles) {
+            if (profile.thumbnail) continue;
+            const area = Number(profile.width) * Number(profile.height);
+            const bestArea = best ? Number(best.width) * Number(best.height) : -1;
+            if (!best || area > bestArea) best = profile;
+        }
+        return best ? Number(best.index) || 0 : Number(profiles[0].index) || 0;
+    }
+
+    function setCurrentSeries(nextSeries) {
+        const parsed = Number.parseInt(nextSeries, 10);
+        currentSeries = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+        AnnotationAdapter.setCurrentSeries(currentSeries);
+        if (seriesSelect) seriesSelect.value = String(currentSeries);
+        return currentSeries;
+    }
+
+    function seriesLabel(profile) {
+        const index = Number(profile?.index) || 0;
+        const name = typeof profile?.name === "string" && profile.name.trim()
+            ? profile.name.trim()
+            : `Series ${index}`;
+        const zPlanes = Number(profile?.zPlanes) || 1;
+        const size = `${Number(profile?.width) || 0}×${Number(profile?.height) || 0}`;
+        return `${index}: ${name} (${size}, Z=${zPlanes})`;
+    }
+
+    function syncSeriesSelectControl(imageMetadata) {
+        if (!seriesSelectControl || !seriesSelect) return;
+        const profiles = Array.isArray(imageMetadata?.seriesProfiles)
+            ? imageMetadata.seriesProfiles
+            : [];
+        seriesSelect.replaceChildren();
+        if (profiles.length <= 1) {
+            seriesSelectControl.hidden = true;
+            return;
+        }
+        for (const profile of profiles) {
+            const option = document.createElement("option");
+            option.value = String(profile.index);
+            option.textContent = seriesLabel(profile);
+            seriesSelect.appendChild(option);
+        }
+        seriesSelect.value = String(currentSeries);
+        seriesSelectControl.hidden = false;
+    }
+
+    function applyMetadataInfoPanel() {
+        if (!metadata) return;
+        document.getElementById("info-name").textContent = selectedImage?.name || "";
+        document.getElementById("info-size").textContent =
+            `${metadata.width.toLocaleString()} × ${metadata.height.toLocaleString()} px`;
+        document.getElementById("info-channels").textContent = metadata.channels;
+        document.getElementById("info-levels").textContent = metadata.resolutionCount;
+        document.getElementById("info-tile").textContent = `${metadata.tileSize} px`;
+        document.getElementById("info-pixel-size").textContent = formatPixelSize(metadata);
+    }
+
     function zPlaneCountFromMetadata(imageMetadata) {
         const planes = Number(imageMetadata?.zPlanes);
         return Number.isFinite(planes) && planes >= 1 ? Math.floor(planes) : 1;
@@ -1451,6 +1570,43 @@
         zStackControl.hidden = false;
         setCurrentZ(0);
     }
+
+    async function onSeriesSelectChange() {
+        if (!selectedImage || !seriesSelect) return;
+        const nextSeries = Number.parseInt(seriesSelect.value, 10);
+        if (!Number.isFinite(nextSeries) || nextSeries === currentSeries) return;
+        try {
+            statusElement.textContent = `Loading series ${nextSeries}…`;
+            setCurrentSeries(nextSeries);
+            setCurrentZ(0);
+            clearTimeout(updateTimer);
+            updateSequence++;
+            [metadata, display] = await Promise.all([
+                request(imageApiPath(selectedImage.id, "")),
+                request(imageApiPath(selectedImage.id, "/display"))
+            ]);
+            syncSeriesSelectControl(metadata);
+            applyMetadataInfoPanel();
+            syncZStackControl(metadata);
+            const saved = loadLocalDisplay(selectedImage.id, currentSeries);
+            if (saved && compatibleDisplay(saved, display)) {
+                display = await request(imageApiPath(selectedImage.id, "/display"), {
+                    method: "PUT",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({channels: saved.channels})
+                });
+            }
+            renderChannels();
+            flushViewerTileCache();
+            openViewer(false);
+            statusElement.textContent =
+                `${metadata.width} × ${metadata.height} · ${metadata.channels} channels · series ${currentSeries}`;
+        } catch (error) {
+            showError(error);
+        }
+    }
+
+    seriesSelect?.addEventListener("change", onSeriesSelectChange);
 
     function flushViewerTileCache() {
         if (!viewer) return;
@@ -1876,7 +2032,7 @@
         const promise = (async () => {
             try {
                 const encodedImageId = encodeURIComponent(imageId);
-                const block = await request(`/api/images/${encodedImageId}/pixel-block?x=${blockX}&y=${blockY}&size=${PIXEL_BLOCK_SIZE}`);
+                const block = await request(`/api/images/${encodedImageId}/pixel-block?x=${blockX}&y=${blockY}&size=${PIXEL_BLOCK_SIZE}&series=${currentSeries || 0}`);
                 rememberPixelBlock(key, block);
 
                 const latest = latestPixelPosition;
@@ -1997,7 +2153,7 @@
         };
 
         try {
-            const response = await request(`/api/images/${encodeURIComponent(imageId)}/display`, {
+            const response = await request(imageApiPath(imageId, "/display"), {
                 method: "PUT",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(payload)
@@ -2021,7 +2177,7 @@
             }
 
             syncChannelControls();
-            saveLocalDisplay(imageId, display);
+            saveLocalDisplay(imageId, display, currentSeries);
             openViewer(true);
         } catch (error) {
             if (sequence === updateSequence) showError(error);
@@ -2049,8 +2205,8 @@
 
     resetButton.addEventListener("click", async () => {
         try {
-            display = await request(`/api/images/${encodeURIComponent(selectedImage.id)}/display/reset`, {method: "POST"});
-            saveLocalDisplay(selectedImage.id, display);
+            display = await request(imageApiPath(selectedImage.id, "/display/reset"), {method: "POST"});
+            saveLocalDisplay(selectedImage.id, display, currentSeries);
             renderChannels();
             openViewer(true);
         } catch (error) {
@@ -2062,8 +2218,8 @@
         try {
             recomputeAutoButton.disabled = true;
             statusElement.textContent = "Recomputing background-aware automatic contrast…";
-            display = await request(`/api/images/${encodeURIComponent(selectedImage.id)}/display/recompute-auto`, {method: "POST"});
-            saveLocalDisplay(selectedImage.id, display);
+            display = await request(imageApiPath(selectedImage.id, "/display/recompute-auto"), {method: "POST"});
+            saveLocalDisplay(selectedImage.id, display, currentSeries);
             renderChannels();
             openViewer(true);
             statusElement.textContent = "Automatic contrast recomputed from sampled image signal";
@@ -2076,21 +2232,21 @@
         }
     });
 
-    function preferenceKey(imageId) {
-        return `${STORAGE_PREFIX}.display.v${DISPLAY_CALIBRATION_VERSION}.${imageId}`;
+    function preferenceKey(imageId, series = currentSeries) {
+        return `${STORAGE_PREFIX}.display.v${DISPLAY_CALIBRATION_VERSION}.${imageId}.s${series || 0}`;
     }
 
-    function saveLocalDisplay(imageId, value) {
+    function saveLocalDisplay(imageId, value, series = currentSeries) {
         try {
-            localStorage.setItem(preferenceKey(imageId), JSON.stringify({channels: value.channels}));
+            localStorage.setItem(preferenceKey(imageId, series), JSON.stringify({channels: value.channels}));
         } catch (error) {
             console.warn("Could not save local display preferences", error);
         }
     }
 
-    function loadLocalDisplay(imageId) {
+    function loadLocalDisplay(imageId, series = currentSeries) {
         try {
-            const raw = localStorage.getItem(preferenceKey(imageId));
+            const raw = localStorage.getItem(preferenceKey(imageId, series));
             return raw ? JSON.parse(raw) : null;
         } catch (error) {
             console.warn("Could not load local display preferences", error);

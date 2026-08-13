@@ -41,20 +41,23 @@ function loadAnnotationAdapter() {
 const AnnotationAdapter = loadAnnotationAdapter();
 
 assert.equal(AnnotationAdapter.currentZ, 0);
+assert.equal(AnnotationAdapter.currentSeries, 0);
 AnnotationAdapter.setCurrentZ(4);
+AnnotationAdapter.setCurrentSeries(2);
 assert.equal(AnnotationAdapter.currentZ, 4);
+assert.equal(AnnotationAdapter.currentSeries, 2);
 
 assert.equal(
     AnnotationAdapter.appendTileDepthQuery("/tile/img/composite/1/0/0.png?revision=3"),
-    "/tile/img/composite/1/0/0.png?revision=3&z=4"
+    "/tile/img/composite/1/0/0.png?revision=3&z=4&series=2"
 );
 assert.equal(
     AnnotationAdapter.appendTileDepthQuery("/tile/img/composite/1/0/0.png"),
-    "/tile/img/composite/1/0/0.png?z=4"
+    "/tile/img/composite/1/0/0.png?z=4&series=2"
 );
 assert.equal(
-    AnnotationAdapter.appendTileDepthQuery("/tile/img/composite/1/0/0.png?revision=3&z=9"),
-    "/tile/img/composite/1/0/0.png?revision=3&z=4"
+    AnnotationAdapter.appendTileDepthQuery("/tile/img/composite/1/0/0.png?revision=3&z=9&series=1"),
+    "/tile/img/composite/1/0/0.png?revision=3&z=4&series=2"
 );
 assert.equal(
     AnnotationAdapter.appendTileDepthQuery("/api/images/abc/annotations"),
@@ -62,12 +65,18 @@ assert.equal(
 );
 
 assert.match(html, /let currentZ = 0/);
+assert.match(html, /let currentSeries = 0/);
+assert.match(html, /id="series-select-control"/);
+assert.match(html, /Select Scan Section \/ Series/);
+assert.match(html, /function syncSeriesSelectControl\(/);
+assert.match(html, /function chooseDefaultSeries\(/);
+assert.match(html, /onSeriesSelectChange/);
 assert.match(html, /syncZStackControl\(metadata\)/);
 assert.match(html, /zStackControl\.hidden = true/);
 assert.match(html, /planes <= 1/);
 assert.match(html, /flushViewerTileCache\(/);
 assert.match(html, /viewer\.tileCache\.clearCache/);
 assert.match(html, /onZStackSliderInput/);
-assert.match(html, /openViewer\(true\)/);
+assert.match(html, /seriesProfiles/);
 
 console.log("z-stack-viewer.test.js: ok");
