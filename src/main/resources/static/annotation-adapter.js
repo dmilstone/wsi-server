@@ -34,6 +34,210 @@ class AnnotationAdapter {
         return AnnotationAdapter.diagnosticSpecimenProfiles(profiles).length > 1;
     }
 
+    /** Active Z-movie playback timer handle (null when stopped). */
+    static zMovieTimer = null;
+    /** Ping-pong direction: +1 ascending, -1 descending. */
+    static zDirection = 1;
+    /** Playback boundary mode: "LOOP" (🔁) or "PING_PONG" (↔️). */
+    static animationMode = "LOOP";
+    static zMovieIntervalMs = 500;
+    static zMoviePlaying = false;
+    static zMovieHooks = {
+        getMaxZ: () => 0,
+        applyZ: (_z) => {},
+        onStateChange: (_playing) => {},
+        onModeChange: (_mode) => {}
+    };
+
+    /**
+     * Z-movie engine. Callers should apply Z without wiping OpenSeadragon's
+     * tile cache (maxImageCacheCount) so replayed planes stay RAM-resident.
+     */
+    static configureZMovie(hooks = {}) {
+        const previous = AnnotationAdapter.zMovieHooks || {};
+        AnnotationAdapter.zMovieHooks = {
+            getMaxZ: typeof hooks.getMaxZ === "function" ? hooks.getMaxZ : () => 0,
+            applyZ: typeof hooks.applyZ === "function" ? hooks.applyZ : (_z) => {},
+            onStateChange: typeof hooks.onStateChange === "function" ? hooks.onStateChange : (_playing) => {},
+            onModeChange: typeof hooks.onModeChange === "function"
+                ? hooks.onModeChange
+                : (typeof previous.onModeChange === "function" ? previous.onModeChange : (_mode) => {})
+        };
+    }
+
+    static stopZMovie({ silent = false } = {}) {
+        if (AnnotationAdapter.zMovieTimer != null) {
+            clearInterval(AnnotationAdapter.zMovieTimer);
+            AnnotationAdapter.zMovieTimer = null;
+        }
+        const wasPlaying = AnnotationAdapter.zMoviePlaying;
+        AnnotationAdapter.zMoviePlaying = false;
+        AnnotationAdapter.zDirection = 1;
+        if (wasPlaying && !silent) AnnotationAdapter.zMovieHooks.onStateChange?.(false);
+        return false;
+    }
+
+    static normalizeAnimationMode(mode) {
+        const raw = String(mode || "").trim().toUpperCase().replace(/-/g, "_");
+        if (raw === "PING_PONG" || raw === "PINGPONG") return "PING_PONG";
+        return "LOOP";
+    }
+
+    /** Select LOOP (🔁 head-to-tail) or PING_PONG (↔️). */
+    static setAnimationMode(mode) {
+        const active = AnnotationAdapter.normalizeAnimationMode(mode);
+        AnnotationAdapter.animationMode = active;
+        // Always reset travel direction when entering a mode so LOOP never inherits -1.
+        AnnotationAdapter.zDirection = 1;
+        AnnotationAdapter.zMovieHooks.onModeChange?.(active);
+        return active;
+    }
+
+    /**
+     * One-click mode + play: select the mode, then start playback.
+     * Clicking the already-running mode again stops playback.
+     */
+    static activateModeAndPlay(mode, { intervalMs = 500 } = {}) {
+        const next = AnnotationAdapter.normalizeAnimationMode(mode);
+        if (AnnotationAdapter.zMoviePlaying
+            && AnnotationAdapter.normalizeAnimationMode(AnnotationAdapter.animationMode) === next) {
+            return AnnotationAdapter.stopZMovie();
+        }
+        AnnotationAdapter.setAnimationMode(next);
+        return AnnotationAdapter.startZMovie({ intervalMs });
+    }
+
+    /**
+     * Wire two mode buttons (no separate play button):
+     *  - 🔁 selects LOOP and starts (or stops if already looping)
+     *  - ↔️ selects PING_PONG and starts (or stops if already ping-ponging)
+     */
+    static bindZMovieModeButtons({ loopButton, pingpongButton, intervalMs = 500, onModeChange } = {}) {
+        const resolvedInterval = Number.parseInt(intervalMs, 10);
+        const playIntervalMs = Number.isFinite(resolvedInterval) && resolvedInterval > 0
+            ? resolvedInterval
+            : 500;
+
+        const syncVisual = (active) => {
+            const mode = AnnotationAdapter.normalizeAnimationMode(active);
+            if (typeof onModeChange === "function") onModeChange(mode);
+            const isLoop = mode === "LOOP";
+            const playing = Boolean(AnnotationAdapter.zMoviePlaying);
+            if (loopButton) {
+                loopButton.textContent = "🔁";
+                loopButton.dataset.mode = "LOOP";
+                loopButton.setAttribute("aria-pressed", String(isLoop));
+                loopButton.classList.toggle("is-active", isLoop);
+                loopButton.classList.toggle("z-movie-mode-active", isLoop);
+                loopButton.classList.toggle("is-playing", playing && isLoop);
+                loopButton.title = playing && isLoop
+                    ? "Head-to-tail loop — click to stop"
+                    : "Head-to-tail loop — click to play";
+                loopButton.setAttribute(
+                    "aria-label",
+                    playing && isLoop ? "Stop head-to-tail loop" : "Play head-to-tail loop"
+                );
+            }
+            if (pingpongButton) {
+                pingpongButton.textContent = "↔️";
+                pingpongButton.dataset.mode = "PING_PONG";
+                pingpongButton.setAttribute("aria-pressed", String(!isLoop));
+                pingpongButton.classList.toggle("is-active", !isLoop);
+                pingpongButton.classList.toggle("z-movie-mode-active", !isLoop);
+                pingpongButton.classList.toggle("is-playing", playing && !isLoop);
+                pingpongButton.title = playing && !isLoop
+                    ? "Ping-pong — click to stop"
+                    : "Ping-pong — click to play";
+                pingpongButton.setAttribute(
+                    "aria-label",
+                    playing && !isLoop ? "Stop ping-pong" : "Play ping-pong"
+                );
+            }
+        };
+
+        const previousOnStateChange = AnnotationAdapter.zMovieHooks.onStateChange;
+        AnnotationAdapter.zMovieHooks = {
+            ...AnnotationAdapter.zMovieHooks,
+            onModeChange: syncVisual,
+            onStateChange: (playing) => {
+                if (typeof previousOnStateChange === "function") previousOnStateChange(playing);
+                syncVisual(AnnotationAdapter.animationMode);
+            }
+        };
+
+        loopButton?.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.activateModeAndPlay("LOOP", { intervalMs: playIntervalMs });
+        });
+        pingpongButton?.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.activateModeAndPlay("PING_PONG", { intervalMs: playIntervalMs });
+        });
+
+        syncVisual(AnnotationAdapter.animationMode || "LOOP");
+        return syncVisual;
+    }
+
+    static startZMovie({ intervalMs = 500, mode } = {}) {
+        const maxZ = Math.max(0, Number(AnnotationAdapter.zMovieHooks.getMaxZ?.()) || 0);
+        if (maxZ <= 0) return AnnotationAdapter.stopZMovie();
+
+        AnnotationAdapter.stopZMovie({ silent: true });
+        const parsedInterval = Number.parseInt(intervalMs, 10);
+        AnnotationAdapter.zMovieIntervalMs = Number.isFinite(parsedInterval) && parsedInterval > 0
+            ? parsedInterval
+            : 500;
+        if (mode != null) AnnotationAdapter.setAnimationMode(mode);
+        AnnotationAdapter.zDirection = 1;
+        AnnotationAdapter.zMoviePlaying = true;
+        AnnotationAdapter.zMovieTimer = setInterval(
+            () => AnnotationAdapter.tickZMovie(),
+            AnnotationAdapter.zMovieIntervalMs
+        );
+        AnnotationAdapter.zMovieHooks.onStateChange?.(true);
+        return true;
+    }
+
+    static toggleZMovie(options = {}) {
+        if (AnnotationAdapter.zMoviePlaying) return AnnotationAdapter.stopZMovie();
+        return AnnotationAdapter.startZMovie(options);
+    }
+
+    static tickZMovie() {
+        const maxZ = Math.max(0, Number(AnnotationAdapter.zMovieHooks.getMaxZ?.()) || 0);
+        if (maxZ <= 0) {
+            AnnotationAdapter.stopZMovie();
+            return;
+        }
+        const current = Math.max(0, Math.min(maxZ, Number(AnnotationAdapter.currentZ) || 0));
+        const mode = AnnotationAdapter.normalizeAnimationMode(AnnotationAdapter.animationMode);
+        let next;
+
+        if (mode === "PING_PONG") {
+            // ↔️ glide forward, then reverse at the last plane, then reverse again at 0.
+            let direction = AnnotationAdapter.zDirection >= 0 ? 1 : -1;
+            next = current + direction;
+            if (next > maxZ) {
+                direction = -1;
+                next = maxZ - 1;
+                if (next < 0) next = 0;
+            } else if (next < 0) {
+                direction = 1;
+                next = Math.min(1, maxZ);
+            }
+            AnnotationAdapter.zDirection = direction;
+        } else {
+            // 🔁 head-to-tail: after the last plane, jump straight back to 0.
+            AnnotationAdapter.zDirection = 1;
+            next = current >= maxZ ? 0 : current + 1;
+        }
+
+        AnnotationAdapter.setCurrentZ(next);
+        AnnotationAdapter.zMovieHooks.applyZ?.(AnnotationAdapter.currentZ);
+    }
+
     constructor(annotator, timingCallbacks = {}) {
         this.annotator = annotator;
         this.timingCallbacks = timingCallbacks;

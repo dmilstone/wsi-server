@@ -10,7 +10,7 @@ const guide = fs.readFileSync(path.join(staticRoot, "help/viewer-guide.html"), "
 
 assert.match(index, /id="pilot-feedback-panel"/);
 assert.match(index, /class="pilot-feedback-panel"/);
-assert.match(index, /Pilot Feedback/);
+assert.match(index, /Pilot Feedback \(F\)/);
 assert.match(index, /id="pilot-feedback-link"/);
 assert.match(index, /href="\/pilot-feedback"/);
 assert.match(index, /src="\/pilot-feedback\.js"/);

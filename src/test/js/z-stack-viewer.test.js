@@ -17,6 +17,8 @@ const html = fs.readFileSync(
 function loadAnnotationAdapter() {
     const sandbox = {
         console,
+        setInterval(fn, _ms) { return 1; },
+        clearInterval(_id) {},
         localStorage: {
             store: Object.create(null),
             getItem(key) { return Object.prototype.hasOwnProperty.call(this.store, key) ? this.store[key] : null; },
@@ -72,11 +74,76 @@ assert.match(html, /function syncSeriesSelectControl\(/);
 assert.match(html, /function chooseDefaultSeries\(/);
 assert.match(html, /onSeriesSelectChange/);
 assert.match(html, /syncZStackControl\(metadata\)/);
-assert.match(html, /zStackControl\.hidden = true/);
+assert.match(html, /zDepthControls\.hidden = true/);
 assert.match(html, /planes <= 1/);
 assert.match(html, /flushViewerTileCache\(/);
 assert.match(html, /viewer\.tileCache\.clearCache/);
 assert.match(html, /onZStackSliderInput/);
+assert.match(html, /AnnotationAdapter\.stopZMovie/);
+assert.match(html, /AnnotationAdapter\.activateModeAndPlay|AnnotationAdapter\.bindZMovieModeButtons/);
+assert.doesNotMatch(html, /id="z-movie-play"/);
+assert.match(html, /id="z-movie-mode-loop"/);
+assert.match(html, /id="z-movie-mode-pingpong"/);
+assert.match(html, /id="z-movie-mode-loop"[^>]*>🔁</);
+assert.match(html, /id="z-movie-mode-pingpong"[^>]*>↔️</);
+assert.match(html, /maxImageCacheCount:\s*500/);
+assert.match(html, /AnnotationAdapter\.bindZMovieModeButtons/);
+assert.match(html, /class="right-stack-controls"/);
+assert.doesNotMatch(html, /Focal Animation Player/);
+assert.doesNotMatch(html, /id="z-movie-interval"/);
+assert.match(adapterSource, /static zMovieTimer = null/);
+assert.match(adapterSource, /static zDirection = 1/);
+assert.match(adapterSource, /static animationMode = "LOOP"/);
+assert.match(adapterSource, /static tickZMovie\(/);
+assert.match(adapterSource, /static stopZMovie\(/);
+assert.match(adapterSource, /static setAnimationMode\(/);
+assert.match(adapterSource, /static activateModeAndPlay\(/);
+assert.match(adapterSource, /static bindZMovieModeButtons\(/);
+assert.match(adapterSource, /PING_PONG/);
+assert.match(adapterSource, /is-active/);
+assert.match(adapterSource, /current >= maxZ \? 0 : current \+ 1/);
+
+assert.equal(AnnotationAdapter.zMovieTimer, null);
+AnnotationAdapter.configureZMovie({
+    getMaxZ: () => 3,
+    applyZ: () => {},
+    onStateChange: () => {}
+});
+AnnotationAdapter.setCurrentZ(0);
+AnnotationAdapter.setAnimationMode("LOOP");
+assert.equal(AnnotationAdapter.animationMode, "LOOP");
+AnnotationAdapter.tickZMovie();
+assert.equal(AnnotationAdapter.currentZ, 1);
+AnnotationAdapter.setCurrentZ(3);
+AnnotationAdapter.tickZMovie();
+assert.equal(AnnotationAdapter.currentZ, 0);
+AnnotationAdapter.setCurrentZ(3);
+AnnotationAdapter.zDirection = -1;
+AnnotationAdapter.setAnimationMode("LOOP");
+assert.equal(AnnotationAdapter.zDirection, 1);
+AnnotationAdapter.tickZMovie();
+assert.equal(AnnotationAdapter.currentZ, 0);
+AnnotationAdapter.setCurrentZ(2);
+AnnotationAdapter.setAnimationMode("PING_PONG");
+assert.equal(AnnotationAdapter.animationMode, "PING_PONG");
+AnnotationAdapter.zDirection = 1;
+AnnotationAdapter.tickZMovie();
+assert.equal(AnnotationAdapter.currentZ, 3);
+AnnotationAdapter.tickZMovie();
+assert.equal(AnnotationAdapter.currentZ, 2);
+assert.equal(AnnotationAdapter.zDirection, -1);
+AnnotationAdapter.stopZMovie();
+assert.equal(AnnotationAdapter.activateModeAndPlay("LOOP", { intervalMs: 50 }), true);
+assert.equal(AnnotationAdapter.zMoviePlaying, true);
+assert.equal(AnnotationAdapter.animationMode, "LOOP");
+assert.equal(AnnotationAdapter.activateModeAndPlay("LOOP", { intervalMs: 50 }), false);
+assert.equal(AnnotationAdapter.zMoviePlaying, false);
+assert.equal(AnnotationAdapter.activateModeAndPlay("PING_PONG", { intervalMs: 50 }), true);
+assert.equal(AnnotationAdapter.animationMode, "PING_PONG");
+assert.equal(AnnotationAdapter.zMoviePlaying, true);
+AnnotationAdapter.stopZMovie();
+assert.equal(AnnotationAdapter.zMovieTimer, null);
+assert.equal(AnnotationAdapter.zMoviePlaying, false);
 assert.match(html, /AnnotationAdapter\.diagnosticSpecimenProfiles/);
 assert.match(html, /AnnotationAdapter\.shouldShowSeriesSelector/);
 assert.match(adapterSource, /isDiagnosticSpecimen === true/);

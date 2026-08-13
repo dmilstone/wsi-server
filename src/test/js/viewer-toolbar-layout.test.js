@@ -49,9 +49,35 @@ const viewerMain = rule(".viewer-main");
 assert.match(viewerMain, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
 assert.match(viewerMain, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
 assert.match(rule(".viewer-stage"), /grid-row:\s*1/);
-assert.match(html, /id="z-stack-control"[^>]*class="z-stack-control"/);
+assert.match(html, /id="z-depth-controls"/);
+assert.match(html, /id="channels-panel"[\s\S]*id="pilot-feedback-link"[\s\S]*id="series-select-control"[\s\S]*id="z-depth-controls"/);
+assert.match(html, /class="right-stack-controls"/);
+assert.match(html, /class="right-column-top"/);
+assert.ok(
+    html.indexOf('id="pilot-feedback-link"') < html.indexOf('id="series-select-control"')
+        && html.indexOf('id="series-select-control"') < html.indexOf('id="z-depth-controls"')
+        && html.indexOf('id="z-depth-controls"') < html.indexOf('<h2>Channels</h2>'),
+    "feedback/ops, series, then Z controls must sit above the Channels header"
+);
+assert.match(html, />Pilot Feedback \(F\)</);
+assert.doesNotMatch(html, /Choose visible channels and adjust how signal is displayed/);
+assert.doesNotMatch(html, /Press F in the viewer to toggle the feedback panel/);
+assert.doesNotMatch(
+    html.slice(html.indexOf('id="channels-panel"'), html.indexOf('id="channels"')),
+    /class="panel-kicker"/
+);
+assert.doesNotMatch(html, /id="z-movie-play"/);
+assert.match(html, /id="z-movie-mode-loop"/);
+assert.match(html, /id="z-movie-mode-pingpong"/);
+assert.match(html, /id="z-movie-mode-loop"[^>]*>🔁</);
+assert.match(html, /id="z-movie-mode-pingpong"[^>]*>↔️</);
 assert.match(html, /id="z-stack-slider"[^>]*type="range"/);
 assert.match(html, /Focal Depth \(Z\)/);
+assert.match(html, /maxImageCacheCount:\s*500/);
+assert.doesNotMatch(html, /Focal Animation Player/);
+assert.doesNotMatch(html, /id="z-movie-control"/);
+assert.doesNotMatch(html, /id="z-stack-control"/);
+assert.doesNotMatch(html, /writing-mode:\s*vertical-lr/);
 assert.match(html, /id="series-select-control"/);
 assert.match(html, /id="series-select"/);
 assert.match(html, /Select Scan Section \/ Series/);
@@ -59,11 +85,18 @@ assert.match(html, /function syncZStackControl\(/);
 assert.match(html, /function syncSeriesSelectControl\(/);
 assert.match(html, /function flushViewerTileCache\(/);
 assert.match(html, /AnnotationAdapter\.appendTileDepthQuery/);
+assert.match(html, /AnnotationAdapter\.bindZMovieModeButtons/);
 assert.match(html, /zPlanes/);
 assert.match(html, /seriesProfiles/);
-assert.match(rule(".z-stack-control"), /position:\s*absolute/);
-assert.match(rule(".series-select-control"), /position:\s*absolute/);
-assert.match(rule('.z-stack-control input[type="range"]'), /writing-mode:\s*vertical-lr/);
+assert.match(rule(".z-depth-controls"), /display:\s*flex/);
+assert.doesNotMatch(rule(".z-depth-controls"), /position:\s*absolute/);
+assert.match(rule(".series-select-control"), /position:\s*static/);
+assert.doesNotMatch(rule(".series-select-control"), /position:\s*absolute/);
+assert.match(
+    html,
+    /\.z-movie-icon\.is-active[\s\S]*?background:\s*rgba\(77,\s*148,\s*216,\s*\.42\)/
+);
+assert.match(html, /\.z-movie-icon\.z-movie-mode-active/);
 assert.match(html, /class="app-header"/);
 assert.match(html, /id="tools-tray"[^>]*class="tools-tray"/);
 assert.ok(
@@ -262,6 +295,15 @@ assert.match(
 );
 assert.match(channelsPanelHtml, /class="panel-secondary-link"/);
 assert.match(channelsPanelHtml, />Local operations</);
+assert.match(channelsPanelHtml, />Pilot Feedback \(F\)</);
+assert.ok(
+    channelsPanelHtml.indexOf('id="pilot-feedback-link"')
+        < channelsPanelHtml.indexOf('id="series-select-control"'),
+    "pilot feedback must sit above series select in the channels panel"
+);
+assert.doesNotMatch(channelsPanelHtml, /Press F in the viewer to toggle the feedback panel/);
+assert.doesNotMatch(channelsPanelHtml, /Choose visible channels and adjust how signal is displayed/);
+assert.doesNotMatch(channelsPanelHtml, />Display</);
 
 const localOpsGate = fs.readFileSync(
     path.join(__dirname, "../../main/resources/static/local-operations/index.html"),

@@ -12,7 +12,7 @@
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260813-series2"></script>
+    <script src="/annotation-adapter.js?v=20260813-zmovie7"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -247,92 +247,143 @@
         .scale-bar-label { display: block; margin-bottom: 4px; text-align: center; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
         .scale-bar-line { height: 8px; border-left: 2px solid currentColor; border-right: 2px solid currentColor; border-bottom: 3px solid currentColor; }
 
-        /* Floating Z focal-plane control — visible only when metadata.zPlanes > 1. */
-        .z-stack-control {
-            position: absolute;
-            right: 18px;
-            top: 50%;
-            transform: translateY(-50%);
-            z-index: 18;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            min-width: 52px;
-            padding: 12px 10px;
-            border: 1px solid rgba(255,255,255,.16);
-            border-radius: 12px;
-            color: #e8eef7;
-            background: rgba(9, 13, 18, .72);
-            backdrop-filter: blur(10px);
-            box-shadow: 0 10px 28px rgba(0,0,0,.35);
-            user-select: none;
-        }
-        .z-stack-control[hidden] { display: none !important; }
-        .z-stack-control-label {
-            display: block;
-            max-width: 4.5rem;
-            text-align: center;
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: .04em;
-            text-transform: uppercase;
-            line-height: 1.25;
-            color: #c5d0de;
-        }
-        .z-stack-control input[type="range"] {
-            writing-mode: vertical-lr;
-            direction: rtl;
-            appearance: slider-vertical;
-            -webkit-appearance: slider-vertical;
-            width: 28px;
-            height: 168px;
-            margin: 0;
-            padding: 0;
-            background: transparent;
-            cursor: pointer;
-        }
-        .z-stack-control input[type="range"]::-webkit-slider-runnable-track {
-            width: 4px;
-            background: rgba(77, 148, 216, .35);
-            border-radius: 999px;
-        }
-        .z-stack-control input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 16px;
-            height: 16px;
-            margin-left: -6px;
-            border-radius: 50%;
-            background: #4d94d8;
-            border: 2px solid #e8eef7;
-            box-shadow: 0 0 0 1px rgba(0,0,0,.35);
-        }
-        .z-stack-control-value {
-            min-width: 2ch;
-            text-align: center;
-            font-size: 12px;
-            font-weight: 700;
-            font-variant-numeric: tabular-nums;
-            color: #fff;
-        }
-
-        .series-select-control {
-            position: absolute;
-            right: 18px;
-            top: 16px;
-            z-index: 18;
+        /* Series + Z + movie controls sit at the top of the right column. */
+        .right-column-top {
+            position: sticky;
+            top: 0;
+            z-index: 21;
             display: flex;
             flex-direction: column;
             gap: 6px;
-            min-width: 190px;
-            max-width: min(280px, calc(100% - 36px));
-            padding: 10px 12px;
-            border: 1px solid rgba(255,255,255,.16);
-            border-radius: 12px;
-            color: #e8eef7;
-            background: rgba(9, 13, 18, .72);
+            padding: 8px 10px 8px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(17, 24, 33, .96);
             backdrop-filter: blur(10px);
-            box-shadow: 0 10px 28px rgba(0,0,0,.35);
+        }
+        .right-column-top .panel-secondary-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+            margin: 0;
+            padding: 0;
+            border: 0;
+        }
+        .right-stack-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
+        }
+        .right-stack-controls[hidden] { display: none !important; }
+        #channels-panel > .panel-header {
+            padding: 8px 10px 10px;
+        }
+        #channels-panel > .panel-header .panel-title-row {
+            margin: 0;
+        }
+        #channels-panel > .panel-header .display-actions {
+            margin-top: 8px;
+        }
+        .z-depth-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            padding: 8px 10px;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, .22);
+        }
+        .z-depth-controls[hidden] { display: none !important; }
+        .z-depth-controls-label {
+            flex: 0 0 auto;
+            font-size: 10px;
+            font-weight: 750;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .z-stack-slider-wrap {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .z-stack-slider-wrap input[type="range"] {
+            flex: 1 1 auto;
+            min-width: 0;
+            height: 22px;
+            margin: 0;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .z-stack-control-value {
+            flex: 0 0 auto;
+            min-width: 2ch;
+            text-align: right;
+            font-size: 12px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--text-secondary);
+        }
+        .z-movie-icons {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .z-movie-icon {
+            display: inline-grid;
+            place-items: center;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            color: var(--text-secondary);
+            background: transparent;
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .z-movie-icon:hover {
+            color: var(--text);
+            background: var(--surface-hover);
+        }
+        .z-movie-icon.is-active,
+        .z-movie-icon.z-movie-mode-active,
+        .z-movie-icon[aria-pressed="true"] {
+            color: #fff;
+            background: rgba(77, 148, 216, .42);
+            border-color: rgba(140, 190, 240, .95);
+            box-shadow: inset 0 0 0 1px rgba(77, 148, 216, .55);
+        }
+        .z-movie-icon.is-playing {
+            background: rgba(77, 148, 216, .62);
+            border-color: #9ec5ef;
+        }
+
+        .series-select-control {
+            position: static;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+            max-width: none;
+            width: 100%;
+            margin: 0;
+            padding: 8px 10px;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 8px;
+            color: var(--text);
+            background: rgba(0, 0, 0, .22);
+            box-shadow: none;
+            backdrop-filter: none;
         }
         .series-select-control[hidden] { display: none !important; }
         .series-select-control label {
@@ -993,16 +1044,6 @@
         </div>
         <button id="presentation-exit" class="toolbar-button presentation-exit" aria-label="Exit presentation mode">Exit presentation</button>
         <div id="scale-bar" class="scale-bar" hidden aria-label="Image scale"><span id="scale-bar-label" class="scale-bar-label"></span><div id="scale-bar-line" class="scale-bar-line"></div></div>
-        <div id="series-select-control" class="series-select-control" hidden>
-            <label for="series-select">Select Scan Section / Series</label>
-            <select id="series-select" aria-label="Select Scan Section / Series"></select>
-        </div>
-        <div id="z-stack-control" class="z-stack-control" hidden>
-            <label class="z-stack-control-label" for="z-stack-slider">Focal Depth (Z)</label>
-            <input id="z-stack-slider" type="range" min="0" max="0" value="0" step="1"
-                   orient="vertical" aria-label="Focal Depth (Z)" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
-            <output id="z-stack-value" class="z-stack-control-value" for="z-stack-slider">0</output>
-        </div>
         <div class="viewer-badge">Drag to pan · Scroll to zoom</div>
         </div>
         <button id="reveal-left" class="panel-reveal" type="button" aria-label="Show image browser">Show images</button>
@@ -1010,16 +1051,37 @@
     </main>
     <div id="right-resizer" class="resize-handle" role="separator" aria-label="Resize display controls"></div>
     <aside id="channels-panel" aria-label="Display controls">
-        <div class="panel-header">
-            <div class="panel-kicker">Display</div>
-            <div class="panel-title-row"><h2>Channels</h2><button class="panel-toggle" data-collapse="right" title="Hide display controls" aria-label="Hide display controls">›</button></div>
-            <div class="muted">Choose visible channels and adjust how signal is displayed.</div>
-            <div class="display-actions"><button id="reset" class="action" disabled>Reset display</button><button id="recompute-auto" class="action" disabled>Recompute auto</button></div>
+        <div class="right-column-top">
             <div class="panel-secondary-actions">
-                <a id="pilot-feedback-link" class="panel-secondary-link" href="/pilot-feedback" title="Open full-page pilot feedback form (shortcut F in viewer)">Pilot Feedback</a>
+                <a id="pilot-feedback-link" class="panel-secondary-link" href="/pilot-feedback" title="Open full-page pilot feedback form (shortcut F in viewer)">Pilot Feedback (F)</a>
                 <a id="local-operations" class="panel-secondary-link" href="/local-operations/" title="Local operations dashboard (image-server browser only)">Local operations</a>
-                <span class="muted">Press F in the viewer to toggle the feedback panel</span>
             </div>
+            <div class="right-stack-controls">
+                <div id="series-select-control" class="series-select-control" hidden>
+                    <label for="series-select">Select Scan Section / Series</label>
+                    <select id="series-select" aria-label="Select Scan Section / Series"></select>
+                </div>
+                <div id="z-depth-controls" class="z-depth-controls" hidden aria-label="Focal depth and animation">
+                    <span class="z-depth-controls-label">Z</span>
+                    <div class="z-stack-slider-wrap">
+                        <input id="z-stack-slider" type="range" min="0" max="0" value="0" step="1"
+                               aria-label="Focal Depth (Z)" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+                        <output id="z-stack-value" class="z-stack-control-value" for="z-stack-slider">0</output>
+                    </div>
+                    <div class="z-movie-icons" role="group" aria-label="Focal animation">
+                        <button id="z-movie-mode-loop" class="z-movie-icon is-active z-movie-mode-active" type="button"
+                                data-mode="LOOP" title="Head-to-tail loop — click to play"
+                                aria-label="Play head-to-tail loop" aria-pressed="true">🔁</button>
+                        <button id="z-movie-mode-pingpong" class="z-movie-icon" type="button"
+                                data-mode="PING_PONG" title="Ping-pong — click to play"
+                                aria-label="Play ping-pong" aria-pressed="false">↔️</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="panel-header">
+            <div class="panel-title-row"><h2>Channels</h2><button class="panel-toggle" data-collapse="right" title="Hide display controls" aria-label="Hide display controls">›</button></div>
+            <div class="display-actions"><button id="reset" class="action" disabled>Reset display</button><button id="recompute-auto" class="action" disabled>Recompute auto</button></div>
         </div>
         <div id="channels"></div>
     </aside>
@@ -1050,11 +1112,14 @@
     let liveDiscovery;
     const STORAGE_PREFIX = "wsi.viewer.v1";
     const DISPLAY_CALIBRATION_VERSION = 3;
-    const zStackControl = document.getElementById("z-stack-control");
+    const zDepthControls = document.getElementById("z-depth-controls");
     const zStackSlider = document.getElementById("z-stack-slider");
     const zStackValue = document.getElementById("z-stack-value");
+    const zMovieModeLoop = document.getElementById("z-movie-mode-loop");
+    const zMovieModePingpong = document.getElementById("z-movie-mode-pingpong");
     const seriesSelectControl = document.getElementById("series-select-control");
     const seriesSelect = document.getElementById("series-select");
+    const Z_MOVIE_INTERVAL_MS = 500;
 
     const statusElement = document.getElementById("status");
     const imageListElement = document.getElementById("image-list");
@@ -1511,6 +1576,7 @@
         seriesSelect.replaceChildren();
         if (!AnnotationAdapter.shouldShowSeriesSelector(imageMetadata?.seriesProfiles)) {
             seriesSelectControl.hidden = true;
+            syncRightStackControlsVisibility();
             return;
         }
         for (const profile of specimens) {
@@ -1521,6 +1587,7 @@
         }
         seriesSelect.value = String(currentSeries);
         seriesSelectControl.hidden = false;
+        syncRightStackControlsVisibility();
     }
 
     function applyMetadataInfoPanel() {
@@ -1539,6 +1606,24 @@
         return Number.isFinite(planes) && planes >= 1 ? Math.floor(planes) : 1;
     }
 
+    function applyZMovieFrame(nextZ) {
+        setCurrentZ(nextZ);
+        // Re-open without clearCache so previously fetched Z tiles stay in OSD RAM
+        // (maxImageCacheCount) and subsequent movie loops stay fluid.
+        if (viewer && viewer.world?.getItemCount?.()) openViewer(true);
+    }
+
+    AnnotationAdapter.configureZMovie({
+        getMaxZ: () => Math.max(0, zPlaneCountFromMetadata(metadata) - 1),
+        applyZ: applyZMovieFrame
+    });
+    AnnotationAdapter.bindZMovieModeButtons({
+        loopButton: zMovieModeLoop,
+        pingpongButton: zMovieModePingpong,
+        intervalMs: Z_MOVIE_INTERVAL_MS
+    });
+    AnnotationAdapter.setAnimationMode("LOOP");
+
     function setCurrentZ(nextZ) {
         const planes = zPlaneCountFromMetadata(metadata);
         const maxZ = Math.max(0, planes - 1);
@@ -1553,12 +1638,22 @@
         return currentZ;
     }
 
+    function syncRightStackControlsVisibility() {
+        const stack = document.querySelector(".right-stack-controls");
+        if (!stack) return;
+        const seriesVisible = Boolean(seriesSelectControl && !seriesSelectControl.hidden);
+        const zVisible = Boolean(zDepthControls && !zDepthControls.hidden);
+        stack.hidden = !(seriesVisible || zVisible);
+    }
+
     function syncZStackControl(imageMetadata) {
         const planes = zPlaneCountFromMetadata(imageMetadata);
-        if (!zStackControl || !zStackSlider) return;
+        if (!zDepthControls || !zStackSlider) return;
         if (planes <= 1) {
-            zStackControl.hidden = true;
+            AnnotationAdapter.stopZMovie();
+            zDepthControls.hidden = true;
             setCurrentZ(0);
+            syncRightStackControlsVisibility();
             return;
         }
         const maxZ = planes - 1;
@@ -1566,14 +1661,17 @@
         zStackSlider.max = String(maxZ);
         zStackSlider.setAttribute("aria-valuemin", "0");
         zStackSlider.setAttribute("aria-valuemax", String(maxZ));
-        zStackControl.hidden = false;
+        zDepthControls.hidden = false;
         setCurrentZ(0);
+        AnnotationAdapter.stopZMovie();
+        syncRightStackControlsVisibility();
     }
 
     async function onSeriesSelectChange() {
         if (!selectedImage || !seriesSelect) return;
         const nextSeries = Number.parseInt(seriesSelect.value, 10);
         if (!Number.isFinite(nextSeries) || nextSeries === currentSeries) return;
+        AnnotationAdapter.stopZMovie();
         try {
             statusElement.textContent = `Loading series ${nextSeries}…`;
             setCurrentSeries(nextSeries);
@@ -1625,11 +1723,11 @@
     }
 
     function onZStackSliderInput() {
+        AnnotationAdapter.stopZMovie();
         const previous = currentZ;
         setCurrentZ(zStackSlider.value);
         if (currentZ === previous) return;
-        flushViewerTileCache();
-        // Re-open the same viewport so OSD re-requests tiles for the new plane.
+        // Do not clearCache here — retain prior Z-plane tiles in RAM for movie replay.
         if (viewer && viewer.world?.getItemCount?.()) openViewer(true);
     }
 
@@ -1674,6 +1772,7 @@
                 visibilityRatio: 0.5,
                 minZoomImageRatio: 0.8,
                 maxZoomPixelRatio: 80,
+                maxImageCacheCount: 500,
                 gestureSettingsMouse: {
                     flickEnabled: false,
                     clickToZoom: false,
