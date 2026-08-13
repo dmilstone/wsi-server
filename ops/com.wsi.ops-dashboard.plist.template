@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent template for the loopback WSI ops dashboard (127.0.0.1:8084).
+
+  Before installing:
+  1. Fill in ops/.env.local (gitignored) with real local paths + password.
+  2. Replace every __WSI_REPO_ROOT__ below with your absolute repo path, e.g.
+     /Users/YOU/Downloads/wsi-server_works_cursor
+  3. Follow "macOS LaunchAgent" in ops/README.md to install via launchctl.
+
+  This agent runs ops/wsi-ops-dashboard-launchagent.sh, which sources .env.local
+  and then executes ./ops/start-wsi-ops-dashboard --daemon under launchd.
+  KeepAlive restarts the job if the process exits unexpectedly.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.wsi.ops-dashboard</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__WSI_REPO_ROOT__/ops/wsi-ops-dashboard-launchagent.sh</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>__WSI_REPO_ROOT__</string>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>__WSI_REPO_ROOT__/ops/.wsi-ops-dashboard.launchd.out.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>__WSI_REPO_ROOT__/ops/.wsi-ops-dashboard.launchd.err.log</string>
+</dict>
+</plist>

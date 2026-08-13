@@ -28,6 +28,25 @@ MAX_BODY = 8192
 CONTROL = ".wsi-ingest-control"
 ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 CSP = "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+BOUNDARY_DENIED = (
+    "<div class='panel' role='alert'>"
+    "<p><strong>Error:</strong> Access to Local WSI operations was denied because this request "
+    "did not come from a loopback browser session on the image-server host.</p>"
+    "<p><strong>Why:</strong> The dashboard binds only to <code>127.0.0.1:8084</code> and accepts "
+    "only Host values <code>127.0.0.1:8084</code> or <code>localhost:8084</code>. "
+    "Remote computers, proxies, and non-loopback Host headers are rejected on purpose.</p>"
+    "<p><strong>Recovery:</strong></p>"
+    "<ol>"
+    "<li>Use a browser that is running on the image-server machine itself.</li>"
+    "<li>Start the dashboard on that machine if needed "
+    "(<code>source ops/wsi-ingest.conf</code>, set <code>WSI_OPS_DASHBOARD_PASSWORD</code>, "
+    "then <code>./ops/wsi-ops-dashboard</code>).</li>"
+    "<li>Open <code>http://127.0.0.1:8084/</code> or use the viewer’s "
+    "<strong>Local operations</strong> link while the viewer itself is opened via "
+    "<code>http://127.0.0.1:&lt;port&gt;/</code> or <code>http://localhost:&lt;port&gt;/</code>.</li>"
+    "</ol>"
+    "</div>"
+)
 DASHBOARD_STYLE = """
 body { font: 16px system-ui, sans-serif; margin: 2rem; }
 form { margin: .75rem 0; }
@@ -54,6 +73,12 @@ button:disabled {
   cursor: not-allowed;
   opacity: .75;
 }
+.panel { border: 1px solid #ccc; border-radius: .5rem; padding: .9rem 1rem; background: #f7f7f7; max-width: 42rem; }
+.panel ol { margin: .4rem 0 0; padding-left: 1.25rem; }
+fieldset.approve { border: 1px solid #9aa3ab; border-radius: .4rem; margin: .6rem 0; padding: .55rem .75rem; max-width: 28rem; }
+fieldset.approve legend { padding: 0 .35rem; font-weight: 700; }
+fieldset.approve label { margin-right: 1rem; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 """
 
 
@@ -170,6 +195,48 @@ class Dashboard:
             kwargs["timeout"] = 10
         return self.runner(args, **kwargs)
 
+    def run_approved_ingestion(self, dataset, sleep_fn=None, clock=None):
+        """Seal, wait/observe until ready, dry-run, then promote with PROMOTE."""
+        sleep_fn = time.sleep if sleep_fn is None else sleep_fn
+        clock = time.time if clock is None else clock
+        quiet = max(1, int(os.environ.get("WSI_INGEST_MIN_QUIET_SECONDS", "30")))
+        interval = max(1, int(os.environ.get("WSI_INGEST_OBSERVATION_INTERVAL_SECONDS", "10")))
+        required = max(2, int(os.environ.get("WSI_INGEST_REQUIRED_OBSERVATIONS", "3")))
+        steps = []
+
+        seal = self.invoke("seal", dataset, "SEAL")
+        steps.append(("seal", seal))
+        if seal.returncode != 0:
+            return False, steps, seal
+
+        # Seal already records observation #1; gather the remaining observations.
+        for _ in range(required - 1):
+            deadline = clock() + quiet + interval + 5
+            observed = None
+            while clock() < deadline:
+                sleep_fn(min(interval, 1))
+                observed = self.invoke("observe", dataset)
+                steps.append(("observe", observed))
+                if observed.returncode == 0:
+                    break
+            if observed is None or observed.returncode != 0:
+                return False, steps, observed
+
+        dry = None
+        deadline = clock() + quiet + interval + 5
+        while clock() < deadline:
+            dry = self.invoke("promote-dry-run", dataset)
+            steps.append(("promote-dry-run", dry))
+            if dry.returncode == 0:
+                break
+            sleep_fn(1)
+        if dry is None or dry.returncode != 0:
+            return False, steps, dry
+
+        promote = self.invoke("promote", dataset, "PROMOTE")
+        steps.append(("promote", promote))
+        return promote.returncode == 0, steps, promote
+
 
 class OpsHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = False
@@ -232,7 +299,8 @@ class Handler(BaseHTTPRequestHandler):
         return {k: v[-1] for k, v in parse_qs(self.rfile.read(length).decode(), keep_blank_values=True).items()}
 
     def do_GET(self):
-        if self.reject_boundary(): return self.respond(HTTPStatus.FORBIDDEN, "Forbidden", "text/plain")
+        if self.reject_boundary():
+            return self.respond(HTTPStatus.FORBIDDEN, self.page(BOUNDARY_DENIED))
         auth = self.require_session()
         if not auth: return
         sid, csrf = auth
@@ -240,10 +308,24 @@ class Handler(BaseHTTPRequestHandler):
             try: names = safe_candidates(self.server.dashboard.root())
             except OSError: names = []
             options = ''.join(f'<option value="{html.escape(n)}">{html.escape(n)}</option>' for n in names)
-            forms = []
-            for action, label, confirm in [("inspect","Inspect",None),("seal","Seal","SEAL"),("observe","Observe",None),("dry-run","Promotion dry-run",None),("promote","Promote","PROMOTE")]:
-                extra = f'<label>Type {confirm} <input name="confirmation"></label>' if confirm else ''
-                forms.append(f'<form method="post" action="/{action}"><input type="hidden" name="csrf" value="{html.escape(csrf)}"><select name="dataset">{options}</select>{extra}<button>{label}</button></form>')
+            inspect = (
+                f'<form method="post" action="/inspect">'
+                f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
+                f'<select name="dataset">{options}</select>'
+                f'<button>Inspect</button></form>'
+            )
+            seal = (
+                f'<form method="post" action="/seal">'
+                f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
+                f'<select name="dataset">{options}</select>'
+                f'<fieldset class="approve">'
+                f'<legend>Approve and Seal this Ingestion? (Yes / No)</legend>'
+                f'<label><input type="radio" name="approve" value="yes" required> Yes</label> '
+                f'<label><input type="radio" name="approve" value="no"> No</label>'
+                f'</fieldset>'
+                f'<button>Seal &amp; ingest</button></form>'
+            )
+            forms = inspect + seal
             links = '<p><a href="/cheatsheet.html">Release cheat sheet HTML</a> · <a href="/cheatsheet.pdf">PDF</a></p>'
             try:
                 status = self.server.dashboard.invoke("status")
@@ -251,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
                 safe = html.escape(status.stdout + "\n" + history.stdout) if status.returncode == history.returncode == 0 else "Status unavailable (stop and inspect configuration)."
             except subprocess.TimeoutExpired:
                 safe = "Status unavailable (stop and inspect configuration)."
-            return self.respond(200, self.page('<pre>'+safe+'</pre>'+''.join(forms)+links, csrf))
+            return self.respond(200, self.page('<pre>'+safe+'</pre>'+forms+links, csrf))
         if self.path in ("/cheatsheet.html", "/cheatsheet.pdf"):
             source = HERE / ("RELEASE-CHEATSHEET.html" if self.path.endswith("html") else "WSI-Release-Cheat-Sheet.pdf")
             mime = "text/html; charset=utf-8" if self.path.endswith("html") else "application/pdf"
@@ -259,7 +341,8 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(404, "Not found", "text/plain")
 
     def do_POST(self):
-        if self.reject_boundary(): return self.respond(HTTPStatus.FORBIDDEN, "Forbidden", "text/plain")
+        if self.reject_boundary():
+            return self.respond(HTTPStatus.FORBIDDEN, self.page(BOUNDARY_DENIED))
         try: form = self.read_form()
         except (ValueError, UnicodeDecodeError): return self.respond(400, "Bad request", "text/plain")
         app = self.server.dashboard
@@ -277,24 +360,62 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/logout":
             app.sessions.remove(sid); app.audit("logout", "success")
             return self.respond(303, "Logged out", "text/plain", f"{COOKIE}=; Path={COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict", "/")
-        actions = {"/inspect": ("inspect", None), "/seal": ("seal", "SEAL"), "/observe": ("observe", None), "/dry-run": ("promote-dry-run", None), "/promote": ("promote", "PROMOTE")}
-        if self.path not in actions: return self.respond(404, "Not found", "text/plain")
-        action, required = actions[self.path]; audit_action = "dry-run" if action == "promote-dry-run" else action
+        if self.path == "/seal":
+            app.audit("seal attempt", "started")
+            approve = (form.get("approve") or "").strip().lower()
+            if approve != "yes":
+                app.audit("seal result", "confirmation rejected")
+                return self.respond(400, self.page("Ingestion was not approved. Choose Yes to seal and continue automatically.", csrf))
+            try:
+                ok, steps, final = app.run_approved_ingestion(form.get("dataset"))
+            except (ValueError, subprocess.TimeoutExpired):
+                app.audit("seal result", "failure")
+                return self.respond(400, self.page("Operation stopped: invalid selection or timeout.", csrf))
+            chunks = []
+            tx = None
+            for name, result in steps:
+                text = result.stdout if result.returncode == 0 else (result.stderr or result.stdout or "")
+                chunks.append(f"## {name}\n{text}".rstrip())
+                for line in (result.stdout or "").splitlines():
+                    if line.startswith(("transaction:", "promoted transaction:", "sealed transaction:")):
+                        tx = line.split(":", 1)[1].strip()
+            app.audit("seal result", "success" if ok else "failure", tx)
+            shown = "\n\n".join(chunks) if ok else (
+                "Operation stopped during automated ingestion. Review the local ingestion configuration and readiness conditions.\n\n"
+                + "\n\n".join(chunks)
+            )
+            return self.respond(
+                200 if ok else 409,
+                self.page("<pre>" + html.escape(shown) + '</pre><p><a href="/">Back</a></p>', csrf),
+            )
+
+        actions = {
+            "/inspect": ("inspect", None),
+            "/observe": ("observe", None),
+            "/dry-run": ("promote-dry-run", None),
+            "/promote": ("promote", "PROMOTE"),
+        }
+        if self.path not in actions:
+            return self.respond(404, "Not found", "text/plain")
+        action, required = actions[self.path]
+        audit_action = "dry-run" if action == "promote-dry-run" else action
         app.audit(audit_action + " attempt", "started")
         if required and form.get("confirmation") != required:
             app.audit(audit_action + " result", "confirmation rejected")
             return self.respond(400, self.page("Required typed confirmation was not supplied.", csrf))
-        try: result = app.invoke(action, form.get("dataset"), required)
+        try:
+            result = app.invoke(action, form.get("dataset"), required)
         except (ValueError, subprocess.TimeoutExpired):
-            app.audit(audit_action + " result", "failure"); return self.respond(400, self.page("Operation stopped: invalid selection or timeout.", csrf))
+            app.audit(audit_action + " result", "failure")
+            return self.respond(400, self.page("Operation stopped: invalid selection or timeout.", csrf))
         output = result.stdout if result.returncode == 0 else result.stderr
         tx = None
         for line in output.splitlines():
-            if line.startswith(("transaction:", "promoted transaction:", "sealed transaction:")): tx = line.split(":",1)[1].strip()
+            if line.startswith(("transaction:", "promoted transaction:", "sealed transaction:")):
+                tx = line.split(":", 1)[1].strip()
         app.audit(audit_action + " result", "success" if result.returncode == 0 else "failure", tx)
-        # Ingestion messages contain no roots/names; suppress stderr details nonetheless.
         shown = output if result.returncode == 0 else "Operation stopped. Review the local ingestion configuration and readiness conditions."
-        self.respond(200 if result.returncode == 0 else 409, self.page('<pre>'+html.escape(shown)+'</pre><p><a href="/">Back</a></p>', csrf))
+        self.respond(200 if result.returncode == 0 else 409, self.page("<pre>" + html.escape(shown) + '</pre><p><a href="/">Back</a></p>', csrf))
 
 
 def main():

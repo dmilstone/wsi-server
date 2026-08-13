@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Install/refresh the macOS LaunchAgent for the loopback ops dashboard.
+#
+# Copies a runnable runtime to Application Support because launchd cannot
+# execute scripts from ~/Downloads (TCC "Operation not permitted" / exit 126).
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+ENV_SRC="$SCRIPT_DIR/.env.local"
+SUPPORT="${WSI_OPS_LAUNCHAGENT_SUPPORT:-$HOME/Library/Application Support/com.wsi.ops-dashboard}"
+RUNTIME="$SUPPORT/runtime"
+PLIST="${WSI_OPS_LAUNCHAGENT_PLIST:-$HOME/Library/LaunchAgents/com.wsi.ops-dashboard.plist}"
+
+if [[ ! -f "$ENV_SRC" ]]; then
+    echo "error: missing $ENV_SRC" >&2
+    echo "Create ops/.env.local with staging/production roots and WSI_OPS_DASHBOARD_PASSWORD." >&2
+    exit 1
+fi
+
+mkdir -p "$RUNTIME" "$HOME/Library/LaunchAgents"
+
+cp -f \
+    "$SCRIPT_DIR/wsi_ops_dashboard.py" \
+    "$SCRIPT_DIR/wsi_ingest.py" \
+    "$SCRIPT_DIR/wsi-ops-dashboard" \
+    "$SCRIPT_DIR/RELEASE-CHEATSHEET.html" \
+    "$SCRIPT_DIR/WSI-Release-Cheat-Sheet.pdf" \
+    "$RUNTIME/"
+chmod 755 "$RUNTIME/wsi-ops-dashboard"
+
+cp -f "$ENV_SRC" "$SUPPORT/.env.local"
+chmod 600 "$SUPPORT/.env.local"
+
+cat > "$SUPPORT/run.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+SUPPORT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ENV_FILE="$SUPPORT_DIR/.env.local"
+RUNTIME="$SUPPORT_DIR/runtime"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "error: missing $ENV_FILE" >&2
+    exit 1
+fi
+if [[ ! -f "$RUNTIME/wsi_ops_dashboard.py" ]]; then
+    echo "error: missing dashboard runtime under $RUNTIME" >&2
+    exit 1
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+cd "$RUNTIME"
+exec /usr/bin/python3 "$RUNTIME/wsi_ops_dashboard.py"
+EOF
+chmod 755 "$SUPPORT/run.sh"
+
+cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.wsi.ops-dashboard</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>$SUPPORT/run.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>$SUPPORT</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>$SUPPORT/launchd.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>$SUPPORT/launchd.err.log</string>
+</dict>
+</plist>
+EOF
+
+# Free :8084 if a manual daemon is holding it.
+if [[ -x "$SCRIPT_DIR/start-wsi-ops-dashboard" ]]; then
+    "$SCRIPT_DIR/start-wsi-ops-dashboard" --stop 2>/dev/null || true
+fi
+
+UID_NUM="$(id -u)"
+DOMAIN="gui/${UID_NUM}"
+SERVICE="${DOMAIN}/com.wsi.ops-dashboard"
+
+launchctl bootout "$SERVICE" 2>/dev/null || true
+launchctl bootstrap "$DOMAIN" "$PLIST"
+launchctl kickstart -k "$SERVICE"
+
+echo "Installed LaunchAgent: $PLIST"
+echo "Runtime: $SUPPORT"
+echo "Verify: $SCRIPT_DIR/start-wsi-ops-dashboard --status"
+echo "Logs: $SUPPORT/launchd.{out,err}.log"
+# Silence unused-var lint for REPO_ROOT kept for future sync messaging.
+: "$REPO_ROOT"

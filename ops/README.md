@@ -160,7 +160,7 @@ ln -sfn /Users/dm026/Downloads/wsi-server_works/ops/wsi-release /Users/dm026/bin
 Before first rehearsal use:
 
 ```bash
-mkdir -p /Users/dm026/wsi-production-rehearsal/{app,config,data/annotations,logs,run,releases}
+mkdir -p /Users/dm026/wsi-production-rehearsal/{app,config,data/annotations,data/feedback,logs,run,releases}
 mkdir -p /Users/dm026/wsi-images/production-rehearsal
 touch /Users/dm026/wsi-images/production-rehearsal/.wsi-environment-production
 cp -p ops/templates/rehearsal-application.properties /Users/dm026/wsi-production-rehearsal/config/application.properties
@@ -218,13 +218,112 @@ set -a
 source ops/wsi-ingest.conf
 set +a
 export WSI_OPS_DASHBOARD_PASSWORD='enter a local password interactively'
-./ops/wsi-ops-dashboard
+./ops/start-wsi-ops-dashboard --daemon
 ```
 
+`./ops/wsi-ops-dashboard` remains valid for a foreground session (exits when the
+terminal closes — that is the usual reason `127.0.0.1:8084` appears to “not
+persist”). Prefer `./ops/start-wsi-ops-dashboard --daemon` so the listener keeps
+running; use `--status` / `--stop` to inspect or shut it down. Pass
+`--source-conf` only when you want the helper to source `ops/wsi-ingest.conf`
+for you; the password must still be exported in your shell first.
+
 Then open `http://127.0.0.1:8084/` in a browser running on the image-server
-host. Stop it with Ctrl-C. Do not put the password in the repository, shell
-history, process arguments, or logs. `WSI_OPS_AUDIT_FILE` may select an ignored
-local audit file, but cannot change image roots or the listener.
+host. Stop a manual daemon with `./ops/start-wsi-ops-dashboard --stop`. Do not
+put the password in the repository, shell history, process arguments, or logs.
+`WSI_OPS_AUDIT_FILE` may select an ignored local audit file, but cannot change
+image roots or the listener.
+
+### macOS LaunchAgent (auto-start on login)
+
+Use this when you want `:8084` to come up at login and restart if the process
+dies. Secrets stay in gitignored `ops/.env.local` (never commit real values).
+
+1. Edit local env placeholders (file is gitignored):
+
+```bash
+cd /Users/dm026/Downloads/wsi-server_works_cursor
+nano ops/.env.local
+```
+
+Set at least:
+
+```text
+WSI_INGEST_STAGING_ROOT=...
+WSI_INGEST_PRODUCTION_ROOT=...
+WSI_OPS_DASHBOARD_PASSWORD=...
+```
+
+2. Install via the helper (preferred). macOS TCC blocks LaunchAgents from
+   executing scripts under `~/Downloads`, so the helper copies a runtime into
+   `~/Library/Application Support/com.wsi.ops-dashboard/` and points launchd
+   there. Stop any manual `--daemon` first so port 8084 is free:
+
+```bash
+cd /Users/dm026/Downloads/wsi-server_works_cursor
+./ops/start-wsi-ops-dashboard --stop 2>/dev/null || true
+./ops/install-wsi-ops-dashboard-launchagent
+```
+
+Manual equivalent (same Application Support layout):
+
+```bash
+SUPPORT="$HOME/Library/Application Support/com.wsi.ops-dashboard"
+# …sync runtime + .env.local into $SUPPORT, write $SUPPORT/run.sh…
+PLIST="$HOME/Library/LaunchAgents/com.wsi.ops-dashboard.plist"
+# plist ProgramArguments: /bin/bash + $SUPPORT/run.sh
+```
+
+The repo template `ops/com.wsi.ops-dashboard.plist.template` is only safe when the
+repository itself lives outside `~/Downloads` (or another TCC-restricted folder).
+
+3. Register / load (the install helper already does this; re-run if needed):
+
+```bash
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.wsi.ops-dashboard.plist"
+# If bootstrap says the service is already bootstrapped, kick it:
+launchctl kickstart -k "gui/$(id -u)/com.wsi.ops-dashboard"
+```
+
+On older macOS where `bootstrap` is unavailable, use:
+
+```bash
+launchctl load -w "$HOME/Library/LaunchAgents/com.wsi.ops-dashboard.plist"
+```
+
+4. Verify:
+
+```bash
+./ops/start-wsi-ops-dashboard --status
+# optional: launchctl print "gui/$(id -u)/com.wsi.ops-dashboard"
+open http://127.0.0.1:8084/
+```
+
+Logs from launchd stdout/stderr:
+
+```text
+~/Library/Application Support/com.wsi.ops-dashboard/launchd.out.log
+~/Library/Application Support/com.wsi.ops-dashboard/launchd.err.log
+```
+
+5. Stop / unload (copy-paste):
+
+```bash
+launchctl bootout "gui/$(id -u)/com.wsi.ops-dashboard"
+# Older macOS fallback:
+# launchctl unload -w "$HOME/Library/LaunchAgents/com.wsi.ops-dashboard.plist"
+```
+
+To remove the installed plist after unload:
+
+```bash
+rm -f "$HOME/Library/LaunchAgents/com.wsi.ops-dashboard.plist"
+```
+
+After code changes to the dashboard/ingester, re-run
+`./ops/install-wsi-ops-dashboard-launchagent` so Application Support gets a fresh
+runtime copy, then `launchctl kickstart -k "gui/$(id -u)/com.wsi.ops-dashboard"`.
+Do not also run a manual `--daemon` while the LaunchAgent is loaded.
 
 The session cookie is HttpOnly and SameSite=Strict. It intentionally lacks the
 `Secure` attribute because browsers do not send Secure cookies over this

@@ -99,8 +99,15 @@ for (const [width, height] of [[1440, 900], [1024, 768], [768, 1024]]) {
 assert.match(rule(".toolbar-group"), /flex:\s*0 0 auto/);
 assert.doesNotMatch(html, /annotation-name-group/);
 assert.doesNotMatch(html, /annotation-name-control/);
+assert.match(html, /id="annotation-name-portal"/);
 assert.match(html, /id="annotation-name"[^>]*class="annotation-name-inline-input"/);
 assert.match(html, /id="annotation-name"[^>]*hidden/);
+assert.match(rule("#annotation-name-portal"), /display:\s*none\s*!important/);
+assert.doesNotMatch(
+    html.slice(html.indexOf('class="app-header"'), html.indexOf("</header>")),
+    /id="annotation-name"/,
+    "annotation-name input must not sit in the header toolbar row"
+);
 assert.match(rule(".annotation-name-label.is-editable"), /pointer-events:\s*auto/);
 const nameEditorSource = fs.readFileSync(
     path.join(__dirname, "../../main/resources/static/annotation-name-editor.js"), "utf8");
@@ -116,40 +123,52 @@ assert.match(narrow, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
 assert.match(rule(".viewer-stage", "max-width:\\s*820px"), /grid-row:\s*1/);
 assert.match(rule(".brand-copy", "max-width:\\s*820px"), /max-width:\s*min\(52vw,\s*360px\)/);
 
-// Exact retained toolbar order (left to right).
+// Exact retained toolbar order (left to right) for the scrolling tools tray.
 const headerHtml = html.slice(
     html.indexOf('class="app-header"'),
     html.indexOf("</header>")
 );
-const toolbarStart = headerHtml.indexOf('class="viewer-toolbar"');
-assert.ok(toolbarStart >= 0, "header contains viewer toolbar");
-const toolbarHtml = headerHtml.slice(toolbarStart);
+assert.match(headerHtml, /id="header-app-nav"/);
+assert.match(headerHtml, /class="header-app-nav"/);
+const toolsTrayHtml = headerHtml.slice(
+    headerHtml.indexOf('id="tools-tray"'),
+    headerHtml.indexOf('id="header-app-nav"')
+);
+const appNavHtml = headerHtml.slice(headerHtml.indexOf('id="header-app-nav"'));
 const orderedIds = [
     "home-view", "toggle-left",
     "zoom-in", "zoom-out",
     "annotation-mode",
     "annotation-visibility", "annotation-names",
     "export-visible-region", "export-selected-annotation",
-    "slide-overview-button", "full-screen", "presentation",
-    "toggle-right", "viewer-help"
+    "slide-overview-button", "full-screen", "presentation"
 ];
 let cursor = -1;
 for (const id of orderedIds) {
-    const idx = toolbarHtml.indexOf(`id="${id}"`);
-    assert.ok(idx > cursor, `toolbar order includes ${id} after prior controls`);
+    const idx = toolsTrayHtml.indexOf(`id="${id}"`);
+    assert.ok(idx > cursor, `tools tray order includes ${id} after prior controls`);
     cursor = idx;
 }
+assert.doesNotMatch(toolsTrayHtml, /id="dashboard-link"/);
+assert.doesNotMatch(toolsTrayHtml, /id="viewer-quick-guide-link"/);
+assert.doesNotMatch(toolsTrayHtml, /id="admin-ops-guide-link"/);
+assert.doesNotMatch(toolsTrayHtml, /id="toggle-right"/);
 
-// Home leftmost; Images immediately follows Home; Help rightmost; Settings precedes Help.
-assert.equal(toolbarHtml.indexOf('id="home-view"'), toolbarHtml.search(/id="[^"]+"/));
-const homeIdx = toolbarHtml.indexOf('id="home-view"');
-const imagesIdx = toolbarHtml.indexOf('id="toggle-left"');
-const settingsIdx = toolbarHtml.indexOf('id="toggle-right"');
-const helpIdx = toolbarHtml.indexOf('id="viewer-help"');
+// Home leftmost among tool controls in the scrolling tray.
+const firstToolId = toolsTrayHtml.search(/id="(home-view|toggle-left|zoom-in)"/);
+assert.ok(firstToolId >= 0);
+assert.equal(toolsTrayHtml.indexOf('id="home-view"'), firstToolId);
+const homeIdx = toolsTrayHtml.indexOf('id="home-view"');
+const imagesIdx = toolsTrayHtml.indexOf('id="toggle-left"');
+const settingsIdx = appNavHtml.indexOf('id="toggle-right"');
+const dashboardIdx = appNavHtml.indexOf('id="dashboard-link"');
+const viewerGuideIdx = appNavHtml.indexOf('id="viewer-quick-guide-link"');
+const adminGuideIdx = appNavHtml.indexOf('id="admin-ops-guide-link"');
 assert.ok(imagesIdx > homeIdx, "Images immediately follows Home");
-assert.ok(settingsIdx < helpIdx, "Settings immediately precedes Help");
-assert.ok(helpIdx === Math.max(...orderedIds.map(id => toolbarHtml.indexOf(`id="${id}"`))),
-    "Help is the rightmost toolbar control");
+assert.ok(settingsIdx >= 0 && dashboardIdx > settingsIdx, "Settings precedes Dashboard");
+assert.ok(dashboardIdx < viewerGuideIdx, "Dashboard precedes Viewer Quick Guide");
+assert.ok(viewerGuideIdx < adminGuideIdx, "Viewer Quick Guide precedes Admin & Ops Guide");
+assert.ok(adminGuideIdx === Math.max(settingsIdx, dashboardIdx, viewerGuideIdx, adminGuideIdx), "Admin & Ops Guide is the rightmost app-nav control");
 
 // Pan/select modes removed; default OSD drag-pan and Annotorious selection remain.
 assert.doesNotMatch(html, /navigateMode/);
@@ -161,19 +180,85 @@ assert.match(spikeSource, /selectionChanged/);
 assert.doesNotMatch(headerHtml, /id="local-operations"/);
 assert.doesNotMatch(headerHtml, /header-actions/);
 assert.doesNotMatch(headerHtml, /Local operations/);
+assert.doesNotMatch(headerHtml, /class="header-nav"/);
+// Conditionally rendered Dashboard link lives next to Help in the pinned app nav.
+assert.match(
+    appNavHtml,
+    /id="dashboard-link"[^>]*href="http:\/\/127\.0\.0\.1:8084\/"/
+);
+assert.match(
+    appNavHtml,
+    /id="dashboard-link"[^>]*target="_blank"/
+);
+assert.match(
+    appNavHtml,
+    /id="dashboard-link"[^>]*rel="noopener"/
+);
+assert.match(
+    appNavHtml,
+    /id="dashboard-link"[^>]*aria-label="Dashboard"/
+);
+assert.match(
+    appNavHtml,
+    /id="dashboard-link"[^>]*data-tooltip="Dashboard&#10;Open the local operations dashboard on 127\.0\.0\.1:8084"/
+);
+assert.match(
+    appNavHtml,
+    /id="viewer-quick-guide-link"[^>]*href="\/help\/viewer-guide\.html"/
+);
+assert.match(
+    appNavHtml,
+    /id="viewer-quick-guide-link"[^>]*aria-label="Viewer Quick Guide"/
+);
+assert.match(appNavHtml, />Viewer Quick Guide</);
+assert.match(
+    appNavHtml,
+    /id="admin-ops-guide-link"[^>]*href="\/help"/
+);
+assert.match(
+    appNavHtml,
+    /id="admin-ops-guide-link"[^>]*aria-label="Admin &amp; Ops Guide"/
+);
+assert.match(appNavHtml, />Admin &amp; Ops Guide</);
+assert.doesNotMatch(html, /Select one annotation/);
+assert.doesNotMatch(appNavHtml, /id="viewer-help"/);
+assert.doesNotMatch(appNavHtml, /id="user-guide-link"/);
+assert.match(html, /#dashboard-link\.toolbar-button\.is-env-allowed/);
+assert.match(html, /isDevelopmentEnvironment/);
+assert.match(html, /syncDashboardLinkVisibility/);
+assert.match(html, /bindDashboardOutboundNavigation/);
+assert.match(html, /localOpsDashboardIsListening/);
+assert.match(html, /DASHBOARD_ABSOLUTE_URL = "http:\/\/127\.0\.0\.1:8084\/"/);
+assert.match(html, /\/api\/local-ops\/status/);
+assert.match(html, /window\.open\(DASHBOARD_ABSOLUTE_URL/);
+assert.match(html, /DASHBOARD_GATE_URL/);
+assert.match(html, /isDevelopmentEnvironment\(environment\)/);
+assert.doesNotMatch(
+    appNavHtml,
+    /id="dashboard-link"[^>]*href="\/dashboard"/
+);
 const channelsPanelHtml = html.slice(
     html.indexOf('id="channels-panel"'),
     html.indexOf('id="channels"')
 );
 assert.match(
     channelsPanelHtml,
-    /id="local-operations"[^>]*href="http:\/\/127\.0\.0\.1:8084\/"[^>]*target="_blank"[^>]*rel="noopener"/
+    /id="local-operations"[^>]*href="\/local-operations\/"/
 );
 assert.match(channelsPanelHtml, /class="panel-secondary-link"/);
 assert.match(channelsPanelHtml, />Local operations</);
 
+const localOpsGate = fs.readFileSync(
+    path.join(__dirname, "../../main/resources/static/local-operations/index.html"),
+    "utf8"
+);
+assert.match(localOpsGate, /Local operations unavailable on this computer/);
+assert.match(localOpsGate, /Recovery:/);
+assert.match(localOpsGate, /http:\/\/127\.0\.0\.1:8084\//);
+assert.match(localOpsGate, /host === "127\.0\.0\.1"/);
+assert.match(localOpsGate, /host === "localhost"/);
 // Hover/focus tooltips and accessible labels on every retained toolbar control.
-for (const id of orderedIds) {
+for (const id of [...orderedIds, "toggle-right", "dashboard-link", "viewer-quick-guide-link", "admin-ops-guide-link"]) {
     const markup = toolbarControlMarkup(id);
     assert.match(markup, /aria-label="/, `${id} needs aria-label`);
     assert.match(markup, /data-tooltip="/, `${id} needs data-tooltip`);
@@ -222,7 +307,7 @@ assert.match(html, /function withReadyViewport\(/);
 // Unimplemented drawing tools must not appear as normal toolbar controls.
 assert.doesNotMatch(html, /id="polygon-mode"/);
 assert.doesNotMatch(html, /id="freehand-mode"/);
-assert.doesNotMatch(toolbarHtml, /not available yet/);
+assert.doesNotMatch(headerHtml, /not available yet/);
 
 // Stage overlays and environment banner contracts stay intact.
 assert.match(toolbar, /z-index:\s*16/);
@@ -251,7 +336,7 @@ assert.doesNotMatch(
 
 for (const label of [
     "Annotation drawing and editing tools", "Annotation visibility",
-    "Home and images", "Export actions", "Viewer actions", "Settings and help", "Zoom"
+    "Home and images", "Export actions", "Viewer actions", "Settings, dashboard, and manuals", "Zoom"
 ]) {
     assert.match(html, new RegExp(`role="group" aria-label="${label}"`));
 }

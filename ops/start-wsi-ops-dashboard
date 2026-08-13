@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# Launch the loopback ingestion dashboard (127.0.0.1:8084).
+#
+# This script never invents or prints a password. Load ingest roots first, then
+# export WSI_OPS_DASHBOARD_PASSWORD in your own terminal, then run this helper:
+#
+#   set -a
+#   source ops/wsi-ingest.conf
+#   set +a
+#   export WSI_OPS_DASHBOARD_PASSWORD   # set interactively; do not commit
+#   ./ops/start-wsi-ops-dashboard --daemon
+#
+# Use --daemon so the listener survives closing the terminal. Foreground mode
+# (default) exits when the terminal session ends — that is why :8084 "does not
+# persist" after a normal interactive start.
+#
+# Optional: ./ops/start-wsi-ops-dashboard --source-conf --daemon
+#   sources ops/wsi-ingest.conf for you; password must still be exported first.
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+CONF="$SCRIPT_DIR/wsi-ingest.conf"
+PID_FILE="$SCRIPT_DIR/.wsi-ops-dashboard.pid"
+LOG_FILE="$SCRIPT_DIR/.wsi-ops-dashboard.log"
+SOURCE_CONF=0
+DAEMON=0
+ACTION=start
+
+usage() {
+    cat <<'EOF'
+Usage: ./ops/start-wsi-ops-dashboard [--source-conf] [--daemon]
+       ./ops/start-wsi-ops-dashboard --status
+       ./ops/start-wsi-ops-dashboard --stop
+
+Starts the local operations dashboard on 127.0.0.1:8084.
+
+Required environment for start (already exported in this shell):
+  WSI_OPS_DASHBOARD_PASSWORD
+  WSI_INGEST_STAGING_ROOT
+  WSI_INGEST_PRODUCTION_ROOT
+
+Options:
+  --daemon        Detach after start (pid + log under ops/). Survives terminal close.
+                  When WSI_OPS_UNDER_LAUNCHD=1 (LaunchAgent wrapper), runs in the
+                  foreground instead so launchd KeepAlive can supervise the process.
+  --source-conf   Source ops/wsi-ingest.conf before checking ingest roots.
+                  Does not set the dashboard password.
+  --status        Report whether 127.0.0.1:8084 is listening (and pid file state).
+  --stop          Stop a daemon started by this helper (via pid file).
+  -h, --help      Show this help.
+EOF
+}
+
+port_listening() {
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:8084 -sTCP:LISTEN >/dev/null 2>&1
+        return $?
+    fi
+    # Fallback when lsof is unavailable: brief TCP probe via python.
+    python3 - <<'PY'
+import socket, sys
+s = socket.socket()
+s.settimeout(0.25)
+try:
+    s.connect(("127.0.0.1", 8084))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+sys.exit(0)
+PY
+}
+
+read_pidfile() {
+    if [[ -f "$PID_FILE" ]]; then
+        tr -d '[:space:]' < "$PID_FILE" || true
+    fi
+}
+
+pid_alive() {
+    local pid="${1:-}"
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --source-conf) SOURCE_CONF=1 ;;
+        --daemon) DAEMON=1 ;;
+        --status) ACTION=status ;;
+        --stop) ACTION=stop ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            echo "error: unknown argument: $arg" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [[ "$ACTION" == "status" ]]; then
+    pid="$(read_pidfile)"
+    if port_listening; then
+        echo "listening: yes (http://127.0.0.1:8084/)"
+    else
+        echo "listening: no"
+    fi
+    if [[ -n "$pid" ]]; then
+        if pid_alive "$pid"; then
+            echo "pidfile: $pid (alive)"
+        else
+            echo "pidfile: $pid (stale)"
+        fi
+    else
+        echo "pidfile: absent"
+    fi
+    exit 0
+fi
+
+if [[ "$ACTION" == "stop" ]]; then
+    pid="$(read_pidfile)"
+    if [[ -z "$pid" ]]; then
+        echo "error: no pid file at $PID_FILE" >&2
+        exit 1
+    fi
+    if pid_alive "$pid"; then
+        kill "$pid" 2>/dev/null || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            pid_alive "$pid" || break
+            sleep 0.2
+        done
+        if pid_alive "$pid"; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$PID_FILE"
+    if port_listening; then
+        echo "error: stop requested but 127.0.0.1:8084 is still listening." >&2
+        exit 1
+    fi
+    echo "Stopped local operations dashboard."
+    exit 0
+fi
+
+if [[ -z "${WSI_OPS_DASHBOARD_PASSWORD:-}" ]]; then
+    echo "error: WSI_OPS_DASHBOARD_PASSWORD is unset or empty." >&2
+    echo "Export a local session password in this terminal, then re-run." >&2
+    exit 1
+fi
+
+if [[ "$SOURCE_CONF" -eq 1 ]]; then
+    if [[ ! -f "$CONF" ]]; then
+        echo "error: missing ingest config: $CONF" >&2
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    set -a
+    # Intentionally sources only when the operator passed --source-conf.
+    source "$CONF"
+    set +a
+fi
+
+missing=0
+for var in WSI_INGEST_STAGING_ROOT WSI_INGEST_PRODUCTION_ROOT; do
+    if [[ -z "${!var:-}" ]]; then
+        echo "error: $var is unset or empty." >&2
+        missing=1
+    fi
+done
+if [[ "$missing" -ne 0 ]]; then
+    echo "Load ops/wsi-ingest.conf in this shell (or pass --source-conf), then re-run." >&2
+    exit 1
+fi
+
+if port_listening; then
+    echo "error: something is already listening on 127.0.0.1:8084." >&2
+    echo "Use ./ops/start-wsi-ops-dashboard --status or --stop, then re-run." >&2
+    exit 1
+fi
+
+cd "$REPO_ROOT"
+
+if [[ "$DAEMON" -eq 0 ]]; then
+    echo "Starting local operations dashboard on http://127.0.0.1:8084/ (foreground; Ctrl-C to stop)."
+    echo "Tip: use --daemon so the listener survives closing this terminal."
+    exec "$SCRIPT_DIR/wsi-ops-dashboard"
+fi
+
+# LaunchAgent path: keep the listener as the launchd job process so KeepAlive works.
+# (nohup + exit would make launchd think the job finished and thrash restarts.)
+if [[ "${WSI_OPS_UNDER_LAUNCHD:-}" == "1" ]]; then
+    echo "Starting local operations dashboard under launchd on http://127.0.0.1:8084/"
+    echo $$ > "$PID_FILE"
+    chmod 600 "$PID_FILE" 2>/dev/null || true
+    exec "$SCRIPT_DIR/wsi-ops-dashboard"
+fi
+
+# Detached mode: survive terminal close; keep password only in this process env.
+: > "$LOG_FILE"
+chmod 600 "$LOG_FILE" 2>/dev/null || true
+nohup "$SCRIPT_DIR/wsi-ops-dashboard" >>"$LOG_FILE" 2>&1 &
+echo $! > "$PID_FILE"
+chmod 600 "$PID_FILE" 2>/dev/null || true
+pid="$(read_pidfile)"
+echo "Starting daemon pid=$pid (log: $LOG_FILE)"
+
+for _ in $(seq 1 50); do
+    if port_listening; then
+        echo "Listening on http://127.0.0.1:8084/"
+        echo "Stop with: ./ops/start-wsi-ops-dashboard --stop"
+        exit 0
+    fi
+    if ! pid_alive "$pid"; then
+        echo "error: dashboard process exited before binding :8084. See $LOG_FILE" >&2
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+    sleep 0.1
+done
+
+echo "error: timed out waiting for 127.0.0.1:8084. See $LOG_FILE" >&2
+exit 1

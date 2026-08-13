@@ -198,9 +198,32 @@ class DashboardSafetyTests(unittest.TestCase):
 
     def test_viewer_link_is_local_only_and_no_credentials(self):
         viewer = (OPS.parent / "src/main/resources/static/index.html").read_text()
-        self.assertIn("http://127.0.0.1:8084/", viewer)
-        self.assertIn("Available only in a browser running on the image server", viewer)
-        self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", viewer)
+        gate = (OPS.parent / "src/main/resources/static/local-operations/index.html").read_text()
+        self.assertIn('href="/local-operations/"', viewer)
+        self.assertIn("Local operations", viewer)
+        self.assertIn("http://127.0.0.1:8084/", gate)
+        self.assertIn("Local operations unavailable on this computer", gate)
+        self.assertIn("Recovery:", gate)
+        self.assertIn("./ops/start-wsi-ops-dashboard", gate)
+        self.assertIn("--daemon", gate)
+        self.assertIn('target="_blank"', gate)
+        self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD=", viewer)
+        # Recovery may name the env var, but must not embed a quoted secret assignment.
+        self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD='", gate)
+        self.assertNotIn('WSI_OPS_DASHBOARD_PASSWORD="', gate)
+        helper = OPS / "start-wsi-ops-dashboard"
+        self.assertTrue(helper.is_file(), "expected ops/start-wsi-ops-dashboard helper")
+        helper_text = helper.read_text()
+        self.assertIn("WSI_OPS_DASHBOARD_PASSWORD", helper_text)
+        self.assertIn("127.0.0.1:8084", helper_text)
+        self.assertIn("--source-conf", helper_text)
+        self.assertIn("--daemon", helper_text)
+        self.assertIn("--status", helper_text)
+        self.assertIn("--stop", helper_text)
+        self.assertIn("nohup", helper_text)
+        # Helper must not embed a password assignment.
+        self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD='", helper_text)
+        self.assertNotIn('WSI_OPS_DASHBOARD_PASSWORD="', helper_text)
 
     def test_audit_concurrency_permissions_and_private_owned_parent(self):
         audit = Path(self.tmp.name) / "private" / "nested" / "audit.jsonl"
@@ -281,9 +304,17 @@ class HTTPBoundaryTests(unittest.TestCase):
 
     def test_host_peer_proxy_and_response_security_headers(self):
         for host in ("evil.example:8084", "localhost", "127.0.0.1:80", "[::1]:8084"):
-            self.assertEqual(403, request(self.app, headers={"Host": host})[0])
+            status, headers, body = request(self.app, headers={"Host": host})
+            self.assertEqual(403, status)
+            text = body.decode() if isinstance(body, (bytes, bytearray)) else body
+            self.assertIn("Access to Local WSI operations was denied", text)
+            self.assertIn("Recovery:", text)
+            self.assertIn("text/html", headers["content-type"])
         for proxy_headers in ({}, {"X-Forwarded-For": "127.0.0.1"}, {"Forwarded": "for=127.0.0.1;host=localhost:8084"}):
-            self.assertEqual(403, request(self.app, headers=proxy_headers, peer="192.0.2.5")[0])
+            status, headers, body = request(self.app, headers=proxy_headers, peer="192.0.2.5")
+            self.assertEqual(403, status)
+            text = body.decode() if isinstance(body, (bytes, bytearray)) else body
+            self.assertIn("Access to Local WSI operations was denied", text)
         status, headers, _ = request(self.app)
         self.assertEqual(401, status)
         self.assertEqual(dashboard.CSP, headers["content-security-policy"])
@@ -294,25 +325,41 @@ class HTTPBoundaryTests(unittest.TestCase):
 
     def test_typed_confirmations_block_subprocess(self):
         _, _, cookie, csrf = login(self.app); self.runner.reset_mock()
-        for path, wrong in (("/seal", "seal"), ("/promote", "promote")):
-            status, _, _ = request(self.app, "POST", path, {"csrf": csrf, "dataset": "sample", "confirmation": wrong}, {"Cookie": cookie})
-            self.assertEqual(400, status)
+        status, _, _ = request(self.app, "POST", "/seal", {"csrf": csrf, "dataset": "sample", "approve": "no"}, {"Cookie": cookie})
+        self.assertEqual(400, status)
+        status, _, _ = request(self.app, "POST", "/promote", {"csrf": csrf, "dataset": "sample", "confirmation": "promote"}, {"Cookie": cookie})
+        self.assertEqual(400, status)
         self.runner.assert_not_called()
 
     def test_all_allowlisted_dashboard_argv_and_no_durable_timeout(self):
         _, _, cookie, csrf = login(self.app); self.runner.reset_mock()
-        expected = {"/inspect": ["inspect"], "/seal": ["seal"], "/observe": ["observe"],
+        expected = {"/inspect": ["inspect"], "/observe": ["observe"],
                     "/dry-run": ["promote", "--dry-run"], "/promote": ["promote", "--step"]}
         for path, command in expected.items():
             form = {"csrf": csrf, "dataset": "sample"}
-            if path == "/seal": form["confirmation"] = "SEAL"
             if path == "/promote": form["confirmation"] = "PROMOTE"
             self.assertEqual(200, request(self.app, "POST", path, form, {"Cookie": cookie})[0])
             args, kwargs = self.runner.call_args
             self.assertEqual([os.sys.executable, str(OPS / "wsi_ingest.py"), *command, "sample"], args[0])
             self.assertFalse(kwargs["shell"]); self.assertNotIn("timeout", kwargs)
             self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", kwargs["env"])
-        self.assertEqual(5, self.runner.call_count)
+        self.assertEqual(4, self.runner.call_count)
+
+    def test_approved_seal_runs_automated_ingestion_pipeline(self):
+        _, _, cookie, csrf = login(self.app); self.runner.reset_mock()
+        status, _, body = request(
+            self.app, "POST", "/seal",
+            {"csrf": csrf, "dataset": "sample", "approve": "yes"},
+            {"Cookie": cookie},
+        )
+        self.assertEqual(200, status)
+        argv_list = [call.args[0] for call in self.runner.call_args_list]
+        self.assertEqual([os.sys.executable, str(OPS / "wsi_ingest.py"), "seal", "sample"], argv_list[0])
+        self.assertIn([os.sys.executable, str(OPS / "wsi_ingest.py"), "observe", "sample"], argv_list)
+        self.assertIn([os.sys.executable, str(OPS / "wsi_ingest.py"), "promote", "--dry-run", "sample"], argv_list)
+        self.assertEqual([os.sys.executable, str(OPS / "wsi_ingest.py"), "promote", "--step", "sample"], argv_list[-1])
+        self.assertIn(b"## seal", body)
+        self.assertIn(b"Approve and Seal this Ingestion?", request(self.app, headers={"Cookie": cookie})[2])
 
     def test_invalid_selections_and_actions_never_reach_subprocess(self):
         os.symlink(self.root / "sample", self.root / "alias")
@@ -388,28 +435,20 @@ class DashboardIngestionHTTPTests(unittest.TestCase):
         path = self.root / name; path.mkdir(); (path / "slide.svs").write_bytes(b"fixture")
         old = dashboard.time.time() - 5; os.utime(path / "slide.svs", (old, old)); return path
 
-    def post(self, path, name, confirmation=None):
+    def post(self, path, name, confirmation=None, approve=None):
         form = {"csrf": self.csrf, "dataset": name}
         if confirmation is not None: form["confirmation"] = confirmation
+        if approve is not None: form["approve"] = approve
         return request(self.app, "POST", path, form, {"Cookie": self.cookie})
 
-    def ready(self, name):
-        self.assertEqual(200, self.post("/seal", name, "SEAL")[0])
-        state = self.root / dashboard.CONTROL / f"{name}.json"
-        data = json.loads(state.read_text()); data["observations"][0]["time"] -= 2
-        state.write_text(json.dumps(data))
-        self.assertEqual(200, self.post("/observe", name)[0])
-        data = json.loads(state.read_text()); data["seal_time"] -= 2
-        state.write_text(json.dumps(data))
-
-    def test_inspect_seal_observe_dry_run_and_verified_promotion(self):
+    def test_inspect_and_approved_automated_ingestion(self):
         self.dataset("promotable")
         status, _, body = self.post("/inspect", "promotable")
         self.assertEqual(200, status); self.assertIn(b"regular_files: 1", body)
-        self.ready("promotable")
-        self.assertEqual(200, self.post("/dry-run", "promotable")[0])
-        self.assertTrue((self.root / "promotable").exists())
-        self.assertEqual(200, self.post("/promote", "promotable", "PROMOTE")[0])
+        status, _, body = self.post("/seal", "promotable", approve="yes")
+        self.assertEqual(200, status, body)
+        self.assertIn(b"## seal", body)
+        self.assertIn(b"## promote", body)
         self.assertFalse((self.root / "promotable").exists()); self.assertTrue((self.prod / "promotable").is_dir())
         receipt = self.root / dashboard.CONTROL / "promotable.receipt.json"
         self.assertEqual("verified", json.loads(receipt.read_text())["phase"])
@@ -421,13 +460,13 @@ class DashboardIngestionHTTPTests(unittest.TestCase):
             self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", kwargs["env"])
             self.assertEqual(str(OPS / "wsi_ingest.py"), argv[1])
 
-    def test_collision_is_fail_closed_and_not_retried(self):
+    def test_collision_is_fail_closed_during_automated_ingest(self):
         source = self.dataset("collision")
-        self.ready("collision")
         destination = self.prod / "collision"; destination.mkdir(); (destination / "existing.svs").write_bytes(b"existing")
         before = len(self.calls)
-        status, _, _ = self.post("/promote", "collision", "PROMOTE")
-        self.assertEqual(409, status); self.assertEqual(before + 1, len(self.calls))
+        status, _, _ = self.post("/seal", "collision", approve="yes")
+        self.assertEqual(409, status)
+        self.assertGreater(len(self.calls), before)
         self.assertTrue(source.is_dir()); self.assertEqual(b"fixture", (source / "slide.svs").read_bytes())
         self.assertEqual(b"existing", (destination / "existing.svs").read_bytes())
         self.assertFalse((self.root / dashboard.CONTROL / "collision.receipt.json").exists())

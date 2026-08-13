@@ -1,0 +1,412 @@
+:root {
+    --pilot-bg: #0f1724;
+    --pilot-panel: #162235;
+    --pilot-border: rgba(255, 255, 255, 0.12);
+    --pilot-text: #e8eef7;
+    --pilot-muted: #9fb0c7;
+    --pilot-accent: #4da3ff;
+    --pilot-accent-soft: rgba(77, 163, 255, 0.16);
+    --pilot-danger-bg: rgba(255, 196, 77, 0.12);
+    --pilot-danger-border: rgba(255, 196, 77, 0.45);
+    --pilot-success: #7ddea0;
+}
+
+.pilot-page {
+    margin: 0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: var(--pilot-text);
+    background: linear-gradient(180deg, #0b1220 0%, #111b2c 100%);
+    min-height: 100vh;
+}
+
+.pilot-shell {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 24px 20px 40px;
+}
+
+.pilot-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+}
+
+.pilot-header h1 {
+    margin: 0;
+    font-size: 24px;
+}
+
+.pilot-header p {
+    margin: 4px 0 0;
+    color: var(--pilot-muted);
+}
+
+.pilot-nav-links {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.pilot-nav-links a,
+.pilot-secondary-link,
+.pilot-feedback-nav a {
+    color: var(--pilot-accent);
+    text-decoration: none;
+    border: 1px solid var(--pilot-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.pilot-nav-links a:hover,
+.pilot-nav-links a:focus-visible,
+.pilot-secondary-link:hover,
+.pilot-secondary-link:focus-visible,
+.pilot-feedback-nav a:hover,
+.pilot-feedback-nav a:focus-visible {
+    background: var(--pilot-accent-soft);
+    outline: 2px solid rgba(77, 163, 255, 0.45);
+    outline-offset: 2px;
+}
+
+.pilot-feedback-form,
+.pilot-results {
+    background: var(--pilot-panel);
+    border: 1px solid var(--pilot-border);
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+}
+
+.pilot-feedback-notice {
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: var(--pilot-danger-bg);
+    border: 1px solid var(--pilot-danger-border);
+    margin-bottom: 14px;
+    line-height: 1.45;
+}
+
+.pilot-feedback-meta,
+.pilot-feedback-nav,
+.pilot-feedback-status,
+.pilot-muted {
+    color: var(--pilot-muted);
+}
+
+.pilot-feedback-nav {
+    margin: 0 0 14px;
+}
+
+.pilot-section {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--pilot-border);
+}
+
+.pilot-section h3 {
+    margin: 0 0 12px;
+    font-size: 16px;
+}
+
+.pilot-task-fieldset,
+.pilot-rating-fieldset {
+    border: 1px solid var(--pilot-border);
+    border-radius: 10px;
+    margin: 0 0 10px;
+    padding: 10px 12px 12px;
+}
+
+.pilot-task-fieldset legend,
+.pilot-rating-fieldset legend {
+    padding: 0 6px;
+    font-size: 14px;
+}
+
+.pilot-option-row {
+    display: grid;
+    gap: 8px;
+}
+
+.pilot-option,
+.pilot-rating-option,
+.pilot-text-field,
+.pilot-select-field {
+    display: block;
+    font-size: 14px;
+}
+
+.pilot-option,
+.pilot-rating-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 10px;
+}
+
+.pilot-rating-scale {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.pilot-scale-end {
+    color: var(--pilot-muted);
+    font-size: 12px;
+}
+
+.pilot-text-field span,
+.pilot-select-field span {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.pilot-text-field textarea,
+.pilot-text-field input,
+.pilot-select-field select {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 8px;
+    border: 1px solid var(--pilot-border);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--pilot-text);
+    padding: 8px 10px;
+    font: inherit;
+}
+
+.pilot-feedback-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+    align-items: center;
+}
+
+.pilot-primary,
+.pilot-secondary,
+.pilot-view-toggle button {
+    border-radius: 8px;
+    border: 1px solid var(--pilot-border);
+    padding: 9px 14px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.pilot-primary {
+    background: var(--pilot-accent);
+    color: #06111f;
+    border-color: transparent;
+    font-weight: 600;
+}
+
+.pilot-secondary,
+.pilot-view-toggle button {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--pilot-text);
+}
+
+.pilot-view-toggle button[aria-pressed="true"] {
+    background: var(--pilot-accent-soft);
+    border-color: rgba(77, 163, 255, 0.55);
+}
+
+.pilot-feedback-status {
+    min-height: 1.2em;
+    margin-top: 10px;
+}
+
+.pilot-feedback-panel {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 26;
+    width: min(460px, calc(100% - 32px));
+    max-height: calc(100% - 32px);
+    overflow: auto;
+    background: rgba(15, 23, 36, 0.94);
+    border: 1px solid var(--pilot-border);
+    border-radius: 14px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.pilot-feedback-panel[hidden] {
+    display: none;
+}
+
+.pilot-feedback-panel.minimized {
+    width: auto;
+    max-height: none;
+    overflow: visible;
+}
+
+.pilot-feedback-panel.minimized .pilot-feedback-panel-body {
+    display: none;
+}
+
+.pilot-feedback-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 14px 0;
+    position: sticky;
+    top: 0;
+    background: inherit;
+    z-index: 1;
+}
+
+.pilot-feedback-panel-title {
+    margin: 0;
+    font-size: 15px;
+}
+
+.pilot-feedback-panel-controls {
+    display: flex;
+    gap: 6px;
+}
+
+.pilot-feedback-panel-controls button {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: white;
+    background: rgba(255, 255, 255, 0.06);
+    cursor: pointer;
+}
+
+.pilot-feedback-panel-body {
+    padding: 0 14px 14px;
+}
+
+.pilot-feedback-form.compact .pilot-section h3 {
+    font-size: 15px;
+}
+
+.pilot-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.pilot-summary-card {
+    border: 1px solid var(--pilot-border);
+    border-radius: 10px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.pilot-summary-card strong {
+    display: block;
+    font-size: 22px;
+    margin-top: 4px;
+}
+
+.pilot-chart-block {
+    margin: 18px 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--pilot-border);
+}
+
+.pilot-chart-block h3 {
+    margin: 0 0 10px;
+    font-size: 16px;
+}
+
+.pilot-bar-chart {
+    display: grid;
+    gap: 8px;
+}
+
+.pilot-bar-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 180px) 1fr auto;
+    gap: 8px;
+    align-items: center;
+    font-size: 13px;
+}
+
+.pilot-bar-track {
+    height: 12px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    display: flex;
+}
+
+.pilot-bar-segment {
+    height: 100%;
+}
+
+.pilot-bar-segment.easy { background: #58c98b; }
+.pilot-bar-segment.difficult { background: #f0b429; }
+.pilot-bar-segment.could-not { background: #ef6b6b; }
+.pilot-bar-segment.did-not-try { background: #7d8699; }
+
+.pilot-rating-bar {
+    height: 100%;
+    background: var(--pilot-accent);
+}
+
+.pilot-table-wrap {
+    overflow: auto;
+}
+
+.pilot-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.pilot-table th,
+.pilot-table td {
+    border-bottom: 1px solid var(--pilot-border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.pilot-free-text-list {
+    display: grid;
+    gap: 12px;
+}
+
+.pilot-free-text-item {
+    border: 1px solid var(--pilot-border);
+    border-radius: 10px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.pilot-free-text-item h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+}
+
+.pilot-refresh-meta {
+    color: var(--pilot-muted);
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+
+@media (max-width: 720px) {
+    .pilot-shell {
+        padding: 16px 12px 28px;
+    }
+
+    .pilot-bar-row {
+        grid-template-columns: 1fr;
+    }
+
+    .pilot-feedback-panel {
+        left: 16px;
+        right: 16px;
+        width: auto;
+    }
+}

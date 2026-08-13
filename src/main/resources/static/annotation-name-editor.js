@@ -54,9 +54,11 @@ class AnnotationNameEditor {
         this.storedValue = nextId ? this.adapter.getAnnotationName(nextId) : "";
         this.input.value = this.storedValue;
         this.input.disabled = !nextId;
-        this.input.placeholder = nextId ? "Unnamed annotation" : "Select one annotation";
+        // Keep the editor off-toolbar when idle; never show "Select one annotation" chrome.
+        this.input.placeholder = nextId ? "Unnamed annotation" : "";
         this.input.setCustomValidity("");
         this.input.setAttribute("aria-invalid", "false");
+        this.input.setAttribute("aria-hidden", nextId ? "false" : "true");
         this.input.title = "";
         if (!nextId) this.endInlineEdit();
     }
@@ -102,17 +104,28 @@ class AnnotationNameEditor {
 
     endInlineEdit() {
         if (!this.editing && !this.hostElement) {
-            this.input.hidden = true;
+            this.parkInput();
             return;
         }
         const host = this.hostElement;
         const wasEditing = this.editing;
         this.editing = false;
         this.hostElement = null;
-        if (this.input.parentElement) this.input.remove();
-        this.input.hidden = true;
+        this.parkInput();
         host?.classList.remove("is-editing");
         if (wasEditing) this.editingEnded(this.selectedId);
+    }
+
+    /** Keep the editor out of the header toolbar flex row when idle. */
+    parkInput() {
+        this.input.hidden = true;
+        this.input.disabled = !this.selectedId;
+        const portal = document.getElementById("annotation-name-portal");
+        if (portal && this.input.parentElement !== portal) {
+            portal.appendChild(this.input);
+        } else if (!portal && this.input.parentElement) {
+            this.input.remove();
+        }
     }
 
     commit() {

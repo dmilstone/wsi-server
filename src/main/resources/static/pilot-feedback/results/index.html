@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pilot Feedback Results — WSI Viewer</title>
+<link rel="stylesheet" href="/pilot-feedback.css">
+</head>
+<body class="pilot-page">
+<main class="pilot-shell">
+    <header class="pilot-header">
+        <div>
+            <h1>Pilot Feedback Results</h1>
+            <p>Authenticated summary for pilot evaluators. Future LDAP/ADMIN restrictions can be layered on this view.</p>
+        </div>
+        <nav class="pilot-nav-links" aria-label="Pilot feedback navigation">
+            <a href="/">Return to Viewer</a>
+            <a href="/pilot-feedback">Submit feedback</a>
+            <a id="export-json" href="/api/pilot-feedback/export.json">Export JSON</a>
+            <a id="export-csv" href="/api/pilot-feedback/export.csv">Export CSV</a>
+        </nav>
+    </header>
+    <section class="pilot-results" aria-live="polite">
+        <div class="pilot-view-toggle" role="group" aria-label="Response view mode">
+            <button type="button" id="view-all" aria-pressed="true">All responses</button>
+            <button type="button" id="view-dedup" aria-pressed="false">Deduplicated</button>
+        </div>
+        <p id="refresh-meta" class="pilot-refresh-meta">Loading…</p>
+        <div id="summary-cards" class="pilot-summary-grid"></div>
+        <div id="task-charts" class="pilot-chart-block"></div>
+        <div id="rating-charts" class="pilot-chart-block"></div>
+        <div id="responder-table" class="pilot-chart-block"></div>
+        <div id="free-text" class="pilot-chart-block"></div>
+    </section>
+</main>
+<script src="/csrf.js"></script>
+<script src="/pilot-feedback-results.js"></script>
+</body>
+</html>

@@ -4,8 +4,15 @@
  * The backend stores one complete AnnotationCollection per image/user. Browser
  * edits are therefore debounced and persisted with PUT rather than individual
  * create/update/delete requests.
+ *
+ * Workstation isolation: this adapter reads `wsi.workstation.id` from
+ * localStorage and injects `X-WSI-User` on every annotation GET/PUT it drives
+ * through AnnotationStore (cookie mirror remains AnnotationStore's job).
  */
 class AnnotationAdapter {
+
+    static WORKSTATION_STORAGE_KEY = "wsi.workstation.id";
+    static USER_HEADER = "X-WSI-User";
 
     constructor(annotator, timingCallbacks = {}) {
         this.annotator = annotator;
@@ -16,9 +23,13 @@ class AnnotationAdapter {
         this.suppressEvents = false;
         this.replacementQueue = Promise.resolve();
 
-        // AnnotationStore owns lifecycle and persistence; this adapter only maps
-        // between the backend document and Annotorious' geometry model.
+        // Create/persist workstation id from localStorage before any canvas GET/PUT.
+        this.workstationUserId = AnnotationAdapter.resolveWorkstationUserId();
+
+        // AnnotationStore owns lifecycle; this adapter supplies the fetch that
+        // always attaches X-WSI-User from localStorage for GET/PUT.
         this.store = new AnnotationStore({
+            fetchImpl: (url, options) => AnnotationAdapter.workstationFetch(url, options),
             reconcileSavedCollection: (_local, saved) => {
                 this.reconcileSavedMetadata(saved);
                 return this.toBackendCollection();
@@ -45,7 +56,67 @@ class AnnotationAdapter {
         });
     }
 
+    /**
+     * Read `wsi.workstation.id` from localStorage (sanitized). Empty when absent.
+     */
+    static readWorkstationIdFromLocalStorage() {
+        try {
+            const storage = (typeof window !== "undefined" && window.localStorage)
+                || (typeof localStorage !== "undefined" ? localStorage : null);
+            if (!storage) return "";
+            return AnnotationStore.sanitizeUserToken(
+                storage.getItem(AnnotationAdapter.WORKSTATION_STORAGE_KEY)
+            );
+        } catch (error) {
+            console.warn("AnnotationAdapter: unable to read wsi.workstation.id from localStorage", error);
+            return "";
+        }
+    }
+
+    /**
+     * Prefer the localStorage workstation id; otherwise create/persist via store.
+     */
+    static resolveWorkstationUserId() {
+        const fromStorage = AnnotationAdapter.readWorkstationIdFromLocalStorage();
+        if (fromStorage) {
+            AnnotationStore.persistWorkstationIdentity(
+                fromStorage,
+                AnnotationStore.localStorageOrNull()
+            );
+            AnnotationStore.workstationUserIdCache = fromStorage;
+            return fromStorage;
+        }
+        return AnnotationStore.resolveWorkstationUserId();
+    }
+
+    /**
+     * Headers every annotation GET/PUT must carry for per-workstation isolation.
+     */
+    static workstationRequestHeaders(extra = {}) {
+        const workstationId = AnnotationAdapter.resolveWorkstationUserId();
+        const merged = { ...(extra || {}) };
+        merged[AnnotationAdapter.USER_HEADER] = workstationId;
+        return merged;
+    }
+
+    /**
+     * GET/PUT fetch wrapper: always injects X-WSI-User from localStorage.
+     * Mutating methods keep going through WsiCsrf.csrfFetch.
+     */
+    static workstationFetch(url, options = {}) {
+        const opts = options || {};
+        const headers = AnnotationAdapter.workstationRequestHeaders(opts.headers);
+        const method = String(opts.method || "GET").toUpperCase();
+        const next = { ...opts, headers };
+        if (method === "GET" || method === "HEAD") {
+            return fetch(url, next);
+        }
+        return WsiCsrf.csrfFetch(url, next);
+    }
+
     async loadCurrentImage(imageId) {
+        // Re-read localStorage before the store's annotation GET.
+        this.workstationUserId = AnnotationAdapter.resolveWorkstationUserId();
         await this.store.load(imageId);
     }
 
@@ -65,6 +136,8 @@ class AnnotationAdapter {
     }
 
     collectionEdited() {
+        // Re-read localStorage before the store's debounced annotation PUT.
+        this.workstationUserId = AnnotationAdapter.resolveWorkstationUserId();
         this.store.updateCollection(this.toBackendCollection());
     }
 

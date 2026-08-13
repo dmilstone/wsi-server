@@ -18,6 +18,11 @@ build/
 # Local WSI ingestion configuration/state
 ops/wsi-ingest.conf
 ops/.wsi-ops-audit.jsonl
+ops/.wsi-ops-dashboard.pid
+ops/.wsi-ops-dashboard.log
+ops/.wsi-ops-dashboard.launchd.out.log
+ops/.wsi-ops-dashboard.launchd.err.log
+ops/.env.local
 __pycache__/
 *.py[cod]
 

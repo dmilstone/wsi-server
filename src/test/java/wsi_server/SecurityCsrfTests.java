@@ -114,6 +114,60 @@ class SecurityCsrfTests {
                 .andExpect(content().contentTypeCompatibleWith("application/pdf"));
     }
 
+    @Test
+    void userAdministrationGuideRequiresAuthentication() throws Exception {
+        mockMvc.perform(get("/help"))
+                .andExpect(status().is3xxRedirection());
+        mockMvc.perform(get("/api/help/download-pdf"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    void authenticatedUserCanOpenUserAdministrationGuideAndPdf() throws Exception {
+        mockMvc.perform(get("/help").with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Administration &amp; Ops Guide")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("/api/help/download-pdf")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("LEGAL DISCLAIMER")));
+        mockMvc.perform(get("/api/help/download-pdf").with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("application/pdf"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Content-Disposition", org.hamcrest.Matchers.containsString("WSI-User-Administration-Guide.pdf")));
+    }
+
+    @Test
+    void pilotFeedbackPagesRequireAuthentication() throws Exception {
+        mockMvc.perform(get("/pilot-feedback"))
+                .andExpect(status().is3xxRedirection());
+        mockMvc.perform(get("/pilot-feedback/results"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    void authenticatedUserCanOpenPilotFeedbackPages() throws Exception {
+        mockMvc.perform(get("/pilot-feedback").with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl("/pilot-feedback/index.html"));
+        mockMvc.perform(get("/pilot-feedback/results").with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl("/pilot-feedback/results/index.html"));
+    }
+
+    @Test
+    void dashboardRequiresAuthentication() throws Exception {
+        mockMvc.perform(get("/dashboard"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    void authenticatedUserCanOpenDashboard() throws Exception {
+        mockMvc.perform(get("/dashboard").with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl("/local-operations/index.html"));
+    }
+
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder displayUpdate() {
         return put("/api/images/sample/display")
                 .contentType("application/json")

@@ -1,0 +1,5 @@
+
+# Medical Device Workstation Scoping
+- All client-to-server payload pipelines must transparently transmit the 'X-WSI-User' workstation header.
+- The persistence layers must enforce distinct, machine-specific sub-folders under 'wsi.annotations.directory'.
+- Do not fall back to global shared profiles (such as 'local') for multi-client operational environments.

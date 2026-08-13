@@ -9,8 +9,10 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@latest/dist/annotorious-openseadragon.css">
     <script src="https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@latest/dist/annotorious-openseadragon.js"></script>
     <script src="/csrf.js"></script>
-    <script src="/annotation-store.js"></script>
-    <script src="/annotation-adapter.js"></script>
+    <script src="/pilot-feedback.js"></script>
+    <link rel="stylesheet" href="/pilot-feedback.css">
+    <script src="/annotation-store.js?v=20260812-ws2"></script>
+    <script src="/annotation-adapter.js?v=20260812-ws2"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -206,6 +208,22 @@
             scrollbar-width: thin;
             scrollbar-color: #405064 transparent;
             z-index: 16;
+        }
+        /* Keep Settings / Dashboard / Help out of the scrolling tray so they stay on-screen. */
+        .header-app-nav {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            margin-left: 4px;
+            z-index: 17;
+        }
+        .header-app-nav .app-toolbar {
+            justify-content: flex-end;
+        }
+        .header-app-nav .app-group {
+            margin-left: 0;
+            padding-left: 0;
+            border-left: 0;
         }
         #reveal-left, #reveal-right {
             grid-column: 1;
@@ -467,6 +485,38 @@
             content: "Aa"; font-size: 11px; font-weight: 750; line-height: 1;
             color: rgba(255,255,255,.84); letter-spacing: -.02em;
         }
+        /* Shown only when development (or admin token) allows it. */
+        #dashboard-link.toolbar-button {
+            display: none !important;
+            width: auto;
+            min-width: 28px;
+            padding: 0 8px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .02em;
+            color: #d7e3ef;
+            border: 1px solid rgba(77, 148, 216, .45);
+            background: rgba(52, 127, 194, .18);
+        }
+        #dashboard-link.toolbar-button.is-env-allowed {
+            display: inline-grid !important;
+        }
+        .header-app-nav .guide-link.toolbar-button {
+            display: inline-grid;
+            width: auto;
+            min-width: 28px;
+            max-width: 11.5rem;
+            padding: 0 8px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .01em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #d7e3ef;
+            border: 1px solid rgba(148, 163, 184, .35);
+            background: rgba(255, 255, 255, .04);
+        }
         .annotation-name-layer { position: absolute; inset: 0; z-index: 11; overflow: hidden; pointer-events: none; }
         .annotation-name-layer[hidden] { display: none; }
         .annotation-name-label {
@@ -487,6 +537,15 @@
             box-shadow: 0 0 0 1px rgba(77, 148, 216, .35), 0 1px 3px rgba(0,0,0,.9);
         }
         .annotation-name-label.is-placeholder { font-style: italic; font-weight: 650; color: rgba(255,255,255,.82); }
+        /* Off-header parking for the name editor; never participates in toolbar flex layout. */
+        #annotation-name-portal {
+            display: none !important;
+            position: absolute;
+            width: 0;
+            height: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
         .annotation-name-inline-input {
             display: block; width: min(200px, 36vw); min-width: 72px; max-width: 220px;
             height: 22px; box-sizing: border-box; margin: 0; padding: 1px 4px;
@@ -609,6 +668,7 @@
         .presentation-mode aside, .presentation-mode .resize-handle { visibility: hidden; overflow: hidden; }
         .presentation-mode .viewer-badge, .presentation-mode .panel-reveal { display: none; }
         .presentation-mode .tools-tray { visibility: hidden; overflow: hidden; flex: 0 0 0; max-width: 0; }
+        .presentation-mode .header-app-nav { visibility: hidden; overflow: hidden; flex: 0 0 0; max-width: 0; }
         .presentation-exit {
             display:none; position:absolute; right:16px; top:16px; z-index:20;
             width: auto; min-width: 38px; height: auto; min-height: 36px;
@@ -733,15 +793,20 @@
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="8"/><path d="M5 13.5h6"/></svg>
                 </button>
             </div>
-            <div class="toolbar-group app-group" role="group" aria-label="Settings and help">
+        </div>
+    </div>
+    <nav id="header-app-nav" class="header-app-nav" aria-label="Settings, dashboard, and manuals">
+        <div class="viewer-toolbar app-toolbar" role="toolbar" aria-label="Settings, dashboard, and manuals">
+            <div class="toolbar-group app-group" role="group" aria-label="Settings, dashboard, and manuals">
                 <button id="toggle-right" class="toolbar-button" type="button" data-tooltip="Settings&#10;Show or hide display controls" title="Settings — Show or hide display controls" aria-label="Settings" aria-pressed="true">
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.5v1.4M8 12.1v1.4M2.5 8h1.4M12.1 8h1.4M4.1 4.1l1 1M10.9 10.9l1 1M11.9 4.1l-1 1M5.1 10.9l-1 1"/></svg>
                 </button>
-                <a id="viewer-help" class="toolbar-button" href="/help/viewer-guide.html" target="_blank" rel="noopener" data-tooltip="Help&#10;Open the WSI Viewer quick guide" title="Help — Open the WSI Viewer quick guide" aria-label="Help"><span class="help-link-symbol" aria-hidden="true">?</span><span class="visually-hidden">Help</span></a>
+                <a id="dashboard-link" class="toolbar-button" href="http://127.0.0.1:8084/" target="_blank" rel="noopener" data-tooltip="Dashboard&#10;Open the local operations dashboard on 127.0.0.1:8084" title="Dashboard — Open the local operations dashboard on 127.0.0.1:8084" aria-label="Dashboard">Dashboard</a>
+                <a id="viewer-quick-guide-link" class="toolbar-button guide-link" href="/help/viewer-guide.html" target="_blank" rel="noopener" data-tooltip="Viewer Quick Guide&#10;Open the WSI Viewer quick guide" title="Viewer Quick Guide — Open the WSI Viewer quick guide" aria-label="Viewer Quick Guide">Viewer Quick Guide</a>
+                <a id="admin-ops-guide-link" class="toolbar-button guide-link" href="/help" target="_blank" rel="noopener" data-tooltip="Admin &amp; Ops Guide&#10;Open the administration and operations guide" title="Admin &amp; Ops Guide — Open the administration and operations guide" aria-label="Admin &amp; Ops Guide">Admin &amp; Ops Guide</a>
             </div>
         </div>
-    </div>
-    <input id="annotation-name" class="annotation-name-inline-input" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Unnamed annotation" hidden disabled>
+    </nav>
 </header>
 <div class="workspace">
     <aside id="images-panel" aria-label="Image browser">
@@ -792,6 +857,16 @@
                 </figure>
             </div>
         </section>
+        <section id="pilot-feedback-panel" class="pilot-feedback-panel" hidden aria-label="Pilot Feedback">
+            <div class="pilot-feedback-panel-header">
+                <h2 class="pilot-feedback-panel-title">Pilot Feedback</h2>
+                <div class="pilot-feedback-panel-controls">
+                    <button id="pilot-feedback-minimize" type="button" aria-label="Minimize pilot feedback panel" title="Minimize">−</button>
+                    <button id="pilot-feedback-close" type="button" aria-label="Close pilot feedback panel" title="Close">×</button>
+                </div>
+            </div>
+            <div id="pilot-feedback-panel-body" class="pilot-feedback-panel-body"></div>
+        </section>
         <section id="image-lightbox" class="image-lightbox" hidden role="dialog" aria-modal="true" aria-labelledby="image-lightbox-title">
             <div class="image-lightbox-header">
                 <h2 id="image-lightbox-title" class="image-lightbox-title">Image</h2>
@@ -825,8 +900,9 @@
             <div class="muted">Choose visible channels and adjust how signal is displayed.</div>
             <div class="display-actions"><button id="reset" class="action" disabled>Reset display</button><button id="recompute-auto" class="action" disabled>Recompute auto</button></div>
             <div class="panel-secondary-actions">
-                <a id="local-operations" class="panel-secondary-link" href="http://127.0.0.1:8084/" target="_blank" rel="noopener" title="Available only in a browser running on the image server">Local operations</a>
-                <span class="muted">Image-server browser only</span>
+                <a id="pilot-feedback-link" class="panel-secondary-link" href="/pilot-feedback" title="Open full-page pilot feedback form (shortcut F in viewer)">Pilot Feedback</a>
+                <a id="local-operations" class="panel-secondary-link" href="/local-operations/" title="Local operations dashboard (image-server browser only)">Local operations</a>
+                <span class="muted">Press F in the viewer to toggle the feedback panel</span>
             </div>
         </div>
         <div id="channels"></div>
@@ -938,9 +1014,104 @@
         return response.json();
     }
 
-    async function initialize() {
+    const ADMIN_TOKEN_COOKIE = "WSI-ADMIN-TOKEN";
+    const ADMIN_TOKEN_STORAGE_KEY = "wsi.admin.token";
+
+    /** True when an authenticated admin session token is present (cookie or storage). */
+    function hasAuthenticatedAdminToken() {
         try {
-            await WsiEnvironment.initialize(document, window.fetch.bind(window));
+            const stored = window.localStorage?.getItem(ADMIN_TOKEN_STORAGE_KEY)
+                || window.sessionStorage?.getItem(ADMIN_TOKEN_STORAGE_KEY);
+            if (stored && String(stored).trim()) return true;
+        } catch (_) {
+            // Storage may be unavailable; fall through to cookie.
+        }
+        try {
+            return document.cookie.split(";").some(part => {
+                const [name, ...rest] = part.trim().split("=");
+                return name === ADMIN_TOKEN_COOKIE && rest.join("=").trim().length > 0;
+            });
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /**
+     * Dashboard is visible only when wsi.environment is development, or when the
+     * browser holds an authenticated admin token (WSI-ADMIN-TOKEN / wsi.admin.token).
+     * When :8084 is listening, open the absolute loopback URL. When it is down,
+     * send the operator to the same-origin gate with start instructions (daemon
+     * mode) instead of a browser connection-refused page.
+     */
+    const DASHBOARD_ABSOLUTE_URL = "http://127.0.0.1:8084/";
+    const DASHBOARD_GATE_URL = "/local-operations/?dashboard=required";
+
+    function isDevelopmentEnvironment(environment) {
+        const normalized = String(environment || "").trim().toLowerCase();
+        if (normalized === "development") return true;
+        // Fallbacks if initialize raced or returned an unexpected value but the
+        // standard non-production UI markers were already applied.
+        const title = String(document.title || "");
+        if (title.includes("[DEV]")) return true;
+        const banner = document.getElementById("environment-banner");
+        if (banner && /DEVELOPMENT/i.test(banner.textContent || "")) return true;
+        return false;
+    }
+
+    function syncDashboardLinkVisibility(environment) {
+        const link = document.getElementById("dashboard-link");
+        if (!link) return;
+        const allowed = isDevelopmentEnvironment(environment) || hasAuthenticatedAdminToken();
+        link.classList.toggle("is-env-allowed", allowed);
+        link.hidden = !allowed;
+        if (allowed) {
+            link.removeAttribute("aria-disabled");
+            link.removeAttribute("tabindex");
+        } else {
+            link.setAttribute("aria-disabled", "true");
+            link.setAttribute("tabindex", "-1");
+        }
+    }
+
+    async function localOpsDashboardIsListening() {
+        try {
+            const response = await fetch("/api/local-ops/status", {
+                headers: { "Accept": "application/json" },
+                credentials: "same-origin"
+            });
+            if (!response.ok) return false;
+            const body = await response.json();
+            return body && body.listening === true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function bindDashboardOutboundNavigation() {
+        const link = document.getElementById("dashboard-link");
+        if (!link || link.dataset.outboundBound === "true") return;
+        link.dataset.outboundBound = "true";
+        link.setAttribute("href", DASHBOARD_ABSOLUTE_URL);
+        link.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            void (async () => {
+                const listening = await localOpsDashboardIsListening();
+                if (listening) {
+                    window.open(DASHBOARD_ABSOLUTE_URL, "_blank", "noopener");
+                    return;
+                }
+                window.location.assign(DASHBOARD_GATE_URL);
+            })();
+        });
+    }
+
+    async function initialize() {
+        let environment = "production";
+        try {
+            environment = await WsiEnvironment.initialize(document, window.fetch.bind(window));
+            bindDashboardOutboundNavigation();
+            syncDashboardLinkVisibility(environment);
             await WsiCsrf.initialize();
             imageInfoElement.open = localStorage.getItem(`${STORAGE_PREFIX}.imageInfoOpen`) !== "closed";
             const result = await request("/api/images");
@@ -958,8 +1129,21 @@
             liveDiscovery.start();
         } catch (error) {
             showError(error);
+        } finally {
+            // Re-assert after init/errors so a later failure cannot leave Dev without Dashboard.
+            bindDashboardOutboundNavigation();
+            syncDashboardLinkVisibility(environment);
         }
     }
+
+    // If the environment banner flips to DEVELOPMENT after paint, reveal Dashboard.
+    const environmentBanner = document.getElementById("environment-banner");
+    if (environmentBanner && typeof MutationObserver === "function") {
+        new MutationObserver(() => syncDashboardLinkVisibility(null))
+            .observe(environmentBanner, { childList: true, characterData: true, subtree: true, attributes: true });
+    }
+    bindDashboardOutboundNavigation();
+    syncDashboardLinkVisibility(null);
 
     function renderImageList(images) {
         imageListElement.replaceChildren();
@@ -1945,12 +2129,60 @@
     document.getElementById("presentation-exit").addEventListener("click", () => setPresentationMode(false));
     document.addEventListener("keydown", event => {
         if (event.key !== "Escape") return;
-        if (!imageLightbox.hidden) closeImageLightbox();
+        if (!pilotFeedbackPanel.hidden) setPilotFeedbackVisible(false);
+        else if (!imageLightbox.hidden) closeImageLightbox();
         else if (!slideOverview.hidden) setSlideOverviewVisible(false);
         else if (document.body.classList.contains("presentation-mode")) setPresentationMode(false);
     });
 
+    const pilotFeedbackPanel = document.getElementById("pilot-feedback-panel");
+    const pilotFeedbackPanelBody = document.getElementById("pilot-feedback-panel-body");
+    let pilotFeedbackMounted = false;
+    let pilotFeedbackMinimized = false;
+
+    function setPilotFeedbackVisible(visible) {
+        pilotFeedbackPanel.hidden = !visible;
+        pilotFeedbackMinimized = false;
+        pilotFeedbackPanel.classList.remove("minimized");
+        if (visible && !pilotFeedbackMounted) {
+            WsiPilotFeedback.mountForm(pilotFeedbackPanelBody, {compact: true, showReturnLinks: true});
+            pilotFeedbackMounted = true;
+        }
+        if (visible) {
+            const firstField = pilotFeedbackPanel.querySelector("input, select, textarea, button");
+            firstField?.focus();
+        }
+    }
+
+    function togglePilotFeedbackPanel() {
+        setPilotFeedbackVisible(pilotFeedbackPanel.hidden);
+    }
+
+    document.getElementById("pilot-feedback-close").addEventListener("click", () => setPilotFeedbackVisible(false));
+    document.getElementById("pilot-feedback-minimize").addEventListener("click", () => {
+        pilotFeedbackMinimized = !pilotFeedbackMinimized;
+        pilotFeedbackPanel.classList.toggle("minimized", pilotFeedbackMinimized);
+        pilotFeedbackPanelBody.hidden = pilotFeedbackMinimized;
+    });
+    document.getElementById("pilot-feedback-link").addEventListener("click", (event) => {
+        if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) {
+            event.preventDefault();
+            togglePilotFeedbackPanel();
+        }
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (!WsiPilotFeedback.shouldHandleShortcut(event)) return;
+        if (event.key.toUpperCase() === WsiPilotFeedback.SHORTCUT_KEY) {
+            event.preventDefault();
+            togglePilotFeedbackPanel();
+        }
+    });
+
     initialize();
 </script>
+<div id="annotation-name-portal" aria-hidden="true">
+    <input id="annotation-name" class="annotation-name-inline-input" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Unnamed annotation" hidden disabled>
+</div>
 </body>
 </html>

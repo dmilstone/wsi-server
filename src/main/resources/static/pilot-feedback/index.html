@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pilot Feedback — WSI Viewer</title>
+<link rel="stylesheet" href="/pilot-feedback.css">
+</head>
+<body class="pilot-page">
+<main class="pilot-shell">
+    <header class="pilot-header">
+        <div>
+            <h1>Pilot Feedback</h1>
+            <p>Share your experience using the WSI Viewer during the pilot evaluation.</p>
+        </div>
+        <nav class="pilot-nav-links" aria-label="Pilot feedback navigation">
+            <a href="/">Return to Viewer</a>
+            <a href="/pilot-feedback/results">View results dashboard</a>
+        </nav>
+    </header>
+    <div id="pilot-feedback-root"></div>
+    <nav class="pilot-nav-links" aria-label="Return to viewer">
+        <a href="/">Return to Viewer</a>
+    </nav>
+</main>
+<script src="/csrf.js"></script>
+<script src="/pilot-feedback.js"></script>
+<script>
+(async function () {
+    await WsiCsrf.initialize();
+    WsiPilotFeedback.mountForm(document.getElementById("pilot-feedback-root"), {compact: false});
+    document.addEventListener("keydown", (event) => {
+        if (!WsiPilotFeedback.shouldHandleShortcut(event)) return;
+        if (event.key === "Escape" || event.key.toUpperCase() === WsiPilotFeedback.SHORTCUT_KEY) {
+            window.location.assign("/");
+        }
+    });
+})();
+</script>
+</body>
+</html>
