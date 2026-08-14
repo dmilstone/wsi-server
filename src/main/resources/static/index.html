@@ -12,7 +12,7 @@
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260813-zmovie7"></script>
+    <script src="/annotation-adapter.js?v=20260813-measure7"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -889,6 +889,143 @@
         .discovery-controls { display:flex; align-items:center; gap:8px; margin-top:8px; }
         .discovery-controls .action { padding:5px 9px; }
         .discovery-status { font-size:11px; color:var(--muted); }
+
+        /* Micron measurement overlay + result dialog. */
+        .viewer-stage.measure-mode-active #viewer,
+        .viewer-stage.measure-mode-active #viewer .openseadragon-canvas {
+            cursor: crosshair !important;
+        }
+        /* Tracking SVG is created by AnnotationAdapter on the OSD container. */
+        .wsi-measure-overlay {
+            position: absolute !important;
+            inset: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            z-index: 100000 !important;
+            pointer-events: none !important;
+            overflow: visible !important;
+        }
+        .measure-dialog {
+            position: fixed;
+            inset: 0;
+            z-index: 55;
+            display: grid;
+            place-items: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, .55);
+            backdrop-filter: blur(4px);
+        }
+        .measure-dialog[hidden] { display: none !important; }
+        .measure-dialog-panel {
+            width: min(420px, 100%);
+            padding: 16px 16px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--border-strong);
+            background: var(--surface-raised);
+            box-shadow: var(--shadow);
+            color: var(--text);
+        }
+        .measure-dialog-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .measure-dialog-title { margin: 0; font-size: 15px; font-weight: 750; }
+        .measure-dialog-close {
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+        }
+        .measure-dialog-close:hover { color: var(--text); background: var(--surface-hover); }
+        .measure-dialog-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 14px;
+        }
+        .measure-dialog-table th,
+        .measure-dialog-table td {
+            padding: 8px 6px;
+            text-align: left;
+            vertical-align: middle;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .measure-dialog-table th {
+            width: 38%;
+            color: var(--text-muted);
+            font-weight: 650;
+        }
+        .measure-dialog-table input[type="text"] {
+            width: 100%;
+            min-height: 32px;
+            padding: 6px 8px;
+            border-radius: 7px;
+            border: 1px solid var(--border-strong);
+            background: rgba(0,0,0,.28);
+            color: var(--text);
+            font: 600 13px/1.3 Inter, ui-sans-serif, system-ui, sans-serif;
+        }
+        .measure-dialog-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .measure-dialog-actions .action {
+            min-height: 34px;
+            padding: 7px 12px;
+        }
+        .measure-session-panel {
+            margin: 8px 10px 10px;
+            padding: 8px 10px 10px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: rgba(0, 0, 0, .22);
+        }
+        .measure-session-panel[hidden] { display: none !important; }
+        .measure-session-title {
+            margin: 0 0 6px;
+            font-size: 12px;
+            font-weight: 750;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .measure-session-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            max-height: 160px;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .measure-session-list li {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 5px 6px;
+            border-radius: 6px;
+            background: rgba(255,255,255,.04);
+            font-size: 12px;
+            color: var(--text);
+        }
+        .measure-session-list .measure-session-length {
+            color: #ffea00;
+            font-variant-numeric: tabular-nums;
+            font-weight: 700;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
@@ -925,6 +1062,9 @@
             <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
                 <button id="annotation-mode" class="toolbar-button" type="button" data-tooltip="Rectangle&#10;Draw a rectangular annotation" title="Rectangle — Draw a rectangular annotation" aria-label="Rectangle" aria-pressed="false" disabled>
                     <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="4" width="10" height="8" stroke-dasharray="2 1.5"/></svg>
+                </button>
+                <button id="measure-mode" class="toolbar-button" type="button" data-tooltip="Ruler / Measure&#10;Click and drag to measure microns on the slide" title="Ruler / Measure — Click and drag to measure microns on the slide" aria-label="Ruler / Measure" aria-pressed="false" disabled>
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 11.5 11.5 2.5"/><path d="M4.2 9.8l1.1-1.1M6 8l1.1-1.1M7.8 6.2l1.1-1.1M9.6 4.4l1.1-1.1"/><path d="M3.2 12.5h2.2M10.5 3.2v2.2"/></svg>
                 </button>
             </div>
             <div class="toolbar-group visibility-group" role="group" aria-label="Annotation visibility">
@@ -992,6 +1132,30 @@
     <main class="viewer-main" aria-label="Whole-slide image viewer">
         <div class="viewer-stage">
         <div id="viewer"></div>
+        <div id="measure-dialog" class="measure-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="measure-dialog-title">
+            <div class="measure-dialog-panel">
+                <div class="measure-dialog-header">
+                    <h2 id="measure-dialog-title" class="measure-dialog-title">Measurement</h2>
+                    <button id="measure-dialog-close" class="measure-dialog-close" type="button" aria-label="Close measurement">×</button>
+                </div>
+                <table class="measure-dialog-table">
+                    <tbody>
+                        <tr>
+                            <th scope="row">Measured Length</th>
+                            <td id="measure-dialog-length">—</td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="measure-dialog-label">Label/Notes</label></th>
+                            <td><input id="measure-dialog-label" type="text" maxlength="120" placeholder="e.g. Core Diameter" autocomplete="off"></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="measure-dialog-actions">
+                    <button id="measure-dialog-copy" class="action" type="button">Copy to Clipboard</button>
+                    <button id="measure-dialog-save" class="action" type="button">Save to Session List</button>
+                </div>
+            </div>
+        </div>
         <section id="slide-overview" class="slide-overview" hidden aria-label="Slide label and thumbnail overview">
             <div class="slide-overview-header">
                 <h2 class="slide-overview-title">Slide overview</h2>
@@ -1079,6 +1243,10 @@
                 </div>
             </div>
         </div>
+        <div id="measure-session-panel" class="measure-session-panel" hidden aria-label="Session measurements">
+            <h3 class="measure-session-title">Session measurements</h3>
+            <ul id="measure-session-list" class="measure-session-list"></ul>
+        </div>
         <div class="panel-header">
             <div class="panel-title-row"><h2>Channels</h2><button class="panel-toggle" data-collapse="right" title="Hide display controls" aria-label="Hide display controls">›</button></div>
             <div class="display-actions"><button id="reset" class="action" disabled>Reset display</button><button id="recompute-auto" class="action" disabled>Recompute auto</button></div>
@@ -1120,6 +1288,8 @@
     const seriesSelectControl = document.getElementById("series-select-control");
     const seriesSelect = document.getElementById("series-select");
     const Z_MOVIE_INTERVAL_MS = 500;
+    const measureModeButton = document.getElementById("measure-mode");
+    const viewerStage = document.querySelector(".viewer-stage");
 
     const statusElement = document.getElementById("status");
     const imageListElement = document.getElementById("image-list");
@@ -1404,6 +1574,7 @@
                 console.warn("Unable to prefetch annotations", error)
             );
             clearPixelReadout();
+            if (AnnotationAdapter.isMeasurementModeActive) setMeasurementModeActive(false);
             document.querySelectorAll(".image-button").forEach(button =>
                 button.classList.toggle("active", button.dataset.imageId === image.id)
             );
@@ -1438,10 +1609,12 @@
             document.getElementById("selected-name").textContent = image.name;
             imageInfoElement.hidden = false;
             applyMetadataInfoPanel();
+            AnnotationAdapter.setImageMetadata(metadata);
             syncZStackControl(metadata);
             resetButton.disabled = false;
             recomputeAutoButton.disabled = false;
             slideOverviewButton.disabled = false;
+            if (measureModeButton) measureModeButton.disabled = false;
             if (!slideOverview.hidden) refreshSlideOverview();
             renderChannels();
             openViewer();
@@ -1684,6 +1857,7 @@
             ]);
             syncSeriesSelectControl(metadata);
             applyMetadataInfoPanel();
+            AnnotationAdapter.setImageMetadata(metadata);
             syncZStackControl(metadata);
             const saved = loadLocalDisplay(selectedImage.id, currentSeries);
             if (saved && compatibleDisplay(saved, display)) {
@@ -1789,9 +1963,11 @@
                     dblClickToZoom: false
                 }
             });
+            AnnotationAdapter.setViewer(viewer);
             viewer.addHandler("animation", updateViewerStatus);
             viewer.addHandler("zoom", updateViewerStatus);
             viewer.addHandler("open", updateViewerStatus);
+            bindMeasureMouseTracker(viewer);
             annotationSpike = new AnnotoriousSpike(
                 viewer,
                 document.getElementById("annotation-mode"),
@@ -2493,6 +2669,116 @@
             console.warn("Viewer viewport action skipped:", error);
         }
     }
+
+    function clearMeasureOverlay() {
+        AnnotationAdapter.clearMeasureVector({ remove: false });
+    }
+
+    function setMeasurementModeActive(active) {
+        const enabled = Boolean(active) && Boolean(viewer) && Boolean(metadata);
+        AnnotationAdapter.ensureMeasurementDefaults();
+        AnnotationAdapter.setViewer(viewer);
+        AnnotationAdapter.getActiveImageId = () => selectedImage?.id || null;
+        // Toolbar toggle only flips mode — no coordinates / no line draw.
+        AnnotationAdapter.setMeasurementModeActive(enabled);
+        if (enabled) AnnotationAdapter.ensureMeasureOverlay(viewer.element || viewer.container);
+        if (measureModeButton) {
+            measureModeButton.setAttribute("aria-pressed", String(enabled));
+            measureModeButton.disabled = !metadata;
+        }
+        viewerStage?.classList.toggle("measure-mode-active", enabled);
+        if (!enabled) clearMeasureOverlay();
+        return enabled;
+    }
+
+    function renderMeasureSessionList(list = AnnotationAdapter.measurementSessionList) {
+        const panel = document.getElementById("measure-session-panel");
+        const ul = document.getElementById("measure-session-list");
+        if (!panel || !ul) return;
+        const rows = Array.isArray(list) ? list : [];
+        panel.hidden = rows.length === 0;
+        ul.replaceChildren(...rows.slice().reverse().map(entry => {
+            const li = document.createElement("li");
+            const name = document.createElement("span");
+            name.textContent = entry.label || entry.lengthLabel || "Measurement";
+            const len = document.createElement("span");
+            len.className = "measure-session-length";
+            len.textContent = entry.lengthLabel || "";
+            li.append(name, len);
+            return li;
+        }));
+    }
+
+    function onMeasurementComplete(microns, snapshot) {
+        if (microns != null && microns > 0) {
+            const entry = snapshot?.entry;
+            statusElement.textContent = entry
+                ? `Saved ${entry.label} · session list ${AnnotationAdapter.measurementSessionList.length}`
+                : `Saved measurement ${AnnotationAdapter.formatMicrons(microns)}`;
+            renderMeasureSessionList();
+            return;
+        }
+        if (microns == null) {
+            statusElement.textContent = "Measurement unavailable: slide is not calibrated (µm/px missing).";
+        }
+        clearMeasureOverlay();
+    }
+
+    function bindMeasureMouseTracker(osdViewer) {
+        AnnotationAdapter.onSessionListChange = (list) => renderMeasureSessionList(list);
+        AnnotationAdapter.getActiveImageId = () => selectedImage?.id || null;
+        AnnotationAdapter.bindMeasureMouseTracker(osdViewer, {
+            onMeasurementComplete
+        });
+    }
+
+    /** Enter/Return saves & closes active naming / dialog overlays without mouse use. */
+    function bindEnterToCommitOverlays() {
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" || event.isComposing || event.defaultPrevented) return;
+            if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+            const exportDialog = document.getElementById("export-error-dialog");
+            if (exportDialog && !exportDialog.hidden) {
+                event.preventDefault();
+                document.getElementById("export-error-dialog-close")?.click();
+                return;
+            }
+
+            const measureDialogEl = document.getElementById("measure-dialog");
+            if (measureDialogEl && !measureDialogEl.hidden) {
+                event.preventDefault();
+                document.getElementById("measure-dialog-save")?.click();
+                return;
+            }
+
+            const nameInput = document.getElementById("annotation-name");
+            if (nameInput && !nameInput.hidden && !nameInput.disabled
+                && document.activeElement === nameInput) {
+                // AnnotationNameEditor handles Enter on the input; blur closes the naming view.
+                nameInput.blur();
+            }
+        });
+    }
+
+    measureModeButton?.addEventListener("click", () => {
+        if (!metadata || !viewer) return;
+        const next = !AnnotationAdapter.isMeasurementModeActive;
+        if (next && annotationSpike?.setDrawingEnabled) {
+            try { annotationSpike.setDrawingEnabled(false); } catch (_) { /* optional API */ }
+        }
+        // Leave rectangle tool visually off when entering measure mode.
+        const annotationModeButton = document.getElementById("annotation-mode");
+        if (next && annotationModeButton?.getAttribute("aria-pressed") === "true") {
+            annotationModeButton.click();
+        }
+        setMeasurementModeActive(next);
+        statusElement.textContent = next
+            ? "Measure mode: click and drag on the slide to measure microns."
+            : "Measure mode off.";
+    });
+
+    bindEnterToCommitOverlays();
 
     document.getElementById("home-view").addEventListener("click", () => withReadyViewport(viewport => viewport.goHome()));
     document.getElementById("zoom-in").addEventListener("click", () => withReadyViewport(viewport => {

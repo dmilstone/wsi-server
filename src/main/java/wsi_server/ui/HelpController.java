@@ -27,8 +27,9 @@ public class HelpController {
     public ResponseEntity<byte[]> downloadPdf() {
         byte[] pdf = UserAdministrationGuidePdf.render();
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + PDF_FILENAME + "\"")
                 .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "inline; filename=\"" + PDF_FILENAME + "\"")
                 .contentLength(pdf.length)
                 .body(pdf);
     }

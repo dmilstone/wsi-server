@@ -186,7 +186,7 @@ const appNavHtml = headerHtml.slice(headerHtml.indexOf('id="header-app-nav"'));
 const orderedIds = [
     "home-view", "toggle-left",
     "zoom-in", "zoom-out",
-    "annotation-mode",
+    "annotation-mode", "measure-mode",
     "annotation-visibility", "annotation-names",
     "export-visible-region", "export-selected-annotation",
     "slide-overview-button", "full-screen", "presentation"

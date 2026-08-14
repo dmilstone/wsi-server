@@ -15,7 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class ExportControllerTests {
     @Test
-    void returnsPngAsDownloadableAttachmentWithDefaultScale() throws Exception {
+    void returnsPngInlineWithNativeFilename() throws Exception {
         ExportService service = mock(ExportService.class);
         byte[] png = {(byte) 0x89, 0x50, 0x4e, 0x47};
         when(service.export(org.mockito.ArgumentMatchers.eq("slide"),
@@ -30,7 +30,11 @@ class ExportControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(content().contentType("image/png"))
                 .andExpect(header().string("Content-Disposition",
-                        "attachment; filename=\"region-1-2-30x40.png\""))
+                        org.hamcrest.Matchers.allOf(
+                                org.hamcrest.Matchers.containsString("inline"),
+                                org.hamcrest.Matchers.containsString("filename"),
+                                org.hamcrest.Matchers.containsString("region-1-2-30x40.png")
+                        )))
                 .andExpect(content().bytes(png));
 
         verify(service).export(org.mockito.ArgumentMatchers.eq("slide"),

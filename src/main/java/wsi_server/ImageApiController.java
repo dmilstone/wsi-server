@@ -1,9 +1,14 @@
 package wsi_server;
 
 import jakarta.servlet.http.HttpSession;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import wsi_server.api.*;
+
+import java.nio.charset.StandardCharsets;
 
 @RestController
 @RequestMapping("/api/images")
@@ -41,12 +46,12 @@ public class ImageApiController {
         return service.getAssociatedImageSeries(imageId);
     }
     @GetMapping(value = "/{imageId}/label.png", produces = MediaType.IMAGE_PNG_VALUE)
-    public byte[] label(@PathVariable String imageId) throws Exception {
-        return service.getSlideLabel(imageId);
+    public ResponseEntity<byte[]> label(@PathVariable String imageId) throws Exception {
+        return pngResponse(service.getSlideLabel(imageId), "slide-label.png");
     }
     @GetMapping(value = "/{imageId}/thumbnail.png", produces = MediaType.IMAGE_PNG_VALUE)
-    public byte[] thumbnail(@PathVariable String imageId, HttpSession session) throws Exception {
-        return service.getDisplayThumbnail(imageId, session);
+    public ResponseEntity<byte[]> thumbnail(@PathVariable String imageId, HttpSession session) throws Exception {
+        return pngResponse(service.getDisplayThumbnail(imageId, session), "slide-thumbnail.png");
     }
     @GetMapping("/{imageId}/display")
     public DisplayResponse display(@PathVariable String imageId,
@@ -87,5 +92,17 @@ public class ImageApiController {
                                          @RequestBody DisplayUpdateRequest request,
                                          HttpSession session) throws Exception {
         return service.updateDisplay(imageId, series, request, session);
+    }
+
+    private static ResponseEntity<byte[]> pngResponse(byte[] png, String filename) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_PNG)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.inline()
+                                .filename(filename, StandardCharsets.UTF_8)
+                                .build()
+                                .toString())
+                .contentLength(png.length)
+                .body(png);
     }
 }

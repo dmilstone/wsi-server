@@ -335,6 +335,720 @@ class AnnotationAdapter {
         return AnnotationAdapter.currentSeries;
     }
 
+    /** Latest image metadata used by measurement (µm/px calibration). */
+    static imageMetadata = null;
+    /** Global ruler / measure mode flag. */
+    static isMeasurementModeActive = false;
+    /**
+     * True only between a real OSD press and release inside the viewer element.
+     * Toolbar activation must never set this.
+     */
+    static isDragging = false;
+    /** @deprecated alias — prefer {@link AnnotationAdapter.isDragging}. */
+    static get isDraggingMeasurement() {
+        return AnnotationAdapter.isDragging;
+    }
+    /** Overlay-space drag start; null until canvas press. */
+    static measureStartX = null;
+    static measureStartY = null;
+    /** Image-pixel drag start; null until canvas press. */
+    static measureStartImageX = null;
+    static measureStartImageY = null;
+    /** Active OpenSeadragon viewer (for mouse-nav enable/disable). */
+    static viewer = null;
+    /** Dedicated SVG overlay above OSD tiles (not the drawer canvas). */
+    static measureOverlayEl = null;
+    /** Authoritative OSD MouseTracker for measurement gestures. */
+    static measureMouseTracker = null;
+    /** Optional callback(microns, snapshot) when a drag completes. */
+    static onMeasurementComplete = null;
+    /** In-session saved measurements for the current browser session. */
+    static measurementSessionList = [];
+    /** Last completed length — kept so the popup can reopen after storage clears. */
+    static lastMeasuredMicrons = null;
+
+    static MEASURE_STROKE = "#FFEA00";
+    static MEASURE_HALO = "#000000";
+    static MEASURE_STROKE_WIDTH = 3;
+    static MEASURE_HALO_WIDTH = 7; // 3px stroke + ~2px black outline each side
+
+    /** Safe defaults after localStorage wipe / cold start. */
+    static ensureMeasurementDefaults() {
+        if (AnnotationAdapter.imageMetadata == null
+            || typeof AnnotationAdapter.imageMetadata !== "object") {
+            AnnotationAdapter.imageMetadata = null;
+        }
+        if (typeof AnnotationAdapter.isMeasurementModeActive !== "boolean") {
+            AnnotationAdapter.isMeasurementModeActive = false;
+        }
+        if (typeof AnnotationAdapter.isDragging !== "boolean") {
+            AnnotationAdapter.isDragging = false;
+        }
+        if (!Array.isArray(AnnotationAdapter.measurementSessionList)) {
+            AnnotationAdapter.measurementSessionList = [];
+        }
+        if (AnnotationAdapter.measureStartX != null && !Number.isFinite(Number(AnnotationAdapter.measureStartX))) {
+            AnnotationAdapter.measureStartX = null;
+        }
+        if (AnnotationAdapter.measureStartY != null && !Number.isFinite(Number(AnnotationAdapter.measureStartY))) {
+            AnnotationAdapter.measureStartY = null;
+        }
+        if (AnnotationAdapter.measureStartImageX != null
+            && !Number.isFinite(Number(AnnotationAdapter.measureStartImageX))) {
+            AnnotationAdapter.measureStartImageX = null;
+        }
+        if (AnnotationAdapter.measureStartImageY != null
+            && !Number.isFinite(Number(AnnotationAdapter.measureStartImageY))) {
+            AnnotationAdapter.measureStartImageY = null;
+        }
+        if (AnnotationAdapter.lastMeasuredMicrons != null
+            && !Number.isFinite(Number(AnnotationAdapter.lastMeasuredMicrons))) {
+            AnnotationAdapter.lastMeasuredMicrons = null;
+        }
+        return AnnotationAdapter;
+    }
+
+    static setImageMetadata(metadata) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        AnnotationAdapter.imageMetadata = metadata || null;
+        return AnnotationAdapter.imageMetadata;
+    }
+
+    /**
+     * Calibrated microns-per-pixel from metadata.
+     * Prefers explicit X/Y; falls back to micronsPerPixel alias.
+     */
+    static micronsPerPixel(metadata = AnnotationAdapter.imageMetadata) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        const source = metadata || AnnotationAdapter.imageMetadata;
+        const x = Number(source?.micronsPerPixelX ?? source?.micronsPerPixel);
+        const y = Number(source?.micronsPerPixelY ?? source?.micronsPerPixel);
+        if (Number.isFinite(x) && x > 0 && Number.isFinite(y) && y > 0) {
+            return { x, y };
+        }
+        if (Number.isFinite(x) && x > 0) return { x, y: x };
+        return null;
+    }
+
+    static euclideanDistancePixels(x0, y0, x1, y1) {
+        const dx = Number(x1) - Number(x0);
+        const dy = Number(y1) - Number(y0);
+        if (![dx, dy].every(Number.isFinite)) return 0;
+        return Math.hypot(dx, dy);
+    }
+
+    /**
+     * Physical length in microns between two image-pixel points.
+     * Uses anisotropic X/Y calibration when both are present.
+     */
+    static measureLengthMicrons(x0, y0, x1, y1, metadata = AnnotationAdapter.imageMetadata) {
+        const mpp = AnnotationAdapter.micronsPerPixel(metadata);
+        if (!mpp) return null;
+        const dx = (Number(x1) - Number(x0)) * mpp.x;
+        const dy = (Number(y1) - Number(y0)) * mpp.y;
+        if (![dx, dy].every(Number.isFinite)) return null;
+        return Math.hypot(dx, dy);
+    }
+
+    static formatMicrons(microns) {
+        const value = Number(microns);
+        if (!Number.isFinite(value) || value < 0) return "—";
+        if (value >= 1000) {
+            const mm = value / 1000;
+            return `${Number(mm.toPrecision(4))} mm`;
+        }
+        if (value >= 100) return `${Math.round(value)} µm`;
+        if (value >= 10) return `${value.toFixed(1)} µm`;
+        return `${value.toFixed(2)} µm`;
+    }
+
+    /** Clear drag anchors without touching mode or mouse-nav. */
+    static resetMeasurementDragState() {
+        AnnotationAdapter.isDragging = false;
+        AnnotationAdapter.measureStartX = null;
+        AnnotationAdapter.measureStartY = null;
+        AnnotationAdapter.measureStartImageX = null;
+        AnnotationAdapter.measureStartImageY = null;
+    }
+
+    static _openSeadragon() {
+        if (typeof window !== "undefined" && window.OpenSeadragon) return window.OpenSeadragon;
+        if (typeof globalThis !== "undefined" && globalThis.OpenSeadragon) return globalThis.OpenSeadragon;
+        return null;
+    }
+
+    /** Remember the active OpenSeadragon viewer for mouse-nav + tracker binding. */
+    static setViewer(viewer) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        AnnotationAdapter.viewer = viewer || null;
+        return AnnotationAdapter.viewer;
+    }
+
+    /**
+     * Toggle measurement mode and disable/enable OSD mouse navigation.
+     * Enabling the toolbar tool must NOT seed coordinates or draw a line.
+     */
+    static setMeasurementModeActive(active) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        const enabled = Boolean(active);
+        AnnotationAdapter.isMeasurementModeActive = enabled;
+        AnnotationAdapter.resetMeasurementDragState();
+        const v = AnnotationAdapter.viewer;
+        if (v && typeof v.setMouseNavEnabled === "function") {
+            v.setMouseNavEnabled(!enabled);
+        }
+        if (enabled) {
+            AnnotationAdapter.ensureMeasureOverlay();
+            AnnotationAdapter.clearMeasureVector({ remove: false, keepDragState: true });
+            AnnotationAdapter.resetMeasurementDragState();
+        } else {
+            AnnotationAdapter.clearMeasureVector({ remove: false });
+        }
+        return AnnotationAdapter.isMeasurementModeActive;
+    }
+
+    /**
+     * Bind an authoritative OpenSeadragon.MouseTracker to the viewer element.
+     * Replaces any prior measure tracker. Handlers use OSD's press/drag/release cycle.
+     */
+    static bindMeasureMouseTracker(viewer, options = {}) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        AnnotationAdapter.setViewer(viewer);
+        AnnotationAdapter.onMeasurementComplete =
+            typeof options.onMeasurementComplete === "function"
+                ? options.onMeasurementComplete
+                : null;
+
+        if (AnnotationAdapter.measureMouseTracker) {
+            try { AnnotationAdapter.measureMouseTracker.destroy(); } catch (_) { /* ignore */ }
+            AnnotationAdapter.measureMouseTracker = null;
+        }
+
+        const OSD = AnnotationAdapter._openSeadragon();
+        if (!viewer || typeof OSD?.MouseTracker !== "function") return null;
+
+        const element = viewer.element || viewer.container;
+        if (!element) return null;
+        AnnotationAdapter.ensureMeasureOverlay(viewer.container || element);
+
+        AnnotationAdapter.measureMouseTracker = new OSD.MouseTracker({
+            element,
+            pressHandler: (event) => AnnotationAdapter._measurePressHandler(event),
+            dragHandler: (event) => AnnotationAdapter._measureDragHandler(event),
+            releaseHandler: (event) => AnnotationAdapter._measureReleaseHandler(event),
+            // Some OSD builds only fire dragEnd — treat it like release.
+            dragEndHandler: (event) => AnnotationAdapter._measureReleaseHandler(event)
+        });
+        return AnnotationAdapter.measureMouseTracker;
+    }
+
+    /** Convert MouseTracker position → image pixels via OSD viewport APIs. */
+    static trackerPositionToImage(position) {
+        const viewer = AnnotationAdapter.viewer;
+        if (!viewer?.viewport || !position) return null;
+        let viewportPoint = null;
+        try {
+            if (typeof viewer.viewport.viewerElementToViewportCoordinates === "function") {
+                viewportPoint = viewer.viewport.viewerElementToViewportCoordinates(position);
+            } else if (typeof viewer.viewport.pointFromPixel === "function") {
+                viewportPoint = viewer.viewport.pointFromPixel(position, true);
+            }
+        } catch (_) {
+            return null;
+        }
+        if (!viewportPoint) return null;
+
+        let imagePoint = null;
+        try {
+            if (viewer.world?.getItemCount?.() > 0) {
+                imagePoint = viewer.world.getItemAt(0).viewportToImageCoordinates(viewportPoint);
+            } else if (typeof viewer.viewport.viewportToImageCoordinates === "function") {
+                imagePoint = viewer.viewport.viewportToImageCoordinates(viewportPoint);
+            }
+        } catch (_) {
+            return null;
+        }
+        if (!imagePoint) return null;
+        if (!Number.isFinite(imagePoint.x) || !Number.isFinite(imagePoint.y)) return null;
+        return { x: imagePoint.x, y: imagePoint.y };
+    }
+
+    /**
+     * Overlay CSS pixels for the SVG layer. Tracker is bound to viewer.element,
+     * so event.position maps 1:1 when the overlay is parented to that element /
+     * container with matching origin.
+     */
+    static trackerPositionToOverlay(position) {
+        if (!position) return null;
+        const x = Number(position.x);
+        const y = Number(position.y);
+        if (![x, y].every(Number.isFinite)) return null;
+
+        const svg = AnnotationAdapter.measureOverlayEl;
+        const viewer = AnnotationAdapter.viewer;
+        const trackerEl = viewer?.element || viewer?.container;
+        if (svg?.parentElement && trackerEl && svg.parentElement !== trackerEl) {
+            const parentRect = svg.parentElement.getBoundingClientRect();
+            const trackerRect = trackerEl.getBoundingClientRect();
+            return {
+                x: x + trackerRect.left - parentRect.left,
+                y: y + trackerRect.top - parentRect.top
+            };
+        }
+        return { x, y };
+    }
+
+    static _measurePressHandler(event) {
+        if (!AnnotationAdapter.isMeasurementModeActive) return;
+        if (event) event.preventDefaultAction = true;
+        if (event?.originalEvent?.preventDefault) event.originalEvent.preventDefault();
+
+        AnnotationAdapter.ensureMeasureOverlay();
+        const position = event?.position;
+        const imagePoint = AnnotationAdapter.trackerPositionToImage(position);
+        const overlayPoint = AnnotationAdapter.trackerPositionToOverlay(position);
+        if (!imagePoint || !overlayPoint) return;
+
+        AnnotationAdapter.isDragging = true;
+        AnnotationAdapter.measureStartX = overlayPoint.x;
+        AnnotationAdapter.measureStartY = overlayPoint.y;
+        AnnotationAdapter.measureStartImageX = imagePoint.x;
+        AnnotationAdapter.measureStartImageY = imagePoint.y;
+        // Do not draw until dragHandler — avoids the startup false-anchor glitch.
+    }
+
+    static _measureDragHandler(event) {
+        if (!AnnotationAdapter.isDragging) return;
+        if (event) event.preventDefaultAction = true;
+        if (event?.originalEvent?.preventDefault) event.originalEvent.preventDefault();
+
+        const position = event?.position;
+        const imagePoint = AnnotationAdapter.trackerPositionToImage(position);
+        const overlayPoint = AnnotationAdapter.trackerPositionToOverlay(position);
+        if (!imagePoint || !overlayPoint) return;
+        if (AnnotationAdapter.measureStartX == null || AnnotationAdapter.measureStartY == null) return;
+
+        const microns = AnnotationAdapter.measureLengthMicrons(
+            AnnotationAdapter.measureStartImageX,
+            AnnotationAdapter.measureStartImageY,
+            imagePoint.x,
+            imagePoint.y
+        );
+        const label = microns == null
+            ? "Not calibrated"
+            : AnnotationAdapter.formatMicrons(microns);
+        AnnotationAdapter.updateMeasureVector(
+            AnnotationAdapter.measureStartX,
+            AnnotationAdapter.measureStartY,
+            overlayPoint.x,
+            overlayPoint.y,
+            label
+        );
+    }
+
+    static _measureReleaseHandler(event) {
+        if (!AnnotationAdapter.isDragging) return;
+        if (event) event.preventDefaultAction = true;
+
+        const position = event?.position;
+        const imagePoint = AnnotationAdapter.trackerPositionToImage(position);
+        const overlayPoint = AnnotationAdapter.trackerPositionToOverlay(position);
+
+        const startImageX = AnnotationAdapter.measureStartImageX;
+        const startImageY = AnnotationAdapter.measureStartImageY;
+        const startOverlayX = AnnotationAdapter.measureStartX;
+        const startOverlayY = AnnotationAdapter.measureStartY;
+
+        const endImageX = Number.isFinite(imagePoint?.x) ? imagePoint.x : startImageX;
+        const endImageY = Number.isFinite(imagePoint?.y) ? imagePoint.y : startImageY;
+        const endOverlayX = Number.isFinite(overlayPoint?.x) ? overlayPoint.x : startOverlayX;
+        const endOverlayY = Number.isFinite(overlayPoint?.y) ? overlayPoint.y : startOverlayY;
+
+        const microns = AnnotationAdapter.measureLengthMicrons(
+            startImageX, startImageY, endImageX, endImageY
+        );
+        const lengthLabel = microns == null
+            ? "Not calibrated"
+            : AnnotationAdapter.formatMicrons(microns);
+
+        if ([startOverlayX, startOverlayY, endOverlayX, endOverlayY].every(Number.isFinite)) {
+            AnnotationAdapter.updateMeasureVector(
+                startOverlayX, startOverlayY, endOverlayX, endOverlayY, lengthLabel
+            );
+        }
+
+        AnnotationAdapter.resetMeasurementDragState();
+        AnnotationAdapter.lastMeasuredMicrons =
+            Number.isFinite(microns) && microns > 0 ? microns : null;
+
+        const snapshot = {
+            startOverlayX,
+            startOverlayY,
+            startImageX,
+            startImageY,
+            endOverlayX,
+            endOverlayY,
+            endImageX,
+            endImageY,
+            microns: AnnotationAdapter.lastMeasuredMicrons,
+            lengthLabel
+        };
+
+        // Rapid-fire path: auto-save into the session list — no popup.
+        let entry = null;
+        if (AnnotationAdapter.lastMeasuredMicrons != null) {
+            entry = AnnotationAdapter.saveMeasurementToSession({
+                lengthMicrons: AnnotationAdapter.lastMeasuredMicrons,
+                label: AnnotationAdapter.nextSequentialMeasurementLabel(
+                    AnnotationAdapter.lastMeasuredMicrons
+                ),
+                imageId: typeof AnnotationAdapter.getActiveImageId === "function"
+                    ? AnnotationAdapter.getActiveImageId()
+                    : null
+            });
+        }
+
+        if (typeof AnnotationAdapter.onMeasurementComplete === "function") {
+            try {
+                AnnotationAdapter.onMeasurementComplete(
+                    AnnotationAdapter.lastMeasuredMicrons,
+                    { ...snapshot, entry }
+                );
+            } catch (error) {
+                console.warn("Measurement complete callback failed", error);
+            }
+        }
+    }
+
+    /**
+     * Default sequential label using active series/Z scan parameters.
+     * Example: "Measurement 1 (25.0 µm)" or "Measurement 2 · S1/Z3 (12.4 µm)".
+     */
+    static nextSequentialMeasurementLabel(microns) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        const n = AnnotationAdapter.measurementSessionList.length + 1;
+        const length = AnnotationAdapter.formatMicrons(microns);
+        const series = Number(AnnotationAdapter.currentSeries) || 0;
+        const z = Number(AnnotationAdapter.currentZ) || 0;
+        if (series > 0 || z > 0) {
+            return `Measurement ${n} · S${series}/Z${z} (${length})`;
+        }
+        return `Measurement ${n} (${length})`;
+    }
+
+    /** Optional hook so the page can supply the current image id for session rows. */
+    static getActiveImageId = null;
+
+    /**
+     * Canvas mousedown helper (tests / legacy). Prefer the OSD MouseTracker path.
+     * Does not draw — the vector appears only after drag while isDragging.
+     */
+    static beginMeasurementDrag({ overlayX, overlayY, imageX, imageY } = {}) {
+        if (!AnnotationAdapter.isMeasurementModeActive) return false;
+        const ox = Number(overlayX);
+        const oy = Number(overlayY);
+        const ix = Number(imageX);
+        const iy = Number(imageY);
+        if (![ox, oy, ix, iy].every(Number.isFinite)) return false;
+        AnnotationAdapter.isDragging = true;
+        AnnotationAdapter.measureStartX = ox;
+        AnnotationAdapter.measureStartY = oy;
+        AnnotationAdapter.measureStartImageX = ix;
+        AnnotationAdapter.measureStartImageY = iy;
+        return true;
+    }
+
+    /**
+     * Canvas mousemove helper (tests / legacy).
+     */
+    static updateMeasurementDrag({ overlayX, overlayY, imageX, imageY, labelText = "" } = {}) {
+        if (!AnnotationAdapter.isDragging) return false;
+        if (AnnotationAdapter.measureStartX == null || AnnotationAdapter.measureStartY == null) {
+            return false;
+        }
+        const ox = Number(overlayX);
+        const oy = Number(overlayY);
+        if (![ox, oy].every(Number.isFinite)) return false;
+        AnnotationAdapter.updateMeasureVector(
+            AnnotationAdapter.measureStartX,
+            AnnotationAdapter.measureStartY,
+            ox,
+            oy,
+            labelText
+        );
+        return true;
+    }
+
+    /**
+     * Canvas mouseup helper (tests / legacy).
+     */
+    static endMeasurementDrag({ overlayX, overlayY, imageX, imageY, labelText = "" } = {}) {
+        if (!AnnotationAdapter.isDragging) return null;
+        const start = {
+            overlayX: AnnotationAdapter.measureStartX,
+            overlayY: AnnotationAdapter.measureStartY,
+            imageX: AnnotationAdapter.measureStartImageX,
+            imageY: AnnotationAdapter.measureStartImageY
+        };
+        const ox = Number(overlayX);
+        const oy = Number(overlayY);
+        const ix = Number(imageX);
+        const iy = Number(imageY);
+        const endOverlayX = Number.isFinite(ox) ? ox : start.overlayX;
+        const endOverlayY = Number.isFinite(oy) ? oy : start.overlayY;
+        const endImageX = Number.isFinite(ix) ? ix : start.imageX;
+        const endImageY = Number.isFinite(iy) ? iy : start.imageY;
+
+        if ([start.overlayX, start.overlayY, endOverlayX, endOverlayY].every(Number.isFinite)) {
+            AnnotationAdapter.updateMeasureVector(
+                start.overlayX,
+                start.overlayY,
+                endOverlayX,
+                endOverlayY,
+                labelText
+            );
+        }
+
+        AnnotationAdapter.resetMeasurementDragState();
+        return {
+            startOverlayX: start.overlayX,
+            startOverlayY: start.overlayY,
+            startImageX: start.imageX,
+            startImageY: start.imageY,
+            endOverlayX,
+            endOverlayY,
+            endImageX,
+            endImageY
+        };
+    }
+
+    static _svgEl(name) {
+        return document.createElementNS("http://www.w3.org/2000/svg", name);
+    }
+
+    /**
+     * Create (or re-parent) a transparent SVG tracking layer above the OSD
+     * display container so the vector is never painted under tile canvases.
+     */
+    static ensureMeasureOverlay(host = null) {
+        if (typeof document === "undefined") return null;
+        const viewer = AnnotationAdapter.viewer;
+        const container = host
+            || viewer?.element
+            || viewer?.container
+            || document.getElementById("viewer");
+        if (!container) return null;
+
+        let svg = AnnotationAdapter.measureOverlayEl;
+        if (svg && svg.isConnected && svg.parentElement === container) {
+            return svg;
+        }
+
+        if (!svg) {
+            svg = AnnotationAdapter._svgEl("svg");
+            svg.setAttribute("class", "wsi-measure-overlay");
+            svg.setAttribute("aria-hidden", "true");
+            svg.style.cssText = [
+                "position:absolute",
+                "inset:0",
+                "width:100%",
+                "height:100%",
+                "z-index:100000",
+                "pointer-events:none",
+                "overflow:visible",
+                "display:none"
+            ].join(";");
+
+            const halo = AnnotationAdapter._svgEl("line");
+            halo.setAttribute("data-measure", "halo");
+            halo.setAttribute("stroke", AnnotationAdapter.MEASURE_HALO);
+            halo.setAttribute("stroke-width", String(AnnotationAdapter.MEASURE_HALO_WIDTH));
+            halo.setAttribute("stroke-linecap", "round");
+            halo.setAttribute("fill", "none");
+
+            const stroke = AnnotationAdapter._svgEl("line");
+            stroke.setAttribute("data-measure", "stroke");
+            stroke.setAttribute("stroke", AnnotationAdapter.MEASURE_STROKE);
+            stroke.setAttribute("stroke-width", String(AnnotationAdapter.MEASURE_STROKE_WIDTH));
+            stroke.setAttribute("stroke-linecap", "round");
+            stroke.setAttribute("fill", "none");
+
+            const arrowHalo = AnnotationAdapter._svgEl("polygon");
+            arrowHalo.setAttribute("data-measure", "arrow-halo");
+            arrowHalo.setAttribute("fill", AnnotationAdapter.MEASURE_HALO);
+
+            const arrow = AnnotationAdapter._svgEl("polygon");
+            arrow.setAttribute("data-measure", "arrow");
+            arrow.setAttribute("fill", AnnotationAdapter.MEASURE_STROKE);
+
+            const label = AnnotationAdapter._svgEl("text");
+            label.setAttribute("data-measure", "label");
+            label.setAttribute("fill", AnnotationAdapter.MEASURE_STROKE);
+            label.setAttribute("stroke", AnnotationAdapter.MEASURE_HALO);
+            label.setAttribute("stroke-width", "2");
+            label.setAttribute("paint-order", "stroke fill");
+            label.setAttribute("text-anchor", "middle");
+            label.setAttribute("dominant-baseline", "central");
+            label.style.font = "700 12px/1.2 ui-sans-serif, system-ui, sans-serif";
+
+            svg.append(halo, stroke, arrowHalo, arrow, label);
+            AnnotationAdapter.measureOverlayEl = svg;
+        }
+
+        const style = window.getComputedStyle?.(container);
+        if (style && style.position === "static") {
+            container.style.position = "relative";
+        }
+        container.appendChild(svg);
+        return svg;
+    }
+
+    static _arrowPoints(x0, y0, x1, y1, size) {
+        const angle = Math.atan2(y1 - y0, x1 - x0);
+        if (!Number.isFinite(angle)) return "";
+        const a1 = angle + Math.PI - 0.42;
+        const a2 = angle + Math.PI + 0.42;
+        const bx = x1 + size * Math.cos(a1);
+        const by = y1 + size * Math.sin(a1);
+        const cx = x1 + size * Math.cos(a2);
+        const cy = y1 + size * Math.sin(a2);
+        return `${x1},${y1} ${bx},${by} ${cx},${cy}`;
+    }
+
+    /**
+     * Draw/update the neon measurement vector on the dedicated overlay layer.
+     * Coordinates are CSS pixels relative to the overlay host.
+     */
+    static updateMeasureVector(x0, y0, x1, y1, labelText = "") {
+        const svg = AnnotationAdapter.ensureMeasureOverlay();
+        if (!svg) return null;
+
+        const width = Math.max(1, Math.round(svg.clientWidth || svg.parentElement?.clientWidth || 1));
+        const height = Math.max(1, Math.round(svg.clientHeight || svg.parentElement?.clientHeight || 1));
+        svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+        svg.setAttribute("width", String(width));
+        svg.setAttribute("height", String(height));
+        svg.style.display = "block";
+
+        const sx = Number(x0);
+        const sy = Number(y0);
+        const ex = Number(x1);
+        const ey = Number(y1);
+        if (![sx, sy, ex, ey].every(Number.isFinite)) return svg;
+
+        const dx = ex - sx;
+        const dy = ey - sy;
+        const len = Math.hypot(dx, dy);
+        // Pull line end back so the tip sits under the arrow head.
+        const tipInset = len > 1 ? Math.min(14, len * 0.35) : 0;
+        const lx = len > 0 ? ex - (dx / len) * tipInset : ex;
+        const ly = len > 0 ? ey - (dy / len) * tipInset : ey;
+
+        const halo = svg.querySelector('[data-measure="halo"]');
+        const stroke = svg.querySelector('[data-measure="stroke"]');
+        const arrowHalo = svg.querySelector('[data-measure="arrow-halo"]');
+        const arrow = svg.querySelector('[data-measure="arrow"]');
+        const label = svg.querySelector('[data-measure="label"]');
+
+        for (const line of [halo, stroke]) {
+            if (!line) continue;
+            line.setAttribute("x1", String(sx));
+            line.setAttribute("y1", String(sy));
+            line.setAttribute("x2", String(lx));
+            line.setAttribute("y2", String(ly));
+        }
+
+        const showArrow = len >= 4;
+        if (arrowHalo && arrow) {
+            if (showArrow) {
+                arrowHalo.setAttribute("points", AnnotationAdapter._arrowPoints(sx, sy, ex, ey, 14));
+                arrow.setAttribute("points", AnnotationAdapter._arrowPoints(sx, sy, ex, ey, 11));
+                arrowHalo.style.display = "";
+                arrow.style.display = "";
+            } else {
+                arrowHalo.removeAttribute("points");
+                arrow.removeAttribute("points");
+                arrowHalo.style.display = "none";
+                arrow.style.display = "none";
+            }
+        }
+
+        if (label) {
+            label.textContent = labelText || "";
+            label.setAttribute("x", String((sx + ex) / 2));
+            label.setAttribute("y", String((sy + ey) / 2 - 14));
+            label.style.display = labelText ? "" : "none";
+        }
+        return svg;
+    }
+
+    /** Wipe the tracking vector (and optionally detach the overlay node). */
+    static clearMeasureVector({ remove = false, keepDragState = false } = {}) {
+        if (!keepDragState) AnnotationAdapter.resetMeasurementDragState();
+        const svg = AnnotationAdapter.measureOverlayEl;
+        if (!svg) return;
+        const halo = svg.querySelector('[data-measure="halo"]');
+        const stroke = svg.querySelector('[data-measure="stroke"]');
+        const arrowHalo = svg.querySelector('[data-measure="arrow-halo"]');
+        const arrow = svg.querySelector('[data-measure="arrow"]');
+        const label = svg.querySelector('[data-measure="label"]');
+        for (const line of [halo, stroke]) {
+            if (!line) continue;
+            line.setAttribute("x1", "0");
+            line.setAttribute("y1", "0");
+            line.setAttribute("x2", "0");
+            line.setAttribute("y2", "0");
+        }
+        if (arrowHalo) {
+            arrowHalo.removeAttribute("points");
+            arrowHalo.style.display = "none";
+        }
+        if (arrow) {
+            arrow.removeAttribute("points");
+            arrow.style.display = "none";
+        }
+        if (label) {
+            label.textContent = "";
+            label.style.display = "none";
+        }
+        svg.style.display = "none";
+        if (remove) {
+            svg.remove();
+            AnnotationAdapter.measureOverlayEl = null;
+        }
+    }
+
+    static saveMeasurementToSession({ lengthMicrons, label = "", imageId = null } = {}) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        const microns = Number(lengthMicrons);
+        if (!Number.isFinite(microns) || microns < 0) return null;
+        const entry = {
+            id: `m-${Date.now()}-${AnnotationAdapter.measurementSessionList.length + 1}`,
+            lengthMicrons: microns,
+            lengthLabel: AnnotationAdapter.formatMicrons(microns),
+            label: String(label || "").trim(),
+            imageId: imageId || null,
+            series: Number(AnnotationAdapter.currentSeries) || 0,
+            z: Number(AnnotationAdapter.currentZ) || 0,
+            savedAt: new Date().toISOString()
+        };
+        AnnotationAdapter.measurementSessionList.push(entry);
+        if (typeof AnnotationAdapter.onSessionListChange === "function") {
+            try {
+                AnnotationAdapter.onSessionListChange(
+                    AnnotationAdapter.measurementSessionList.slice(),
+                    entry
+                );
+            } catch (error) {
+                console.warn("Session list change callback failed", error);
+            }
+        }
+        return entry;
+    }
+
+    /** Optional UI hook: (list, latestEntry) => void */
+    static onSessionListChange = null;
+
     /**
      * Ensures /tile/ requests carry the active focal plane ({@code z}) and
      * Bio-Formats series ({@code series}). Non-tile URLs are returned unchanged.
@@ -649,3 +1363,6 @@ class AnnotationAdapter {
         return Number.isFinite(number) && number > 0 ? number : fallback;
     }
 }
+
+// Cold-start / cleared-storage defaults for measurement state.
+AnnotationAdapter.ensureMeasurementDefaults();

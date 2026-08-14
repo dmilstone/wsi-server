@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+
 @RestController
 public class ExportController {
     private final ExportService exportService;
@@ -30,7 +32,10 @@ public class ExportController {
         return ResponseEntity.ok()
                 .contentType(MediaType.IMAGE_PNG)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
-                        ContentDisposition.attachment().filename(filename).build().toString())
+                        ContentDisposition.inline()
+                                .filename(filename, StandardCharsets.UTF_8)
+                                .build()
+                                .toString())
                 .contentLength(png.length)
                 .body(png);
     }
