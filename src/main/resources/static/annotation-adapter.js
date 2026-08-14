@@ -14,11 +14,25 @@ class AnnotationAdapter {
     static WORKSTATION_STORAGE_KEY = "wsi.workstation.id";
     static USER_HEADER = "X-WSI-User";
 
+    /**
+     * Case / accession token matcher (case-insensitive).
+     * Same shape as {@code /\b([A-Z]{2}\d{2}-\d+)\b/i}, but the trailing boundary is a
+     * lookahead so filenames like {@code BA26-041340_A2.vsi} still extract
+     * {@code BA26-041340} (JS {@code \b} treats underscore as a word character).
+     */
+    static CASE_ID_PATTERN = /\b([A-Z]{2}\d{2}-\d+)(?![A-Za-z0-9])/i;
+
     /** Active focal-plane index for tile fetches (0-based). */
     static currentZ = 0;
 
     /** Active Bio-Formats series/sub-image index for tile fetches. */
     static currentSeries = 0;
+
+    /**
+     * Currently opened slide id tracked by the adapter.
+     * Cleared immediately on case-filter changes to prevent patient mismatch.
+     */
+    static currentImageId = null;
 
     /**
      * Specimen / diagnostic scan profiles only. Label, Macro, Overview, Thumbnail,
@@ -32,6 +46,315 @@ class AnnotationAdapter {
     /** Show the series dropdown only when more than one diagnostic specimen scan exists. */
     static shouldShowSeriesSelector(profiles) {
         return AnnotationAdapter.diagnosticSpecimenProfiles(profiles).length > 1;
+    }
+
+    /**
+     * Extract the first case / accession id from a path or filename.
+     * Returns the matched substring with its original casing, or null.
+     */
+    static extractCaseId(text) {
+        const raw = String(text ?? "");
+        if (!raw) return null;
+        const match = raw.match(AnnotationAdapter.CASE_ID_PATTERN);
+        return match ? match[1] : null;
+    }
+
+    /**
+     * Scan ingested slide records (id / name / relativePath / folder) and return
+     * alphabetically sorted unique case ids for the left-column filter dropdown.
+     */
+    static uniqueCaseIdsFromImages(images) {
+        if (!Array.isArray(images) || images.length === 0) return [];
+        const byKey = new Map();
+        for (const image of images) {
+            if (!image || typeof image !== "object") continue;
+            const candidates = [
+                image.relativePath,
+                image.name,
+                image.id,
+                image.folder,
+                // Base64 ids often decode to a relative path — try atob when safe.
+                (() => {
+                    try {
+                        if (typeof image.id === "string" && image.id.length > 0) {
+                            return atob(image.id);
+                        }
+                    } catch (_) { /* not base64 */ }
+                    return null;
+                })()
+            ];
+            for (const candidate of candidates) {
+                const extracted = AnnotationAdapter.extractCaseId(candidate);
+                if (!extracted) continue;
+                const key = extracted.toUpperCase();
+                if (!byKey.has(key)) byKey.set(key, extracted.toUpperCase());
+            }
+        }
+        return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    }
+
+    /**
+     * Sentinel select values for the left-column case filter.
+     * Empty / placeholder keeps the list fully hidden (zero-exposure default).
+     */
+    static CASE_FILTER_PLACEHOLDER_VALUE = "";
+    static CASE_FILTER_ALL_SLIDES_VALUE = "__all_slides__";
+    static ZERO_EXPOSURE_STATUS = "Select a patient case to begin.";
+
+    /**
+     * True when the case filter is on the blank privacy placeholder
+     * ("-- Select a Patient Case --" / empty value).
+     */
+    static isCaseFilterPlaceholderSelected(selectElement) {
+        if (!selectElement) return true;
+        const value = String(selectElement.value ?? "").trim();
+        if (!value || value === AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE) {
+            return true;
+        }
+        if (/^--\s*select a patient case\s*--$/i.test(value)) {
+            return true;
+        }
+        const label = String(selectElement.selectedOptions?.[0]?.textContent ?? "").trim();
+        return /^--\s*select a patient case\s*--$/i.test(label);
+    }
+
+    /**
+     * Block localStorage / session auto-open of the last slide while the
+     * case filter remains on the zero-exposure placeholder.
+     */
+    static shouldBypassSessionImageAutoload(selectElement) {
+        return AnnotationAdapter.isCaseFilterPlaceholderSelected(selectElement);
+    }
+
+    /**
+     * Blank the main workspace chrome for fresh load / case-filter changes:
+     * clear image headers and status text, force {@code viewer.close()} when a
+     * viewer is provided (pure-black viewport), and hide Z / channels /
+     * measurement panels until a slide is clicked again.
+     */
+    static applyZeroExposureWorkspace(doc, options = {}) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        if (!root || typeof root.getElementById !== "function") return;
+
+        AnnotationAdapter.resetActiveImageTracking();
+
+        const viewer = options.viewer;
+        if (viewer) {
+            try {
+                // Mandatory: drop all tiles and return the canvas to black.
+                viewer.close();
+            } catch (_error) {
+                try {
+                    if (viewer.world && typeof viewer.world.removeAll === "function") {
+                        viewer.world.removeAll();
+                    }
+                } catch (_fallbackError) {
+                    // Ignore teardown races during hard refresh / rapid filter changes.
+                }
+            }
+        }
+
+        const setText = (id, text) => {
+            const el = root.getElementById(id);
+            if (el) el.textContent = text;
+        };
+        setText("selected-name", "No image selected");
+        setText("info-name", "—");
+        setText("info-size", "—");
+        setText("info-channels", "—");
+        setText("info-levels", "—");
+        setText("info-tile", "—");
+        setText("info-pixel-size", "—");
+        setText("status", options.statusText || AnnotationAdapter.ZERO_EXPOSURE_STATUS);
+        setText("status-zoom", "—");
+        setText("status-x", "—");
+        setText("status-y", "—");
+        setText("discovery-status", "");
+
+        const imageInfo = root.getElementById("image-info");
+        if (imageInfo) imageInfo.hidden = true;
+
+        for (const id of [
+            "z-depth-controls",
+            "measure-session-panel",
+            "series-select-control"
+        ]) {
+            const el = root.getElementById(id);
+            if (el) el.hidden = true;
+        }
+
+        const stack = root.querySelector?.(".right-stack-controls");
+        if (stack) stack.hidden = true;
+
+        const channels = root.getElementById("channels");
+        if (channels) {
+            channels.replaceChildren();
+            channels.hidden = true;
+        }
+        const channelsHeader = root.querySelector?.("#channels-panel > .panel-header");
+        if (channelsHeader) channelsHeader.hidden = true;
+
+        const measureList = root.getElementById("measure-session-list");
+        if (measureList) measureList.replaceChildren();
+        AnnotationAdapter.measurementSessionList = [];
+    }
+
+    /**
+     * Reset adapter-side image / Z / series tracking to the blank baseline.
+     */
+    static resetActiveImageTracking() {
+        try {
+            AnnotationAdapter.stopZMovie({ silent: true });
+        } catch (_error) {
+            // Movie helpers may not be wired yet during first paint.
+        }
+        AnnotationAdapter.currentImageId = null;
+        AnnotationAdapter.setCurrentZ(0);
+        AnnotationAdapter.setCurrentSeries(0);
+        AnnotationAdapter.imageMetadata = null;
+        AnnotationAdapter.isMeasurementModeActive = false;
+        AnnotationAdapter.isDragging = false;
+    }
+
+    /**
+     * Patient-mismatch guard for {@code #case-filter-select}: close the OSD
+     * viewport and purge visible metadata the instant the dropdown changes.
+     * Call this first inside the select's {@code change} listener.
+     */
+    static forceCaseFilterViewportWipe(doc, options = {}) {
+        AnnotationAdapter.applyZeroExposureWorkspace(doc, {
+            viewer: options.viewer,
+            statusText: options.statusText
+                || "Case filter changed — select a slide to open."
+        });
+        return null;
+    }
+
+    /**
+     * Wire {@code #case-filter-select} so every selection change immediately
+     * blackens the viewport, then applies the slide-list filter.
+     */
+    static bindCaseFilterChangeGuard(selectElement, options = {}) {
+        if (!selectElement || typeof selectElement.addEventListener !== "function") {
+            return null;
+        }
+        const handler = () => {
+            AnnotationAdapter.forceCaseFilterViewportWipe(
+                options.document || (typeof document !== "undefined" ? document : null),
+                {viewer: options.viewer || null}
+            );
+            if (typeof options.onBeforeFilter === "function") {
+                options.onBeforeFilter();
+            }
+            AnnotationAdapter.applyCaseFilterToSlideButtons(
+                selectElement.value,
+                options.imageListRoot || null
+            );
+            if (typeof options.onAfterFilter === "function") {
+                options.onAfterFilter(selectElement.value);
+            }
+        };
+        selectElement.addEventListener("change", handler);
+        return handler;
+    }
+
+    /**
+     * Restore Channels chrome after the user opens a concrete slide.
+     */
+    static revealWorkspaceImageChrome(doc) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        if (!root || typeof root.getElementById !== "function") return;
+        const channels = root.getElementById("channels");
+        if (channels) channels.hidden = false;
+        const channelsHeader = root.querySelector?.("#channels-panel > .panel-header");
+        if (channelsHeader) channelsHeader.hidden = false;
+    }
+
+    /**
+     * Rebuild {@code <select id="case-filter-select">} options:
+     * placeholder first, then "All Slides", then unique case ids.
+     * Preserves a prior concrete selection when still present; otherwise
+     * resets to the privacy placeholder.
+     */
+    static populateCaseFilterSelect(selectElement, images) {
+        if (!selectElement) return [];
+        const previous = String(selectElement.value ?? "");
+        const cases = AnnotationAdapter.uniqueCaseIdsFromImages(images);
+        selectElement.replaceChildren();
+
+        const placeholder = document.createElement("option");
+        placeholder.value = AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE;
+        placeholder.textContent = "-- Select a Patient Case --";
+        selectElement.append(placeholder);
+
+        const allOption = document.createElement("option");
+        allOption.value = AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE;
+        allOption.textContent = "All Slides";
+        selectElement.append(allOption);
+
+        for (const caseId of cases) {
+            const option = document.createElement("option");
+            option.value = caseId;
+            option.textContent = caseId;
+            selectElement.append(option);
+        }
+
+        if (previous === AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE) {
+            selectElement.value = AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE;
+        } else if (previous && cases.some(id => id.toUpperCase() === previous.toUpperCase())) {
+            selectElement.value = cases.find(id => id.toUpperCase() === previous.toUpperCase())
+                || AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE;
+        } else {
+            selectElement.value = AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE;
+        }
+        return cases;
+    }
+
+    /**
+     * Show/hide left-column slide buttons by case substring.
+     * Placeholder / empty → hide all (zero-exposure).
+     * {@link CASE_FILTER_ALL_SLIDES_VALUE} / "All Slides" → show all.
+     * Otherwise match the chosen case substring (case-insensitive).
+     */
+    static applyCaseFilterToSlideButtons(selectedCase, root = null) {
+        const needle = String(selectedCase ?? "").trim();
+        const hideAll = !needle
+            || needle === AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE
+            || /^--\s*select a patient case\s*--$/i.test(needle);
+        const showAll = !hideAll && (
+            needle === AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE
+            || /^all slides$/i.test(needle)
+        );
+        const scope = root
+            || (typeof document !== "undefined" ? document.getElementById("image-list") : null)
+            || (typeof document !== "undefined" ? document : null);
+        if (!scope || typeof scope.querySelectorAll !== "function") return;
+
+        const buttons = scope.querySelectorAll(".image-button");
+        for (const button of buttons) {
+            const haystack = [
+                button.dataset?.imagePath,
+                button.dataset?.imageName,
+                button.dataset?.imageId,
+                button.textContent
+            ].filter(Boolean).join("\n");
+            let visible = false;
+            if (hideAll) {
+                visible = false;
+            } else if (showAll) {
+                visible = true;
+            } else {
+                visible = haystack.toUpperCase().includes(needle.toUpperCase());
+            }
+            button.style.display = visible ? "" : "none";
+        }
+
+        // Collapse empty folder groups so the list stays tidy under a filter.
+        for (const folder of scope.querySelectorAll(".folder-group")) {
+            const anyVisible = Array.from(folder.querySelectorAll(".image-button"))
+                .some(button => button.style.display !== "none");
+            folder.style.display = (showAll || anyVisible) && !hideAll ? "" : "none";
+        }
     }
 
     /** Active Z-movie playback timer handle (null when stopped). */

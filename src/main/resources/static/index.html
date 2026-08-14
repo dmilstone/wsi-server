@@ -12,7 +12,7 @@
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260813-measure7"></script>
+    <script src="/annotation-adapter.js?v=20260814-casewipe"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -130,6 +130,38 @@
         .muted { margin-top: 7px; color: var(--text-muted); font-size: 12px; line-height: 1.45; word-break: break-word; }
 
         #image-list { padding: 10px; }
+        .case-filter-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin: 0;
+            padding: 10px 12px 8px;
+            border-bottom: 1px solid rgba(255,255,255,.06);
+            background: rgba(0, 0, 0, .16);
+        }
+        .case-filter-bar label {
+            font-size: 10px;
+            font-weight: 750;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        #case-filter-select {
+            width: 100%;
+            min-height: 32px;
+            padding: 5px 8px;
+            color: var(--text);
+            background: var(--surface, #1a1f27);
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 7px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        #case-filter-select:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 1px;
+        }
         .folder-group { margin: 4px 0 10px; border: 1px solid transparent; border-radius: var(--radius); }
         .folder-group[open] { background: rgba(255,255,255,.018); border-color: rgba(255,255,255,.045); }
         .folder-group > summary {
@@ -1107,6 +1139,13 @@
 </header>
 <div class="workspace">
     <aside id="images-panel" aria-label="Image browser">
+        <div class="case-filter-bar">
+            <label for="case-filter-select">Case filter</label>
+            <select id="case-filter-select" aria-label="Filter slides by case">
+                <option value="" selected>-- Select a Patient Case --</option>
+                <option value="__all_slides__">All Slides</option>
+            </select>
+        </div>
         <div class="panel-header">
             <div class="panel-kicker">Browse</div>
             <div class="panel-title-row"><h2>Sample images</h2><button class="panel-toggle" data-collapse="left" title="Hide image browser" aria-label="Hide image browser">‹</button></div>
@@ -1293,6 +1332,7 @@
 
     const statusElement = document.getElementById("status");
     const imageListElement = document.getElementById("image-list");
+    const caseFilterSelect = document.getElementById("case-filter-select");
     const channelsElement = document.getElementById("channels");
     const resetButton = document.getElementById("reset");
     const recomputeAutoButton = document.getElementById("recompute-auto");
@@ -1475,9 +1515,15 @@
             const result = await request("/api/images");
             document.getElementById("directory").textContent = result.directory;
             renderImageList(result.images);
-            const lastId = localStorage.getItem(`${STORAGE_PREFIX}.selectedImage`);
-            const initial = result.images.find(image => image.id === lastId) || result.images[0];
-            if (initial) await selectImage(initial);
+            // Zero-exposure: while the case filter sits on the blank placeholder,
+            // do not auto-open the last localStorage image or hit tile endpoints.
+            if (AnnotationAdapter.shouldBypassSessionImageAutoload(caseFilterSelect)) {
+                applyBlankWorkspaceState();
+            } else {
+                const lastId = localStorage.getItem(`${STORAGE_PREFIX}.selectedImage`);
+                const initial = result.images.find(image => image.id === lastId) || result.images[0];
+                if (initial) await selectImage(initial);
+            }
             liveDiscovery = new LiveImageDiscovery({
                 document,
                 request,
@@ -1525,6 +1571,8 @@
                 const button = document.createElement("button");
                 button.className = "image-button";
                 button.dataset.imageId = image.id;
+                button.dataset.imageName = image.name || "";
+                button.dataset.imagePath = image.relativePath || "";
                 button.innerHTML = `${escapeHtml(image.name)}<span class="image-path">${escapeHtml(image.relativePath)}</span>`;
                 button.addEventListener("click", () => selectImage(image));
                 contents.append(button);
@@ -1535,6 +1583,57 @@
             ));
             imageListElement.append(details);
         }
+
+        AnnotationAdapter.populateCaseFilterSelect(caseFilterSelect, images);
+        // Zero-exposure default: hide every slide until a real selection is made.
+        AnnotationAdapter.applyCaseFilterToSlideButtons(
+            caseFilterSelect?.value ?? AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE,
+            imageListElement
+        );
+    }
+
+    // Patient-mismatch guard: any case-filter change blacks the viewport first.
+    AnnotationAdapter.bindCaseFilterChangeGuard(caseFilterSelect, {
+        document,
+        get viewer() { return viewer; },
+        imageListRoot: imageListElement,
+        onBeforeFilter: () => applyBlankWorkspaceState({skipViewerWipe: true})
+    });
+
+    function applyBlankWorkspaceState({skipViewerWipe = false, statusText} = {}) {
+        clearTimeout(updateTimer);
+        updateSequence++;
+        closeImageLightbox(false);
+        prepareSlideOverviewForImageChange();
+        if (AnnotationAdapter.isMeasurementModeActive) setMeasurementModeActive(false);
+        try {
+            AnnotationAdapter.stopZMovie();
+        } catch (_error) {
+            // Adapter may not have movie state yet during first paint.
+        }
+        selectedImage = undefined;
+        metadata = null;
+        display = null;
+        currentZ = 0;
+        if (!skipViewerWipe) {
+            // Instant canvas wipe: viewer.close() + purge banners / Z / channels / rulers.
+            AnnotationAdapter.applyZeroExposureWorkspace(document, {
+                viewer,
+                statusText: statusText || AnnotationAdapter.ZERO_EXPOSURE_STATUS
+            });
+        } else {
+            AnnotationAdapter.resetActiveImageTracking();
+        }
+        AnnotationAdapter.setImageMetadata?.(null);
+        resetButton.disabled = true;
+        recomputeAutoButton.disabled = true;
+        slideOverviewButton.disabled = true;
+        if (measureModeButton) measureModeButton.disabled = true;
+        document.querySelectorAll(".image-button.active").forEach(button =>
+            button.classList.remove("active")
+        );
+        syncRightStackControlsVisibility();
+        updateSelectedAnnotationExportState();
     }
 
     function refreshRenderedImages(images) {
@@ -1566,6 +1665,7 @@
             closeImageLightbox(false);
             prepareSlideOverviewForImageChange();
             selectedImage = image;
+            AnnotationAdapter.currentImageId = image.id;
             updateSelectedAnnotationExportState();
             // Start annotation I/O alongside metadata/display loading. The store
             // retains the result so the viewer-open handler does not issue another GET.
@@ -1610,6 +1710,7 @@
             imageInfoElement.hidden = false;
             applyMetadataInfoPanel();
             AnnotationAdapter.setImageMetadata(metadata);
+            AnnotationAdapter.revealWorkspaceImageChrome(document);
             syncZStackControl(metadata);
             resetButton.disabled = false;
             recomputeAutoButton.disabled = false;

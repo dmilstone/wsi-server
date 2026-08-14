@@ -17,8 +17,23 @@ const html = fs.readFileSync(
 function loadAnnotationAdapter() {
     const sandbox = {
         console,
+        URL,
+        URLSearchParams,
+        atob: (value) => Buffer.from(String(value), "base64").toString("utf8"),
         setInterval(fn, _ms) { return 1; },
         clearInterval(_id) {},
+        document: {
+            createElement(tag) {
+                return {
+                    tagName: String(tag).toUpperCase(),
+                    value: "",
+                    textContent: "",
+                    children: [],
+                    append(...nodes) { this.children.push(...nodes); },
+                    replaceChildren(...nodes) { this.children = nodes; }
+                };
+            }
+        },
         localStorage: {
             store: Object.create(null),
             getItem(key) { return Object.prototype.hasOwnProperty.call(this.store, key) ? this.store[key] : null; },
@@ -167,5 +182,49 @@ assert.equal(AnnotationAdapter.shouldShowSeriesSelector([
     { index: 2, isDiagnosticSpecimen: true },
     { index: 3, isDiagnosticSpecimen: true }
 ]), true);
+
+assert.equal(
+    AnnotationAdapter.extractCaseId("nested/dir/BA26-041340_A2.vsi"),
+    "BA26-041340"
+);
+assert.equal(
+    AnnotationAdapter.extractCaseId("ba26-041340 something"),
+    "ba26-041340"
+);
+assert.equal(AnnotationAdapter.extractCaseId("no-case-here.vsi"), null);
+assert.equal(
+    AnnotationAdapter.uniqueCaseIdsFromImages([
+        { name: "BA26-041340_A2.vsi", relativePath: "nested/dir/BA26-041340_A2.vsi" },
+        { name: "other.vsi", relativePath: "20280813_z/BS26-041330_slide.vsi" },
+        { name: "dup.vsi", relativePath: "x/ba26-041340_B.vsi" },
+        { name: "plain.vsi", relativePath: "folder/plain.vsi" }
+    ]).join(","),
+    "BA26-041340,BS26-041330"
+);
+assert.match(adapterSource, /CASE_ID_PATTERN/);
+assert.match(adapterSource, /uniqueCaseIdsFromImages/);
+assert.match(adapterSource, /applyCaseFilterToSlideButtons/);
+assert.match(adapterSource, /CASE_FILTER_ALL_SLIDES_VALUE/);
+assert.match(adapterSource, /Select a Patient Case/);
+assert.match(adapterSource, /All Slides/);
+assert.match(adapterSource, /shouldBypassSessionImageAutoload/);
+assert.match(adapterSource, /applyZeroExposureWorkspace/);
+assert.match(adapterSource, /forceCaseFilterViewportWipe/);
+assert.match(adapterSource, /bindCaseFilterChangeGuard/);
+assert.match(adapterSource, /viewer\.close\(\)/);
+assert.match(adapterSource, /currentImageId\s*=\s*null/);
+assert.match(adapterSource, /resetActiveImageTracking/);
+assert.match(adapterSource, /revealWorkspaceImageChrome/);
+assert.match(adapterSource, /ZERO_EXPOSURE_STATUS/);
+assert.match(html, /id="case-filter-select"/);
+assert.match(html, /Select a Patient Case/);
+assert.match(html, /All Slides/);
+assert.doesNotMatch(html, /All Cases/);
+assert.match(html, /populateCaseFilterSelect/);
+assert.match(html, /applyCaseFilterToSlideButtons/);
+assert.match(html, /shouldBypassSessionImageAutoload/);
+assert.match(html, /applyBlankWorkspaceState/);
+assert.match(html, /bindCaseFilterChangeGuard/);
+assert.match(html, /annotation-adapter\.js\?v=20260814-casewipe/);
 
 console.log("z-stack-viewer.test.js: ok");
