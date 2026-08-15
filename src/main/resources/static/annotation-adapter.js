@@ -9,6 +9,10 @@
  * localStorage and injects `X-WSI-User` on every annotation GET/PUT it drives
  * through AnnotationStore (cookie mirror remains AnnotationStore's job).
  */
+
+/** Session-scoped clinical OCR markers — each slide scanned at most once. */
+const OcrSessionCache = {};
+
 class AnnotationAdapter {
 
     static WORKSTATION_STORAGE_KEY = "wsi.workstation.id";
@@ -131,6 +135,10 @@ class AnnotationAdapter {
         "Use the dropdown menu on the left to select slides for viewing.";
     /** When true, left-column slide rows show async macro label thumbnails. */
     static slideLabelThumbsEnabled = false;
+    /** Generation token — bump to abort in-flight sidebar OCR batches. */
+    static sidebarOcrBatchGeneration = 0;
+    /** Sequential queue width (1 = fully serial; avoids Tesseract CPU choke). */
+    static SIDEBAR_OCR_CONCURRENCY = 1;
     static slideLabelThumbGeneration = 0;
 
     /**
@@ -491,14 +499,15 @@ class AnnotationAdapter {
 
                 wrap.append(thumb);
                 slot.append(wrap, rotate);
-                AnnotationAdapter.ensureSidebarOcrScanButton(slot, doc);
                 button.append(slot);
                 AnnotationAdapter.applySlideLabelThumbRotation(
                     wrap,
                     AnnotationAdapter.getSlideLabelRotation(imageId)
                 );
             } else {
-                AnnotationAdapter.ensureSidebarOcrScanButton(slot, doc);
+                // Sidebar Scan Label buttons are retired — OCR runs as a background batch.
+                const legacyScan = slot.querySelector(":scope > .ocr-test-btn");
+                if (legacyScan) legacyScan.remove();
                 AnnotationAdapter.applySlideLabelThumbRotation(
                     wrap,
                     AnnotationAdapter.getSlideLabelRotation(imageId)
@@ -617,17 +626,57 @@ class AnnotationAdapter {
         return String(text || "").replace(/if[\s\.]+/i, "if.");
     }
 
+    /** First {@code if.<epitope>} token after omnidirectional normalization. */
+    static extractIfEpitopeMarker(text) {
+        const normalized = AnnotationAdapter.normalizeOcrClinicalText(text);
+        const match = String(normalized || "").match(/if\.\S+/i);
+        return match ? match[0] : "";
+    }
+
+    /**
+     * Wipe OCR result nodes. Sidebar clinical markers are kept across slide
+     * selection (they are per-row); pass {@code includeSidebar: true} when
+     * rebuilding the case list or leaving a case filter.
+     */
+    static clearAllOcrResultText(root = null, options = {}) {
+        const includeSidebar = options.includeSidebar === true;
+        const scope = root
+            || (typeof document !== "undefined" ? document : null);
+        if (!scope?.querySelectorAll) return;
+        for (const node of scope.querySelectorAll(".ocr-result-text")) {
+            if (!includeSidebar && node.closest?.(".image-button")) continue;
+            node.textContent = "";
+            if (typeof node.classList?.remove === "function") {
+                node.classList.remove("ocr-result-pending");
+            }
+        }
+    }
+
+    /** Abort in-flight batch OCR and blank every sidebar marker row. */
+    static cancelSidebarClinicalOcrBatch(root = null) {
+        AnnotationAdapter.sidebarOcrBatchGeneration += 1;
+        const scope = root
+            || (typeof document !== "undefined" ? document : null);
+        if (!scope?.querySelectorAll) return;
+        for (const node of scope.querySelectorAll(".image-button .ocr-result-text")) {
+            node.textContent = "";
+            if (typeof node.classList?.remove === "function") {
+                node.classList.remove("ocr-result-pending");
+            }
+        }
+    }
+
     static async recognizeLabelImage(imgOrSrc) {
         if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
             throw new Error("Tesseract.js is unavailable");
         }
         const imgElement = await AnnotationAdapter.loadImageElementForOcrDraw(imgOrSrc);
         if (!imgElement) {
-            return { text: "", rawText: "", ok: false };
+            return { text: "", rawText: "", marker: "", ok: false };
         }
         const rotatedDataUrl = AnnotationAdapter.createRotated90CwDataUrl(imgElement);
         if (!rotatedDataUrl) {
-            return { text: "", rawText: "", ok: false };
+            return { text: "", rawText: "", marker: "", ok: false };
         }
         // Feed physically upright pixels — not the sideways raw img.src.
         const result = await Tesseract.recognize(
@@ -638,10 +687,12 @@ class AnnotationAdapter {
         const engineRaw = String(result?.data?.text || "");
         // Normalize before any clinical regex / UI dump.
         const normalized = AnnotationAdapter.normalizeOcrClinicalText(engineRaw);
+        const marker = AnnotationAdapter.extractIfEpitopeMarker(normalized);
         return {
             text: normalized,
             rawText: normalized,
             engineRaw,
+            marker,
             ok: Boolean(normalized.trim())
         };
     }
@@ -649,7 +700,7 @@ class AnnotationAdapter {
     /** Compatibility alias. */
     static async recognizeClinicalLabelOcr(imageId) {
         const url = AnnotationAdapter.slideLabelThumbUrl(imageId);
-        if (!url) return { text: "", rawText: "", ok: false };
+        if (!url) return { text: "", rawText: "", marker: "", ok: false };
         return AnnotationAdapter.recognizeLabelImage(url);
     }
 
@@ -680,6 +731,20 @@ class AnnotationAdapter {
     }
 
     /**
+     * Place a permanent compressed {@code if.<epitope>} row under the filename.
+     */
+    static renderOcrClinicalMarker(targetNode, text) {
+        if (!targetNode) return;
+        const marker = AnnotationAdapter.extractIfEpitopeMarker(text);
+        targetNode.hidden = false;
+        if (typeof targetNode.classList?.remove === "function") {
+            targetNode.classList.remove("ocr-result-pending");
+        }
+        targetNode.textContent = marker;
+        AnnotationAdapter.enableOcrResultTextSelection(targetNode);
+    }
+
+    /**
      * Stop parent slide-row button handlers from swallowing drag-select / copy.
      */
     static enableOcrResultTextSelection(targetNode) {
@@ -699,10 +764,26 @@ class AnnotationAdapter {
         if (!targetNode) return;
         targetNode.hidden = false;
         targetNode.textContent = "Scanning…";
-        targetNode.style.color = "#888888";
+        targetNode.style.color = "";
         AnnotationAdapter.enableOcrResultTextSelection(targetNode);
     }
 
+    /**
+     * Non-shifting pending glyph while background OCR resolves (same line box).
+     */
+    static beginOcrPendingDisplay(targetNode) {
+        if (!targetNode) return;
+        targetNode.hidden = false;
+        if (typeof targetNode.classList?.add === "function") {
+            targetNode.classList.add("ocr-result-pending");
+        }
+        targetNode.textContent = "·";
+        AnnotationAdapter.enableOcrResultTextSelection(targetNode);
+    }
+
+    /**
+     * Permanent OCR marker row directly under the bold filename label.
+     */
     static ensureSidebarOcrResultNode(button, doc) {
         if (!button || !doc) return null;
         let result = button.querySelector(".ocr-result-text");
@@ -712,7 +793,7 @@ class AnnotationAdapter {
         }
         result = doc.createElement("span");
         result.className = "ocr-result-text";
-        result.hidden = true;
+        result.textContent = "";
         const label = button.querySelector(".image-button-label");
         if (label) label.after(result);
         else button.append(result);
@@ -720,21 +801,105 @@ class AnnotationAdapter {
         return result;
     }
 
-    static ensureSidebarOcrScanButton(slot, doc) {
-        if (!slot || !doc || slot.querySelector(".ocr-test-btn")) return;
-        const ocrButton = doc.createElement("button");
-        ocrButton.type = "button";
-        ocrButton.className = "ocr-test-btn";
-        ocrButton.textContent = "🔍 Scan Label";
-        ocrButton.title = "OCR raw dump (pixels rotated 90° CW for upright text)";
-        ocrButton.addEventListener("click", event => {
-            event.preventDefault();
-            event.stopPropagation();
-            AnnotationAdapter.runSidebarLabelOcr(ocrButton);
+    /**
+     * Kick off non-blocking clinical-marker OCR for every visible case-list row.
+     * Label thumbnails stay hidden; only detached label.png pixels are fetched.
+     * Cached slide IDs skip Tesseract entirely (one scan per browser session).
+     */
+    static scheduleSidebarClinicalOcrBatch(container) {
+        if (!container) return 0;
+        const generation = ++AnnotationAdapter.sidebarOcrBatchGeneration;
+        void AnnotationAdapter.runSidebarClinicalOcrBatch(container, generation);
+        return generation;
+    }
+
+    /** Resolve a stable session-cache key for a sidebar slide row. */
+    static sidebarOcrCacheKey(button) {
+        const imageId = String(button?.dataset?.imageId || "").trim();
+        if (imageId) return imageId;
+        return String(button?.dataset?.imageName || button?.dataset?.imagePath || "").trim();
+    }
+
+    static hasOcrSessionCacheEntry(cacheKey) {
+        return Boolean(cacheKey)
+            && Object.prototype.hasOwnProperty.call(OcrSessionCache, cacheKey);
+    }
+
+    static readOcrSessionCache(cacheKey) {
+        if (!AnnotationAdapter.hasOcrSessionCacheEntry(cacheKey)) return undefined;
+        return OcrSessionCache[cacheKey];
+    }
+
+    static writeOcrSessionCache(cacheKey, markerText) {
+        if (!cacheKey) return;
+        OcrSessionCache[cacheKey] = String(markerText || "");
+    }
+
+    static async runSidebarClinicalOcrBatch(container, generation) {
+        if (!container || typeof container.querySelectorAll !== "function") return;
+        const doc = typeof document !== "undefined" ? document : null;
+        const buttons = Array.from(container.querySelectorAll(".image-button"));
+        const concurrency = Math.max(
+            1,
+            Number(AnnotationAdapter.SIDEBAR_OCR_CONCURRENCY) || 1
+        );
+
+        const processRow = async (button) => {
+            if (generation !== AnnotationAdapter.sidebarOcrBatchGeneration) return;
+            const cacheKey = AnnotationAdapter.sidebarOcrCacheKey(button);
+            const targetNode = AnnotationAdapter.ensureSidebarOcrResultNode(button, doc)
+                || button.querySelector(".ocr-result-text");
+            if (!targetNode || !cacheKey) return;
+
+            // Guard: session cache hit → paint instantly, never re-OCR.
+            if (AnnotationAdapter.hasOcrSessionCacheEntry(cacheKey)) {
+                AnnotationAdapter.renderOcrClinicalMarker(
+                    targetNode,
+                    AnnotationAdapter.readOcrSessionCache(cacheKey)
+                );
+                return;
+            }
+
+            if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
+                AnnotationAdapter.writeOcrSessionCache(cacheKey, "");
+                AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
+                return;
+            }
+
+            AnnotationAdapter.beginOcrPendingDisplay(targetNode);
+            const labelUrl = AnnotationAdapter.slideLabelFullResUrl(cacheKey);
+            if (!labelUrl) {
+                AnnotationAdapter.writeOcrSessionCache(cacheKey, "");
+                AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
+                return;
+            }
+            try {
+                const result = await AnnotationAdapter.recognizeLabelImage(labelUrl);
+                if (generation !== AnnotationAdapter.sidebarOcrBatchGeneration) return;
+                const marker = AnnotationAdapter.extractIfEpitopeMarker(
+                    result?.marker || result?.rawText || result?.text || ""
+                );
+                // Commit before paint so later layout repaints never re-scan.
+                AnnotationAdapter.writeOcrSessionCache(cacheKey, marker);
+                AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
+            } catch (_error) {
+                if (generation !== AnnotationAdapter.sidebarOcrBatchGeneration) return;
+                // Cache empty failure so permanent errors are not retried forever.
+                AnnotationAdapter.writeOcrSessionCache(cacheKey, "");
+                AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
+            }
+        };
+
+        // Controlled sequential queue (width = concurrency) — avoids CPU choke.
+        let cursor = 0;
+        const workers = Array.from({ length: Math.min(concurrency, buttons.length) }, async () => {
+            while (cursor < buttons.length) {
+                if (generation !== AnnotationAdapter.sidebarOcrBatchGeneration) return;
+                const index = cursor++;
+                await processRow(buttons[index]);
+            }
         });
-        const rotate = slot.querySelector(":scope > .slide-label-rotate");
-        if (rotate) rotate.after(ocrButton);
-        else slot.append(ocrButton);
+        await Promise.all(workers);
     }
 
     static ensureOverviewOcrControls(doc = null) {
@@ -776,31 +941,6 @@ class AnnotationAdapter {
         return { scanButton, result };
     }
 
-    static runSidebarLabelOcr(trigger) {
-        const row = trigger?.closest?.(".image-button");
-        if (!row) return;
-        const doc = typeof document !== "undefined" ? document : null;
-        const targetNode = AnnotationAdapter.ensureSidebarOcrResultNode(row, doc)
-            || row.querySelector(".ocr-result-text");
-        if (!targetNode) return;
-        const imgElement = row.querySelector(".slide-label-thumb");
-        AnnotationAdapter.beginOcrScanDisplay(targetNode);
-        if (!imgElement?.src) {
-            AnnotationAdapter.renderOcrRawDump(targetNode, "");
-            return;
-        }
-        if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
-            AnnotationAdapter.renderOcrRawDump(targetNode, "");
-            return;
-        }
-        // Physically rotate raw pixels 90° CW, then OCR the upright data URL.
-        AnnotationAdapter.recognizeLabelImage(imgElement).then(result => {
-            AnnotationAdapter.renderOcrRawDump(targetNode, result?.rawText || result?.text || "");
-        }).catch(() => {
-            AnnotationAdapter.renderOcrRawDump(targetNode, "");
-        });
-    }
-
     static runOverviewLabelOcr(doc = null) {
         const root = doc || (typeof document !== "undefined" ? document : null);
         const controls = AnnotationAdapter.ensureOverviewOcrControls(root);
@@ -808,17 +948,20 @@ class AnnotationAdapter {
         const imgElement = root.getElementById("slide-label-image");
         AnnotationAdapter.beginOcrScanDisplay(controls.result);
         if (!imgElement?.src || imgElement.hidden) {
-            AnnotationAdapter.renderOcrRawDump(controls.result, "");
+            AnnotationAdapter.renderOcrClinicalMarker(controls.result, "");
             return;
         }
         if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
-            AnnotationAdapter.renderOcrRawDump(controls.result, "");
+            AnnotationAdapter.renderOcrClinicalMarker(controls.result, "");
             return;
         }
         AnnotationAdapter.recognizeLabelImage(imgElement).then(result => {
-            AnnotationAdapter.renderOcrRawDump(controls.result, result?.rawText || result?.text || "");
+            AnnotationAdapter.renderOcrClinicalMarker(
+                controls.result,
+                result?.marker || result?.rawText || result?.text || ""
+            );
         }).catch(() => {
-            AnnotationAdapter.renderOcrRawDump(controls.result, "");
+            AnnotationAdapter.renderOcrClinicalMarker(controls.result, "");
         });
     }
 
@@ -1216,6 +1359,8 @@ class AnnotationAdapter {
      */
     static renderImageBrowser(container, images, selectedCase, options = {}) {
         if (!container || typeof container.replaceChildren !== "function") return;
+        // Abort any prior case-list OCR before rebuilding rows.
+        AnnotationAdapter.sidebarOcrBatchGeneration += 1;
         container.replaceChildren();
         const mode = AnnotationAdapter.resolveCaseFilterMode(selectedCase);
         const list = AnnotationAdapter.sortImagesNaturally(images);
@@ -1254,9 +1399,11 @@ class AnnotationAdapter {
                 button.addEventListener("click", () => onSelect(image));
                 container.append(button);
             }
+            // Thumbs stay hidden by default; auto-OCR fetches label.png off-DOM.
             if (AnnotationAdapter.slideLabelThumbsEnabled) {
                 AnnotationAdapter.loadSlideLabelThumbs(container);
             }
+            AnnotationAdapter.scheduleSidebarClinicalOcrBatch(container);
             return;
         }
 

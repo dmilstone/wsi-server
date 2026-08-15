@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="/pilot-feedback.css">
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260815-ocr-if-omni-norm"></script>
+    <script src="/annotation-adapter.js?v=20260815-ocr-session-cache"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -380,10 +380,12 @@
         .ocr-result-text {
             display: block;
             font-size: 0.85rem;
-            color: #ff9900;
-            margin-top: 2px;
-            line-height: 1.1;
-            font-weight: 500;
+            font-weight: bold;
+            color: #00ffcc;
+            margin-top: 1px;
+            line-height: 1;
+            padding: 0;
+            min-height: 0.85rem;
             white-space: normal;
             word-break: break-word;
             overflow: visible;
@@ -395,6 +397,9 @@
             pointer-events: auto !important;
             position: relative;
             z-index: 1000;
+        }
+        .ocr-result-text.ocr-result-pending {
+            color: rgba(0, 255, 204, 0.35);
         }
         .ocr-result-text[hidden] { display: none !important; }
         .image-button .ocr-result-text {
@@ -464,7 +469,7 @@
             /* Keep row geometry stable while thumbs are visible. */
             transform: none;
         }
-        .image-button-label { display: block; }
+        .image-button-label { display: block; font-weight: bold; }
         .folder-group { margin: 4px 0 10px; border: 1px solid transparent; border-radius: var(--radius); }
         .folder-group[open] { background: rgba(255,255,255,.018); border-color: rgba(255,255,255,.045); }
         .folder-group:not([open]) > .folder-contents {
@@ -2234,6 +2239,8 @@
     window.addEventListener("pagehide", () => { if (liveDiscovery) liveDiscovery.stop(); }, {once:true});
 
     async function selectImage(image) {
+        // Clear overview OCR only — sidebar per-row if.<epitope> markers stay.
+        AnnotationAdapter.clearAllOcrResultText(document);
         startImageSwitchTiming(image);
         try {
             // Hide empty-canvas guidance the instant a slide is chosen / tiles start.
