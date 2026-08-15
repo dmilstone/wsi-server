@@ -221,10 +221,10 @@ assert.equal(
     "placeholder"
 );
 assert.deepEqual(
-    AnnotationAdapter.buildHeaderIdentity({
+    JSON.parse(JSON.stringify(AnnotationAdapter.buildHeaderIdentity({
         name: "BA26-041340_A2.vsi",
         relativePath: "x/BA26-041340_A2.vsi"
-    }),
+    }))),
     { caseId: "BA26-041340", slideDetail: "BA26-041340_A2.vsi" }
 );
 assert.equal(
@@ -364,7 +364,7 @@ assert.match(html, /\.workspace\.left-collapsed\s*\{[^}]*grid-template-columns:\
 assert.match(html, /\.workspace\.left-collapsed #images-panel[\s\S]*?display:\s*none/);
 assert.match(html, /\.workspace > main\s*\{[^}]*grid-column:\s*3/s);
 assert.match(html, /removeProperty\(`--\$\{side\}-panel`\)/);
-assert.match(adapterSource, /label\.textContent\s*=\s*image\.name/);
+assert.match(adapterSource, /label\.textContent\s*=\s*title/);
 assert.doesNotMatch(adapterSource, /class="image-path"/);
 assert.doesNotMatch(adapterSource, /span class="image-path"/);
 assert.match(html, /slide-label-thumb-wrap/);
@@ -391,10 +391,52 @@ assert.match(adapterSource, /getElementById\("current-image-name"\)/);
 assert.match(adapterSource, /static slideLabelThumbUrl\([\s\S]*?label\.png/);
 assert.doesNotMatch(adapterSource, /label-cache\.png/);
 assert.match(html, /\/label\.png/);
+assert.match(html, /cdn\.jsdelivr\.net\/npm\/tesseract\.js/);
+assert.match(adapterSource, /ocr-test-btn/);
+assert.match(adapterSource, /ocr-result-text/);
+assert.match(adapterSource, /runSidebarLabelOcr/);
+assert.match(adapterSource, /runOverviewLabelOcr/);
+assert.match(adapterSource, /recognizeLabelImage/);
+assert.match(adapterSource, /recognizeClinicalLabelOcr/);
+assert.match(adapterSource, /recognizeLabelMultiAngle/);
+assert.match(adapterSource, /Tesseract\.recognize/);
+assert.match(adapterSource, /renderOcrRawDump/);
+assert.match(adapterSource, /\[RAW:/);
+assert.match(adapterSource, /#ff9900/);
+assert.match(adapterSource, /\.slide-label-thumb/);
+assert.doesNotMatch(adapterSource, /prepareClinicalOcrCanvas/);
+assert.doesNotMatch(adapterSource, /binarizeCanvasInPlace/);
+assert.doesNotMatch(adapterSource, /maskBarcodeRegionsOnCanvas/);
+assert.doesNotMatch(adapterSource, /OCR_SCAN_ORDER_DEG/);
+assert.doesNotMatch(adapterSource, /OCR_LOCK_ROTATION_DEG/);
+assert.doesNotMatch(adapterSource, /\[if\. N\/A\]/);
+assert.doesNotMatch(adapterSource, /renderOcrIfMarker/);
+assert.match(html, /\.ocr-result-text\s*\{[\s\S]*?display:\s*block/);
+assert.match(html, /id="overview-ocr-scan"/);
+assert.match(html, /id="overview-ocr-result"/);
+assert.match(html, /ocr-test-btn/);
+assert.match(html, /ocr-result-text/);
+assert.match(html, /#ff9900/);
+assert.match(adapterSource, /enableOcrResultTextSelection/);
+assert.match(adapterSource, /createRotated90CwDataUrl/);
+assert.match(adapterSource, /toDataURL\(["']image\/png["']\)/);
+assert.match(adapterSource, /rotate\(90\s*\*\s*Math\.PI\s*\/\s*180\)/);
+assert.match(adapterSource, /rotatedDataUrl/);
+assert.match(adapterSource, /tessedit_char_whitelist/);
+assert.match(adapterSource, /tessedit_enable_doc_dict:\s*["']0["']/);
+assert.match(adapterSource, /tessedit_enable_bigram_dict:\s*["']0["']/);
+assert.match(adapterSource, /tessedit_pages_seg_mode/);
+assert.match(adapterSource, /normalizeOcrClinicalText/);
+assert.match(adapterSource, /if\[\\s\\\.\]\+/i);
+assert.match(html, /user-select:\s*text\s*!important/);
+assert.match(html, /-webkit-user-select:\s*text\s*!important/);
+assert.match(html, /pointer-events:\s*auto\s*!important/);
+assert.match(html, /z-index:\s*1000/);
+assert.match(html, /annotation-adapter\.js\?v=20260815-ocr-if-omni-norm/);
 assert.match(html, /channel-levels/);
 assert.match(html, /renderImageBrowser/);
 assert.match(html, /populateCaseFilterSelect/);
-assert.match(html, /applyCaseFilterToSlideButtons/);
+assert.match(adapterSource, /applyCaseFilterToSlideButtons/);
 assert.match(html, /shouldBypassSessionImageAutoload/);
 assert.match(html, /applyBlankWorkspaceState/);
 assert.match(html, /bindCaseFilterChangeGuard/);
@@ -407,6 +449,5 @@ assert.match(html, /id="directory"/);
 // Admin tools must live in the right-column drawer, not the left slide list header.
 assert.match(html, /id="workstation-admin-tools"[\s\S]*id="directory"[\s\S]*id="refresh-images"/);
 assert.doesNotMatch(html, /id="images-panel"[\s\S]*panel-kicker">Browse[\s\S]*id="image-list"/);
-assert.match(html, /annotation-adapter\.js\?v=20260814-label-frame/);
 
 console.log("z-stack-viewer.test.js: ok");

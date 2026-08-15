@@ -11,8 +11,9 @@
     <script src="/csrf.js"></script>
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="/annotation-store.js?v=20260812-ws2"></script>
-    <script src="/annotation-adapter.js?v=20260815-natural-sort"></script>
+    <script src="/annotation-adapter.js?v=20260815-ocr-if-omni-norm"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
     <script src="/annotorious-spike.js"></script>
@@ -285,7 +286,7 @@
         .sidebar-label-slot {
             position: relative;
             display: block;
-            width: 108px;
+            width: 160px;
             height: 80px;
             margin-top: 8px;
             flex: 0 0 auto;
@@ -349,6 +350,92 @@
             line-height: 1;
             cursor: pointer;
             transform: none !important;
+        }
+        .sidebar-label-slot > .ocr-test-btn {
+            position: absolute;
+            top: 28px;
+            left: 84px;
+            z-index: 3;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 22px;
+            max-width: 72px;
+            padding: 2px 4px;
+            border: 1px solid rgba(255,255,255,.22);
+            border-radius: 6px;
+            background: rgba(12, 17, 23, .78);
+            color: #dff0ff;
+            font-size: 9px;
+            font-weight: 700;
+            line-height: 1.1;
+            text-align: center;
+            white-space: normal;
+            cursor: pointer;
+        }
+        .sidebar-label-slot > .ocr-test-btn:hover {
+            background: rgba(52, 127, 194, .55);
+            border-color: rgba(101, 166, 223, .7);
+        }
+        .ocr-result-text {
+            display: block;
+            font-size: 0.85rem;
+            color: #ff9900;
+            margin-top: 2px;
+            line-height: 1.1;
+            font-weight: 500;
+            white-space: normal;
+            word-break: break-word;
+            overflow: visible;
+            /* Un-trap selection inside slide-row buttons / overview panels. */
+            user-select: text !important;
+            -webkit-user-select: text !important;
+            -moz-user-select: text !important;
+            cursor: text !important;
+            pointer-events: auto !important;
+            position: relative;
+            z-index: 1000;
+        }
+        .ocr-result-text[hidden] { display: none !important; }
+        .image-button .ocr-result-text {
+            /* Keep drag-select from activating the parent slide row. */
+            max-width: 100%;
+        }
+        .overview-ocr-scan {
+            position: absolute;
+            top: 40px;
+            right: 8px;
+            z-index: 4;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 22px;
+            max-width: 72px;
+            padding: 2px 5px;
+            border: 1px solid rgba(255,255,255,.22);
+            border-radius: 6px;
+            background: rgba(12, 17, 23, .78);
+            color: #dff0ff;
+            font-size: 9px;
+            font-weight: 700;
+            line-height: 1.1;
+            text-align: center;
+            white-space: normal;
+            cursor: pointer;
+        }
+        .overview-ocr-scan:hover {
+            background: rgba(52, 127, 194, .55);
+            border-color: rgba(101, 166, 223, .7);
+        }
+        .overview-ocr-result {
+            margin-top: 8px;
+            max-height: 9em;
+            padding: 8px 10px;
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 8px;
+            background: rgba(5, 7, 10, .92);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.78rem;
         }
         .slide-label-rotate {
             position: absolute;
@@ -1683,11 +1770,14 @@
                         <button id="overview-label-rotate" class="slide-label-rotate overview-label-rotate" type="button"
                                 title="Rotate label (90° → next 90° clockwise)"
                                 aria-label="Rotate slide label, currently 90 degrees">🔄</button>
+                        <button id="overview-ocr-scan" class="ocr-test-btn overview-ocr-scan" type="button"
+                                title="OCR high-resolution slide label (multi-angle)">🔍 Scan Label</button>
                         <button id="slide-label-open" class="overview-image-button" type="button" aria-label="Open slide label in a larger viewer">
                             <img id="slide-label-image" class="overview-image overview-label-image" alt="Slide label">
                         </button>
                     </div>
                     <div id="slide-label-error" class="overview-error" hidden>Slide label is unavailable.</div>
+                    <pre id="overview-ocr-result" class="ocr-result-text overview-ocr-result" hidden></pre>
                 </figure>
                 <figure class="overview-figure">
                     <figcaption>Whole-slide thumbnail overview</figcaption>
@@ -2325,6 +2415,11 @@
         event.preventDefault();
         event.stopPropagation();
         AnnotationAdapter.cycleOverviewSlideLabelRotation(document, selectedImage?.id || null);
+    });
+    document.getElementById("overview-ocr-scan")?.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        AnnotationAdapter.runOverviewLabelOcr(document);
     });
     document.getElementById("slide-label-open").addEventListener("click", event => openImageLightbox(slideLabelImage, "Slide label", event.currentTarget));
     document.getElementById("slide-thumbnail-open").addEventListener("click", event => openImageLightbox(slideThumbnailImage, "Whole-slide thumbnail overview", event.currentTarget));

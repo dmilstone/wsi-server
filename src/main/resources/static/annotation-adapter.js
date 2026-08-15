@@ -263,6 +263,15 @@ class AnnotationAdapter {
         return `/api/images/${encodeURIComponent(imageId)}/label.png`;
     }
 
+    /**
+     * Full-resolution macro/associated label PNG (same Bio-Formats route as the
+     * sidebar thumb src, but always loaded into a detached Image for OCR so CSS
+     * layout scaling cannot downsample the pixel buffer).
+     */
+    static slideLabelFullResUrl(imageId) {
+        return AnnotationAdapter.slideLabelThumbUrl(imageId);
+    }
+
     static normalizeSlideLabelRotation(degrees) {
         const allowed = AnnotationAdapter.SLIDE_LABEL_ROTATIONS_DEG;
         let next = Number.parseInt(degrees, 10);
@@ -304,17 +313,18 @@ class AnnotationAdapter {
         if (typeof target.style?.setProperty === "function") {
             target.style.setProperty("--label-rotation", `${next}deg`);
         }
-        const isSidebarFrame = Boolean(
-            target.classList?.contains("sidebar-label-wrapper")
-            || target.classList?.contains("slide-label-thumb-wrap")
-        );
-        if (target.classList?.toggle) {
+        const classList = target.classList;
+        const hasClass = (name) => typeof classList?.contains === "function" && classList.contains(name);
+        const isSidebarFrame = hasClass("sidebar-label-wrapper") || hasClass("slide-label-thumb-wrap");
+        if (typeof classList?.toggle === "function") {
             if (isSidebarFrame) {
                 // Fixed square frame — never swap width/height with rotation.
-                target.classList.remove("is-landscape-rotation");
+                if (typeof classList.remove === "function") {
+                    classList.remove("is-landscape-rotation");
+                }
             } else {
                 const landscape = next === 0 || next === 180;
-                target.classList.toggle("is-landscape-rotation", landscape);
+                classList.toggle("is-landscape-rotation", landscape);
             }
         }
         const slot = target.closest?.(".sidebar-label-slot");
@@ -481,12 +491,14 @@ class AnnotationAdapter {
 
                 wrap.append(thumb);
                 slot.append(wrap, rotate);
+                AnnotationAdapter.ensureSidebarOcrScanButton(slot, doc);
                 button.append(slot);
                 AnnotationAdapter.applySlideLabelThumbRotation(
                     wrap,
                     AnnotationAdapter.getSlideLabelRotation(imageId)
                 );
             } else {
+                AnnotationAdapter.ensureSidebarOcrScanButton(slot, doc);
                 AnnotationAdapter.applySlideLabelThumbRotation(
                     wrap,
                     AnnotationAdapter.getSlideLabelRotation(imageId)
@@ -518,6 +530,296 @@ class AnnotationAdapter {
             thumb.src = AnnotationAdapter.slideLabelThumbUrl(imageId);
         }
         return generation;
+    }
+
+    /**
+     * Browser-tier OCR (Tesseract.js): physically rotate label pixels 90° CW on
+     * an offscreen canvas (CSS rotation does not alter {@code img.src} data).
+     */
+    static async loadImageElementForOcrDraw(imgOrSrc) {
+        if (!imgOrSrc) return null;
+        if (typeof HTMLImageElement !== "undefined" && imgOrSrc instanceof HTMLImageElement) {
+            if (imgOrSrc.complete && (imgOrSrc.naturalWidth || 0) > 0) return imgOrSrc;
+            await new Promise((resolve, reject) => {
+                const onLoad = () => {
+                    imgOrSrc.removeEventListener("error", onError);
+                    resolve();
+                };
+                const onError = () => {
+                    imgOrSrc.removeEventListener("load", onLoad);
+                    reject(new Error("Label image failed to load for OCR"));
+                };
+                imgOrSrc.addEventListener("load", onLoad, { once: true });
+                imgOrSrc.addEventListener("error", onError, { once: true });
+            });
+            return imgOrSrc;
+        }
+        const src = typeof imgOrSrc === "string" ? imgOrSrc : String(imgOrSrc?.src || "");
+        if (!src || typeof Image === "undefined") return null;
+        const img = new Image();
+        img.decoding = "async";
+        await new Promise((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error("Label image failed to load for OCR"));
+            img.src = src;
+        });
+        return img;
+    }
+
+    /**
+     * Physically spin raw label pixels 90° clockwise onto an offscreen canvas
+     * and return a PNG data URL for Tesseract.
+     */
+    static createRotated90CwDataUrl(imgElement) {
+        if (!imgElement || typeof document === "undefined") return "";
+        const width = Number(imgElement.naturalWidth || imgElement.width) || 0;
+        const height = Number(imgElement.naturalHeight || imgElement.height) || 0;
+        if (width < 1 || height < 1) return "";
+        const canvas = document.createElement("canvas");
+        // 90° flip: canvas width ← image height, canvas height ← image width
+        canvas.width = height;
+        canvas.height = width;
+        const context = canvas.getContext("2d");
+        if (!context) return "";
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.translate(height, 0);
+        context.rotate(90 * Math.PI / 180);
+        context.drawImage(imgElement, 0, 0);
+        return canvas.toDataURL("image/png");
+    }
+
+    static OCR_CHAR_WHITELIST =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.";
+    /** Sparse text PSM — treat solitary punctuation as structural anchors. */
+    static OCR_PAGE_SEG_MODE = "11";
+
+    static tesseractRecognizeOptions() {
+        const whitelist = AnnotationAdapter.OCR_CHAR_WHITELIST;
+        const psm = AnnotationAdapter.OCR_PAGE_SEG_MODE;
+        return {
+            tessedit_char_whitelist: whitelist,
+            // Disable English dictionary / bigram autocorrect — prefer geometric shapes.
+            tessedit_enable_doc_dict: "0",
+            tessedit_enable_bigram_dict: "0",
+            tessedit_pageseg_mode: psm,
+            // PoC alias requested by clinical OCR harness.
+            tessedit_pages_seg_mode: psm
+        };
+    }
+
+    /**
+     * Safe-catch for printer / OCR alignment variance around the clinical
+     * {@code if.} anchor (space, period, or space-period permutations).
+     * Normalizes e.g. {@code if IgG}, {@code if.IgG}, {@code if. IgG},
+     * {@code if .IgG}, {@code if . IgG} → {@code if.…}.
+     */
+    static normalizeOcrClinicalText(text) {
+        return String(text || "").replace(/if[\s\.]+/i, "if.");
+    }
+
+    static async recognizeLabelImage(imgOrSrc) {
+        if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
+            throw new Error("Tesseract.js is unavailable");
+        }
+        const imgElement = await AnnotationAdapter.loadImageElementForOcrDraw(imgOrSrc);
+        if (!imgElement) {
+            return { text: "", rawText: "", ok: false };
+        }
+        const rotatedDataUrl = AnnotationAdapter.createRotated90CwDataUrl(imgElement);
+        if (!rotatedDataUrl) {
+            return { text: "", rawText: "", ok: false };
+        }
+        // Feed physically upright pixels — not the sideways raw img.src.
+        const result = await Tesseract.recognize(
+            rotatedDataUrl,
+            "eng",
+            AnnotationAdapter.tesseractRecognizeOptions()
+        );
+        const engineRaw = String(result?.data?.text || "");
+        // Normalize before any clinical regex / UI dump.
+        const normalized = AnnotationAdapter.normalizeOcrClinicalText(engineRaw);
+        return {
+            text: normalized,
+            rawText: normalized,
+            engineRaw,
+            ok: Boolean(normalized.trim())
+        };
+    }
+
+    /** Compatibility alias. */
+    static async recognizeClinicalLabelOcr(imageId) {
+        const url = AnnotationAdapter.slideLabelThumbUrl(imageId);
+        if (!url) return { text: "", rawText: "", ok: false };
+        return AnnotationAdapter.recognizeLabelImage(url);
+    }
+
+    /** Compatibility alias. */
+    static async recognizeLabelMultiAngle(sourceOrImageId, options = {}) {
+        const imageId = options.imageId
+            || (typeof sourceOrImageId === "string" ? sourceOrImageId : null);
+        if (imageId) return AnnotationAdapter.recognizeClinicalLabelOcr(imageId);
+        return AnnotationAdapter.recognizeLabelImage(sourceOrImageId);
+    }
+
+    /**
+     * Dump complete raw OCR text into the UI (no boilerplate placeholders).
+     * Forces selectable / copyable styling even when nested in a slide-row button.
+     */
+    static renderOcrRawDump(targetNode, text) {
+        if (!targetNode) return;
+        targetNode.hidden = false;
+        targetNode.textContent = " [RAW: " + String(text || "").trim().replace(/\n+/g, " ") + "]";
+        targetNode.style.color = "#ff9900";
+        targetNode.style.userSelect = "text";
+        targetNode.style.webkitUserSelect = "text";
+        targetNode.style.cursor = "text";
+        targetNode.style.pointerEvents = "auto";
+        targetNode.style.position = "relative";
+        targetNode.style.zIndex = "1000";
+        AnnotationAdapter.enableOcrResultTextSelection(targetNode);
+    }
+
+    /**
+     * Stop parent slide-row button handlers from swallowing drag-select / copy.
+     */
+    static enableOcrResultTextSelection(targetNode) {
+        if (!targetNode || targetNode.dataset?.ocrSelectBound === "1") return;
+        const stop = event => {
+            event.stopPropagation();
+        };
+        targetNode.addEventListener("mousedown", stop);
+        targetNode.addEventListener("mouseup", stop);
+        targetNode.addEventListener("click", stop);
+        targetNode.addEventListener("dblclick", stop);
+        targetNode.addEventListener("selectstart", stop);
+        if (targetNode.dataset) targetNode.dataset.ocrSelectBound = "1";
+    }
+
+    static beginOcrScanDisplay(targetNode) {
+        if (!targetNode) return;
+        targetNode.hidden = false;
+        targetNode.textContent = "Scanning…";
+        targetNode.style.color = "#888888";
+        AnnotationAdapter.enableOcrResultTextSelection(targetNode);
+    }
+
+    static ensureSidebarOcrResultNode(button, doc) {
+        if (!button || !doc) return null;
+        let result = button.querySelector(".ocr-result-text");
+        if (result) {
+            AnnotationAdapter.enableOcrResultTextSelection(result);
+            return result;
+        }
+        result = doc.createElement("span");
+        result.className = "ocr-result-text";
+        result.hidden = true;
+        const label = button.querySelector(".image-button-label");
+        if (label) label.after(result);
+        else button.append(result);
+        AnnotationAdapter.enableOcrResultTextSelection(result);
+        return result;
+    }
+
+    static ensureSidebarOcrScanButton(slot, doc) {
+        if (!slot || !doc || slot.querySelector(".ocr-test-btn")) return;
+        const ocrButton = doc.createElement("button");
+        ocrButton.type = "button";
+        ocrButton.className = "ocr-test-btn";
+        ocrButton.textContent = "🔍 Scan Label";
+        ocrButton.title = "OCR raw dump (pixels rotated 90° CW for upright text)";
+        ocrButton.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.runSidebarLabelOcr(ocrButton);
+        });
+        const rotate = slot.querySelector(":scope > .slide-label-rotate");
+        if (rotate) rotate.after(ocrButton);
+        else slot.append(ocrButton);
+    }
+
+    static ensureOverviewOcrControls(doc = null) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        if (!root) return null;
+        const stage = root.getElementById("overview-label-stage");
+        const figure = root.querySelector(".overview-figure-label");
+        if (!stage || !figure) return null;
+
+        let scanButton = root.getElementById("overview-ocr-scan");
+        if (!scanButton) {
+            scanButton = root.createElement("button");
+            scanButton.type = "button";
+            scanButton.id = "overview-ocr-scan";
+            scanButton.className = "ocr-test-btn overview-ocr-scan";
+            scanButton.textContent = "🔍 Scan Label";
+            scanButton.title = "OCR raw dump (pixels rotated 90° CW for upright text)";
+            scanButton.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.runOverviewLabelOcr(root);
+            });
+            const rotate = root.getElementById("overview-label-rotate");
+            if (rotate) rotate.after(scanButton);
+            else stage.append(scanButton);
+        }
+
+        let result = root.getElementById("overview-ocr-result");
+        if (!result) {
+            result = root.createElement("pre");
+            result.id = "overview-ocr-result";
+            result.className = "ocr-result-text overview-ocr-result";
+            result.hidden = true;
+            const error = root.getElementById("slide-label-error");
+            if (error) error.after(result);
+            else figure.append(result);
+        }
+        AnnotationAdapter.enableOcrResultTextSelection(result);
+        return { scanButton, result };
+    }
+
+    static runSidebarLabelOcr(trigger) {
+        const row = trigger?.closest?.(".image-button");
+        if (!row) return;
+        const doc = typeof document !== "undefined" ? document : null;
+        const targetNode = AnnotationAdapter.ensureSidebarOcrResultNode(row, doc)
+            || row.querySelector(".ocr-result-text");
+        if (!targetNode) return;
+        const imgElement = row.querySelector(".slide-label-thumb");
+        AnnotationAdapter.beginOcrScanDisplay(targetNode);
+        if (!imgElement?.src) {
+            AnnotationAdapter.renderOcrRawDump(targetNode, "");
+            return;
+        }
+        if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
+            AnnotationAdapter.renderOcrRawDump(targetNode, "");
+            return;
+        }
+        // Physically rotate raw pixels 90° CW, then OCR the upright data URL.
+        AnnotationAdapter.recognizeLabelImage(imgElement).then(result => {
+            AnnotationAdapter.renderOcrRawDump(targetNode, result?.rawText || result?.text || "");
+        }).catch(() => {
+            AnnotationAdapter.renderOcrRawDump(targetNode, "");
+        });
+    }
+
+    static runOverviewLabelOcr(doc = null) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        const controls = AnnotationAdapter.ensureOverviewOcrControls(root);
+        if (!controls?.result) return;
+        const imgElement = root.getElementById("slide-label-image");
+        AnnotationAdapter.beginOcrScanDisplay(controls.result);
+        if (!imgElement?.src || imgElement.hidden) {
+            AnnotationAdapter.renderOcrRawDump(controls.result, "");
+            return;
+        }
+        if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
+            AnnotationAdapter.renderOcrRawDump(controls.result, "");
+            return;
+        }
+        AnnotationAdapter.recognizeLabelImage(imgElement).then(result => {
+            AnnotationAdapter.renderOcrRawDump(controls.result, result?.rawText || result?.text || "");
+        }).catch(() => {
+            AnnotationAdapter.renderOcrRawDump(controls.result, "");
+        });
     }
 
     /**
@@ -947,6 +1249,7 @@ class AnnotationAdapter {
                 label.className = "image-button-label";
                 label.textContent = title;
                 button.append(label);
+                AnnotationAdapter.ensureSidebarOcrResultNode(button, doc);
                 button.title = image.relativePath || image.name || "";
                 button.addEventListener("click", () => onSelect(image));
                 container.append(button);
@@ -999,6 +1302,7 @@ class AnnotationAdapter {
                 label.textContent = title;
                 button.title = image.relativePath || image.name || "";
                 button.append(label);
+                AnnotationAdapter.ensureSidebarOcrResultNode(button, doc);
                 button.addEventListener("click", () => onSelect(image));
                 contents.append(button);
             }
