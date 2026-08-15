@@ -15,12 +15,12 @@ function hasRule(selector, declarations) {
     assert.match(html, rule);
 }
 
-// Production retains the exact three-row structure used before environment identification.
-hasRule("body", "grid-template-rows:\\s*58px minmax\\(0, 1fr\\) 30px");
+// Production retains auto header height for the 2-tier deck, then workspace + status.
+hasRule("body", "grid-template-rows:\\s*auto minmax\\(0, 1fr\\) 30px");
 hasRule(".workspace", "grid-template-columns:\\s*280px minmax\\(360px, 1fr\\) 360px");
 
 // Only a nonproduction class adds a real banner row, including presentation mode.
-hasRule("body.nonproduction-environment", "grid-template-rows:\\s*38px 58px minmax\\(0, 1fr\\) 30px");
+hasRule("body.nonproduction-environment", "grid-template-rows:\\s*38px auto minmax\\(0, 1fr\\) 30px");
 hasRule(".presentation-mode", "grid-template-rows:\\s*0 minmax\\(0,1fr\\) 0");
 hasRule(".nonproduction-environment.presentation-mode", "grid-template-rows:\\s*38px 0 minmax\\(0,1fr\\) 0");
 

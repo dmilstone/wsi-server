@@ -1,6 +1,7 @@
 package wsi_server;
 
 import jakarta.servlet.http.HttpSession;
+import org.springframework.http.CacheControl;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -9,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import wsi_server.api.*;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 @RestController
 @RequestMapping("/api/images")
@@ -97,6 +99,7 @@ public class ImageApiController {
     private static ResponseEntity<byte[]> pngResponse(byte[] png, String filename) {
         return ResponseEntity.ok()
                 .contentType(MediaType.IMAGE_PNG)
+                .cacheControl(CacheControl.maxAge(Duration.ofDays(7)).cachePublic())
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         ContentDisposition.inline()
                                 .filename(filename, StandardCharsets.UTF_8)

@@ -90,7 +90,33 @@ class AnnotationAdapter {
                 if (!byKey.has(key)) byKey.set(key, extracted.toUpperCase());
             }
         }
-        return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+        return Array.from(byKey.values()).sort((a, b) =>
+            AnnotationAdapter.naturalCollator.compare(a, b)
+        );
+    }
+
+    /**
+     * Human / natural alphanumeric collator (so "2" < "10" < "19" < "20").
+     */
+    static naturalCollator = (typeof Intl !== "undefined" && typeof Intl.Collator === "function")
+        ? new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+        : {
+            compare(a, b) {
+                return String(a ?? "").localeCompare(String(b ?? ""), undefined, {
+                    numeric: true,
+                    sensitivity: "base"
+                });
+            }
+        };
+
+    /** Stable natural sort of catalog image records by {@code name}. */
+    static sortImagesNaturally(images) {
+        const slideListArray = Array.isArray(images) ? images.slice() : [];
+        slideListArray.sort((a, b) => AnnotationAdapter.naturalCollator.compare(
+            String(a?.name ?? ""),
+            String(b?.name ?? "")
+        ));
+        return slideListArray;
     }
 
     /**
@@ -99,11 +125,17 @@ class AnnotationAdapter {
      */
     static CASE_FILTER_PLACEHOLDER_VALUE = "";
     static CASE_FILTER_ALL_SLIDES_VALUE = "__all_slides__";
-    static ZERO_EXPOSURE_STATUS = "Select a patient case to begin.";
+    static CASE_FILTER_PLACEHOLDER_LABEL = "-- Select Slides --";
+    static ZERO_EXPOSURE_STATUS = "Select slides to begin.";
+    static EMPTY_VIEWPORT_GUIDANCE =
+        "Use the dropdown menu on the left to select slides for viewing.";
+    /** When true, left-column slide rows show async macro label thumbnails. */
+    static slideLabelThumbsEnabled = false;
+    static slideLabelThumbGeneration = 0;
 
     /**
      * True when the case filter is on the blank privacy placeholder
-     * ("-- Select a Patient Case --" / empty value).
+     * ("-- Select Slides --" / empty value).
      */
     static isCaseFilterPlaceholderSelected(selectElement) {
         if (!selectElement) return true;
@@ -111,11 +143,11 @@ class AnnotationAdapter {
         if (!value || value === AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE) {
             return true;
         }
-        if (/^--\s*select a patient case\s*--$/i.test(value)) {
+        if (/^--\s*select (slides|a patient case)\s*--$/i.test(value)) {
             return true;
         }
         const label = String(selectElement.selectedOptions?.[0]?.textContent ?? "").trim();
-        return /^--\s*select a patient case\s*--$/i.test(label);
+        return /^--\s*select (slides|a patient case)\s*--$/i.test(label);
     }
 
     /**
@@ -159,6 +191,12 @@ class AnnotationAdapter {
             if (el) el.textContent = text;
         };
         setText("selected-name", "No image selected");
+        setText("header-case-id", "");
+        setText("header-slide-detail", "");
+        const currentName = root.getElementById("current-image-name");
+        if (currentName) currentName.hidden = true;
+        const legacyBlock = root.getElementById("brand-case-block");
+        if (legacyBlock) legacyBlock.hidden = true;
         setText("info-name", "—");
         setText("info-size", "—");
         setText("info-channels", "—");
@@ -197,6 +235,303 @@ class AnnotationAdapter {
         const measureList = root.getElementById("measure-session-list");
         if (measureList) measureList.replaceChildren();
         AnnotationAdapter.measurementSessionList = [];
+        AnnotationAdapter.setEmptyViewportGuidanceVisible(root, true);
+    }
+
+    /**
+     * Show/hide the centered empty-canvas guidance overlay in the main viewport.
+     */
+    static setEmptyViewportGuidanceVisible(doc, visible) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        if (!root || typeof root.getElementById !== "function") return;
+        const overlay = root.getElementById("empty-viewport-guidance");
+        if (!overlay) return;
+        overlay.hidden = !visible;
+        overlay.style.display = visible ? "" : "none";
+        overlay.setAttribute("aria-hidden", visible ? "false" : "true");
+    }
+
+    /** Default / cycle steps for sidebar + overview slide-label views (clockwise). */
+    static SLIDE_LABEL_ROTATIONS_DEG = [90, 180, 270, 0];
+    static SLIDE_LABEL_DEFAULT_ROTATION_DEG = 90;
+    /** Per-image remembered rotation for sidebar thumbs and main overview label. */
+    static slideLabelRotationByImageId = Object.create(null);
+
+    /** Macro label thumbnail URL for a catalog slide id (native Bio-Formats pipeline). */
+    static slideLabelThumbUrl(imageId) {
+        if (!imageId) return "";
+        return `/api/images/${encodeURIComponent(imageId)}/label.png`;
+    }
+
+    static normalizeSlideLabelRotation(degrees) {
+        const allowed = AnnotationAdapter.SLIDE_LABEL_ROTATIONS_DEG;
+        let next = Number.parseInt(degrees, 10);
+        if (!Number.isFinite(next) || !allowed.includes(next)) {
+            next = AnnotationAdapter.SLIDE_LABEL_DEFAULT_ROTATION_DEG;
+        }
+        return next;
+    }
+
+    static getSlideLabelRotation(imageId) {
+        if (imageId != null
+            && Object.prototype.hasOwnProperty.call(
+                AnnotationAdapter.slideLabelRotationByImageId,
+                imageId
+            )) {
+            return AnnotationAdapter.normalizeSlideLabelRotation(
+                AnnotationAdapter.slideLabelRotationByImageId[imageId]
+            );
+        }
+        return AnnotationAdapter.SLIDE_LABEL_DEFAULT_ROTATION_DEG;
+    }
+
+    static rememberSlideLabelRotation(imageId, degrees) {
+        const next = AnnotationAdapter.normalizeSlideLabelRotation(degrees);
+        if (imageId != null && imageId !== "") {
+            AnnotationAdapter.slideLabelRotationByImageId[imageId] = next;
+        }
+        return next;
+    }
+
+    /**
+     * Apply rotation CSS to a wrap/stage element (sidebar thumb or overview popup).
+     * Sidebar wrappers keep a fixed 80×80 frame; only the {@code <img>} spins.
+     */
+    static applySlideLabelRotationStyles(target, degrees) {
+        if (!target) return AnnotationAdapter.SLIDE_LABEL_DEFAULT_ROTATION_DEG;
+        const next = AnnotationAdapter.normalizeSlideLabelRotation(degrees);
+        target.dataset.rotation = String(next);
+        if (typeof target.style?.setProperty === "function") {
+            target.style.setProperty("--label-rotation", `${next}deg`);
+        }
+        const isSidebarFrame = Boolean(
+            target.classList?.contains("sidebar-label-wrapper")
+            || target.classList?.contains("slide-label-thumb-wrap")
+        );
+        if (target.classList?.toggle) {
+            if (isSidebarFrame) {
+                // Fixed square frame — never swap width/height with rotation.
+                target.classList.remove("is-landscape-rotation");
+            } else {
+                const landscape = next === 0 || next === 180;
+                target.classList.toggle("is-landscape-rotation", landscape);
+            }
+        }
+        const slot = target.closest?.(".sidebar-label-slot");
+        const button = (typeof target.querySelector === "function"
+            ? target.querySelector(".slide-label-rotate, .overview-label-rotate")
+            : null)
+            || slot?.querySelector?.(":scope > .slide-label-rotate")
+            || null;
+        if (button) {
+            button.title = `Rotate label (${next}° → next 90° clockwise)`;
+            button.setAttribute("aria-label", `Rotate slide label, currently ${next} degrees`);
+        }
+        return next;
+    }
+
+    /**
+     * Push the active angle onto the main-window overview popup + lightbox label.
+     * Flat {@code <img>} path (no OpenSeadragon labelViewer in this build).
+     */
+    static syncMainWindowSlideLabelRotation(degrees, imageId = null) {
+        const next = AnnotationAdapter.normalizeSlideLabelRotation(degrees);
+        if (imageId != null && imageId !== "") {
+            AnnotationAdapter.rememberSlideLabelRotation(imageId, next);
+        }
+        const root = typeof document !== "undefined" ? document : null;
+        if (!root || typeof root.getElementById !== "function") return next;
+
+        const stage = root.getElementById("overview-label-stage");
+        if (stage) AnnotationAdapter.applySlideLabelRotationStyles(stage, next);
+
+        const overviewImg = root.getElementById("slide-label-image");
+        if (overviewImg && typeof overviewImg.style?.setProperty === "function") {
+            overviewImg.style.setProperty("--label-rotation", `${next}deg`);
+            overviewImg.dataset.rotation = String(next);
+        }
+
+        const lightbox = root.getElementById("image-lightbox-image");
+        if (lightbox
+            && lightbox.dataset?.rotationKind === "slide-label"
+            && typeof lightbox.style?.setProperty === "function") {
+            lightbox.style.setProperty("--label-rotation", `${next}deg`);
+            lightbox.dataset.rotation = String(next);
+            lightbox.classList.add("is-slide-label-rotated");
+        }
+        return next;
+    }
+
+    /**
+     * Apply a clockwise rotation (degrees) to one thumbnail wrap.
+     * Swaps wrap portrait/landscape slot so the vertical list does not gap oddly.
+     */
+    static applySlideLabelThumbRotation(wrap, degrees) {
+        return AnnotationAdapter.applySlideLabelRotationStyles(wrap, degrees);
+    }
+
+    /** Cycle one thumbnail wrap forward by 90° clockwise and sync the overview popup. */
+    static cycleSlideLabelThumbRotation(wrap) {
+        if (!wrap) return AnnotationAdapter.SLIDE_LABEL_DEFAULT_ROTATION_DEG;
+        const current = Number.parseInt(wrap.dataset.rotation || "90", 10);
+        const steps = AnnotationAdapter.SLIDE_LABEL_ROTATIONS_DEG;
+        const idx = steps.indexOf(current);
+        const next = steps[(idx >= 0 ? idx + 1 : 0) % steps.length];
+        AnnotationAdapter.applySlideLabelThumbRotation(wrap, next);
+        const imageId = wrap.closest?.(".image-button")?.dataset?.imageId || null;
+        return AnnotationAdapter.syncMainWindowSlideLabelRotation(next, imageId);
+    }
+
+    /** Cycle the main overview popup label and mirror onto the matching sidebar thumb. */
+    static cycleOverviewSlideLabelRotation(doc = null, imageId = null) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        const stage = root?.getElementById?.("overview-label-stage");
+        const current = Number.parseInt(
+            stage?.dataset?.rotation
+            || String(AnnotationAdapter.getSlideLabelRotation(imageId)),
+            10
+        );
+        const steps = AnnotationAdapter.SLIDE_LABEL_ROTATIONS_DEG;
+        const idx = steps.indexOf(AnnotationAdapter.normalizeSlideLabelRotation(current));
+        const next = steps[(idx >= 0 ? idx + 1 : 0) % steps.length];
+        AnnotationAdapter.syncMainWindowSlideLabelRotation(next, imageId);
+        if (imageId && root) {
+            for (const button of root.querySelectorAll?.(".image-button") || []) {
+                if (button.dataset?.imageId !== imageId) continue;
+                const thumbWrap = button.querySelector(".slide-label-thumb-wrap");
+                if (thumbWrap) AnnotationAdapter.applySlideLabelThumbRotation(thumbWrap, next);
+                break;
+            }
+        }
+        return next;
+    }
+
+    /** Remove all left-column slide-label thumbnail images immediately. */
+    static clearSlideLabelThumbs(root = null) {
+        AnnotationAdapter.slideLabelThumbGeneration += 1;
+        const scope = root
+            || (typeof document !== "undefined" ? document.getElementById("image-list") : null)
+            || (typeof document !== "undefined" ? document : null);
+        if (!scope || typeof scope.querySelectorAll !== "function") return;
+        for (const slot of scope.querySelectorAll(".sidebar-label-slot")) {
+            const thumb = slot.querySelector(".slide-label-thumb");
+            if (thumb) thumb.removeAttribute("src");
+            slot.hidden = true;
+            slot.remove();
+        }
+        for (const wrap of scope.querySelectorAll(".slide-label-thumb-wrap, .sidebar-label-wrapper")) {
+            const thumb = wrap.querySelector(".slide-label-thumb");
+            if (thumb) thumb.removeAttribute("src");
+            wrap.hidden = true;
+            wrap.remove();
+        }
+        for (const thumb of scope.querySelectorAll(".slide-label-thumb")) {
+            thumb.removeAttribute("src");
+            thumb.hidden = true;
+            thumb.remove();
+        }
+        for (const button of scope.querySelectorAll(".image-button")) {
+            button.classList.remove("has-slide-label-thumb");
+        }
+    }
+
+    /**
+     * Asynchronously attach macro label thumbnails under each listed slide.
+     * Uses a generation token so stale responses cannot re-populate after clear.
+     * Thumbnails default to 90° clockwise with a per-label 🔄 rotation control.
+     */
+    static loadSlideLabelThumbs(root = null) {
+        const generation = ++AnnotationAdapter.slideLabelThumbGeneration;
+        const scope = root
+            || (typeof document !== "undefined" ? document.getElementById("image-list") : null)
+            || (typeof document !== "undefined" ? document : null);
+        if (!scope || typeof scope.querySelectorAll !== "function") return generation;
+        const doc = typeof document !== "undefined" ? document : null;
+        if (!doc) return generation;
+
+        for (const button of scope.querySelectorAll(".image-button")) {
+            const imageId = button.dataset?.imageId;
+            if (!imageId) continue;
+
+            let slot = button.querySelector(".sidebar-label-slot");
+            let wrap = button.querySelector(".sidebar-label-wrapper, .slide-label-thumb-wrap");
+            if (!slot || !wrap) {
+                slot = doc.createElement("div");
+                slot.className = "sidebar-label-slot";
+                slot.hidden = true;
+
+                wrap = doc.createElement("div");
+                wrap.className = "sidebar-label-wrapper slide-label-thumb-wrap";
+
+                const rotate = doc.createElement("button");
+                rotate.type = "button";
+                rotate.className = "slide-label-rotate";
+                rotate.textContent = "🔄";
+                rotate.addEventListener("click", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    AnnotationAdapter.cycleSlideLabelThumbRotation(wrap);
+                });
+
+                const thumb = doc.createElement("img");
+                thumb.className = "slide-label-thumb";
+                thumb.alt = "Slide label";
+                thumb.loading = "lazy";
+                thumb.decoding = "async";
+
+                wrap.append(thumb);
+                slot.append(wrap, rotate);
+                button.append(slot);
+                AnnotationAdapter.applySlideLabelThumbRotation(
+                    wrap,
+                    AnnotationAdapter.getSlideLabelRotation(imageId)
+                );
+            } else {
+                AnnotationAdapter.applySlideLabelThumbRotation(
+                    wrap,
+                    AnnotationAdapter.getSlideLabelRotation(imageId)
+                );
+            }
+
+            const thumb = wrap.querySelector(".slide-label-thumb");
+            if (!thumb) continue;
+            slot.hidden = true;
+            wrap.hidden = true;
+            thumb.hidden = true;
+            thumb.onload = () => {
+                if (generation !== AnnotationAdapter.slideLabelThumbGeneration) return;
+                if (!AnnotationAdapter.slideLabelThumbsEnabled) return;
+                thumb.hidden = false;
+                wrap.hidden = false;
+                slot.hidden = false;
+                button.classList.add("has-slide-label-thumb");
+            };
+            thumb.onerror = () => {
+                if (generation !== AnnotationAdapter.slideLabelThumbGeneration) return;
+                thumb.hidden = true;
+                wrap.hidden = true;
+                slot.hidden = true;
+                thumb.removeAttribute("src");
+                button.classList.remove("has-slide-label-thumb");
+            };
+            // Native metadata label route; browser loads thumbs in parallel.
+            thumb.src = AnnotationAdapter.slideLabelThumbUrl(imageId);
+        }
+        return generation;
+    }
+
+    /**
+     * Toggle left-column slide-label thumbnails on/off.
+     * @returns {boolean} enabled state after the change
+     */
+    static setSlideLabelThumbsEnabled(enabled, root = null) {
+        AnnotationAdapter.slideLabelThumbsEnabled = Boolean(enabled);
+        if (AnnotationAdapter.slideLabelThumbsEnabled) {
+            AnnotationAdapter.loadSlideLabelThumbs(root);
+        } else {
+            AnnotationAdapter.clearSlideLabelThumbs(root);
+        }
+        return AnnotationAdapter.slideLabelThumbsEnabled;
     }
 
     /**
@@ -246,16 +581,63 @@ class AnnotationAdapter {
             if (typeof options.onBeforeFilter === "function") {
                 options.onBeforeFilter();
             }
-            AnnotationAdapter.applyCaseFilterToSlideButtons(
-                selectElement.value,
-                options.imageListRoot || null
-            );
+            const images = typeof options.getImages === "function"
+                ? options.getImages()
+                : options.images;
+            if (options.imageListRoot && Array.isArray(images)) {
+                AnnotationAdapter.renderImageBrowser(
+                    options.imageListRoot,
+                    images,
+                    selectElement.value,
+                    {
+                        document: options.document || (typeof document !== "undefined" ? document : null),
+                        onSelect: options.onSelect,
+                        escapeHtml: options.escapeHtml,
+                        storagePrefix: options.storagePrefix
+                    }
+                );
+            } else {
+                AnnotationAdapter.applyCaseFilterToSlideButtons(
+                    selectElement.value,
+                    options.imageListRoot || null
+                );
+            }
             if (typeof options.onAfterFilter === "function") {
                 options.onAfterFilter(selectElement.value);
             }
         };
         selectElement.addEventListener("change", handler);
         return handler;
+    }
+
+    /**
+     * Apply Case ID + slide/stain lines to the large header typography block.
+     */
+    static applyHeaderIdentity(doc, image) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        if (!root || typeof root.getElementById !== "function") return;
+        const identity = AnnotationAdapter.buildHeaderIdentity(image);
+        const caseEl = root.getElementById("header-case-id");
+        const detailEl = root.getElementById("header-slide-detail");
+        const selectedName = root.getElementById("selected-name");
+        const currentName = root.getElementById("current-image-name");
+        if (caseEl) caseEl.textContent = identity.caseId || "";
+        if (detailEl) detailEl.textContent = identity.slideDetail || "";
+        if (selectedName) {
+            selectedName.textContent = identity.caseId
+                ? `${identity.caseId}${identity.slideDetail ? " · " + identity.slideDetail : ""}`
+                : (image?.name || "No image selected");
+        }
+        const hasIdentity = Boolean(identity.caseId || identity.slideDetail || image?.name);
+        if (currentName) {
+            currentName.hidden = !hasIdentity;
+            if (!identity.caseId && !identity.slideDetail && image?.name) {
+                if (caseEl) caseEl.textContent = image.name;
+                if (detailEl) detailEl.textContent = "";
+            }
+        }
+        const legacyBlock = root.getElementById("brand-case-block");
+        if (legacyBlock) legacyBlock.hidden = !hasIdentity;
     }
 
     /**
@@ -284,7 +666,7 @@ class AnnotationAdapter {
 
         const placeholder = document.createElement("option");
         placeholder.value = AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE;
-        placeholder.textContent = "-- Select a Patient Case --";
+        placeholder.textContent = AnnotationAdapter.CASE_FILTER_PLACEHOLDER_LABEL;
         selectElement.append(placeholder);
 
         const allOption = document.createElement("option");
@@ -315,12 +697,13 @@ class AnnotationAdapter {
      * Placeholder / empty → hide all (zero-exposure).
      * {@link CASE_FILTER_ALL_SLIDES_VALUE} / "All Slides" → show all.
      * Otherwise match the chosen case substring (case-insensitive).
+     * Prefer {@link renderImageBrowser} for Rule A/B layout switches.
      */
     static applyCaseFilterToSlideButtons(selectedCase, root = null) {
         const needle = String(selectedCase ?? "").trim();
         const hideAll = !needle
             || needle === AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE
-            || /^--\s*select a patient case\s*--$/i.test(needle);
+            || /^--\s*select (slides|a patient case)\s*--$/i.test(needle);
         const showAll = !hideAll && (
             needle === AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE
             || /^all slides$/i.test(needle)
@@ -354,6 +737,290 @@ class AnnotationAdapter {
             const anyVisible = Array.from(folder.querySelectorAll(".image-button"))
                 .some(button => button.style.display !== "none");
             folder.style.display = (showAll || anyVisible) && !hideAll ? "" : "none";
+        }
+    }
+
+    /**
+     * Case-filter layout mode for the left image browser.
+     * @returns {"placeholder"|"all"|"case"}
+     */
+    static resolveCaseFilterMode(selectedCase) {
+        const needle = String(selectedCase ?? "").trim();
+        if (!needle
+            || needle === AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE
+            || /^--\s*select (slides|a patient case)\s*--$/i.test(needle)) {
+            return "placeholder";
+        }
+        if (needle === AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE
+            || /^all slides$/i.test(needle)) {
+            return "all";
+        }
+        return "case";
+    }
+
+    /**
+     * Human-readable slide / stain label from filename metadata layers.
+     * Example: {@code BA26-041340_A2.vsi} → {@code A2}.
+     * Underscores inside the remaining token are preserved (not turned into spaces).
+     */
+    static parseSlideLabel(image) {
+        const raw = String(
+            image?.name
+            || image?.relativePath
+            || image?.id
+            || ""
+        ).trim();
+        if (!raw) return "Slide";
+        const leaf = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+        const base = leaf.replace(/\.[^.]+$/i, "");
+        const caseId = AnnotationAdapter.extractCaseId(base)
+            || AnnotationAdapter.extractCaseId(raw);
+        let label = base;
+        if (caseId) {
+            const escaped = caseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            label = base.replace(new RegExp(escaped, "i"), "");
+        }
+        label = String(label)
+            .replace(/^[\s_\-.]+|[\s_\-.]+$/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        return label || base || leaf || "Slide";
+    }
+
+    /** Leaf filename exactly as stored on disk (underscores preserved). */
+    static rawImageFileName(image) {
+        const raw = String(image?.name || image?.relativePath || "").trim();
+        if (!raw) return "";
+        return raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+    }
+
+    /**
+     * Trailing acquisition timestamp block: {@code _YYYYMMDD_HHMMSS}.
+     * Display-only — never mutate image id / path used for loading.
+     */
+    static TIMESTAMP_SUFFIX_PATTERN = /_(\d{8})_(\d{6})\b/g;
+
+    /** Remove trailing {@code _xxxxxxxx_xxxxxx} timestamp tokens from a display string. */
+    static stripFilenameTimestampSuffix(text) {
+        return String(text ?? "").replace(AnnotationAdapter.TIMESTAMP_SUFFIX_PATTERN, "");
+    }
+
+    /**
+     * Sidebar display stem before duplicate indexing.
+     * @param {object} image
+     * @param {{useSlideLabel?: boolean}} [options]
+     */
+    static sidebarDisplayStem(image, options = {}) {
+        if (options.useSlideLabel) {
+            const label = AnnotationAdapter.stripFilenameTimestampSuffix(
+                AnnotationAdapter.parseSlideLabel(image)
+            );
+            return label || "Slide";
+        }
+        const leaf = AnnotationAdapter.rawImageFileName(image);
+        const base = leaf.replace(/\.[^.]+$/i, "") || leaf;
+        const stripped = AnnotationAdapter.stripFilenameTimestampSuffix(base);
+        return stripped || base || leaf || "Slide";
+    }
+
+    /**
+     * Build display titles for a sidebar list: strip timestamps, then append
+     * {@code (currentIndex of totalCount)} when the stripped stem appears more
+     * than once. Unique stems stay unsuffixed.
+     */
+    static assignSidebarDisplayTitles(images, options = {}) {
+        const list = Array.isArray(images) ? images : [];
+        const rows = list.map(image => ({
+            image,
+            stem: AnnotationAdapter.sidebarDisplayStem(image, options)
+        }));
+        const totals = new Map();
+        for (const row of rows) {
+            totals.set(row.stem, (totals.get(row.stem) || 0) + 1);
+        }
+        const seen = new Map();
+        return rows.map(row => {
+            const totalCount = totals.get(row.stem) || 1;
+            const currentIndex = (seen.get(row.stem) || 0) + 1;
+            seen.set(row.stem, currentIndex);
+            const title = totalCount > 1
+                ? `${row.stem} (${currentIndex} of ${totalCount})`
+                : row.stem;
+            return { image: row.image, title, stem: row.stem };
+        });
+    }
+
+    /** Primary Case ID + secondary on-disk filename for the top header. */
+    static buildHeaderIdentity(image) {
+        if (!image) {
+            return {caseId: "", slideDetail: ""};
+        }
+        const haystack = [
+            image.relativePath,
+            image.name,
+            image.id,
+            image.folder
+        ].filter(Boolean).join("\n");
+        const caseId = AnnotationAdapter.extractCaseId(haystack);
+        return {
+            caseId: caseId ? String(caseId).toUpperCase() : "",
+            // Header must show the raw on-disk name — never strip "_" to spaces.
+            slideDetail: AnnotationAdapter.rawImageFileName(image)
+        };
+    }
+
+    /** Images whose path/name/id contain the selected case token. */
+    static filterImagesForCase(images, selectedCase) {
+        const needle = String(selectedCase ?? "").trim();
+        if (!needle || !Array.isArray(images)) return [];
+        const upper = needle.toUpperCase();
+        return images.filter(image => {
+            if (!image || typeof image !== "object") return false;
+            const haystack = [
+                image.relativePath,
+                image.name,
+                image.id,
+                image.folder
+            ].filter(Boolean).join("\n").toUpperCase();
+            return haystack.includes(upper);
+        });
+    }
+
+    /**
+     * Group key for overlapping spectral helper bands that share one checkbox.
+     * Channels with the same fluor / designation suffix toggle together.
+     */
+    static channelVisibilityGroupKey(channel) {
+        const name = String(channel?.name ?? "").trim();
+        if (!name) return `idx:${channel?.index ?? 0}`;
+        const dash = name.match(/\s-\s(.+)$/);
+        if (dash) return dash[1].trim().toUpperCase();
+        return name.toUpperCase();
+    }
+
+    /** Short channel label for the compact matrix (drops "Channel N - "). */
+    static compactChannelName(channel) {
+        const name = String(channel?.name ?? "").trim();
+        if (!name) return `Ch ${channel?.index ?? 0}`;
+        const dash = name.match(/\s-\s(.+)$/);
+        if (dash) return dash[1].trim();
+        return name.replace(/^Channel\s+\d+\s*/i, "").trim() || name;
+    }
+
+    /**
+     * Rule A (All Slides): collapsed parent directories with counts.
+     * Rule B (specific case): flat list of slide labels only.
+     * Placeholder: empty list.
+     */
+    static renderImageBrowser(container, images, selectedCase, options = {}) {
+        if (!container || typeof container.replaceChildren !== "function") return;
+        container.replaceChildren();
+        const mode = AnnotationAdapter.resolveCaseFilterMode(selectedCase);
+        const list = AnnotationAdapter.sortImagesNaturally(images);
+        const onSelect = typeof options.onSelect === "function" ? options.onSelect : () => {};
+        const storagePrefix = String(options.storagePrefix || "wsi.viewer");
+        const doc = options.document
+            || (typeof document !== "undefined" ? document : null);
+
+        if (mode === "placeholder" || list.length === 0) {
+            container.classList.remove("image-list-flat");
+            container.classList.remove("image-list-tree");
+            return;
+        }
+
+        if (mode === "case") {
+            container.classList.add("image-list-flat");
+            container.classList.remove("image-list-tree");
+            const matched = AnnotationAdapter.sortImagesNaturally(
+                AnnotationAdapter.filterImagesForCase(list, selectedCase)
+            );
+            const titled = AnnotationAdapter.assignSidebarDisplayTitles(matched, { useSlideLabel: true });
+            for (const { image, title } of titled) {
+                const button = doc.createElement("button");
+                button.type = "button";
+                button.className = "image-button image-button-flat";
+                button.dataset.imageId = image.id;
+                button.dataset.imageName = image.name || "";
+                button.dataset.imagePath = image.relativePath || "";
+                button.dataset.slideLabel = title;
+                const label = doc.createElement("span");
+                label.className = "image-button-label";
+                label.textContent = title;
+                button.append(label);
+                button.title = image.relativePath || image.name || "";
+                button.addEventListener("click", () => onSelect(image));
+                container.append(button);
+            }
+            if (AnnotationAdapter.slideLabelThumbsEnabled) {
+                AnnotationAdapter.loadSlideLabelThumbs(container);
+            }
+            return;
+        }
+
+        // Rule A — global directory tree. Always paint collapsed so first access /
+        // switching to "All Slides" shows ONLY parent rows with counts. Nested
+        // slides stay hidden until the user clicks a directory summary.
+        container.classList.add("image-list-tree");
+        container.classList.remove("image-list-flat");
+        const groups = new Map();
+        for (const image of list) {
+            const folder = image.folder || "Images";
+            if (!groups.has(folder)) groups.set(folder, []);
+            groups.get(folder).push(image);
+        }
+        const folderNames = Array.from(groups.keys()).sort((a, b) =>
+            AnnotationAdapter.naturalCollator.compare(a, b)
+        );
+        for (const folder of folderNames) {
+            const folderImages = AnnotationAdapter.sortImagesNaturally(groups.get(folder) || []);
+            const details = doc.createElement("details");
+            details.className = "folder-group";
+            // Strict collapse: never restore open state from localStorage here —
+            // legacy keys previously left the All Slides tree fully exploded.
+            details.open = false;
+            details.removeAttribute("open");
+            const summary = doc.createElement("summary");
+            summary.textContent = `${folder} (${folderImages.length})`;
+            details.append(summary);
+            const contents = doc.createElement("div");
+            contents.className = "folder-contents";
+            contents.hidden = true;
+            contents.style.display = "none";
+            const titled = AnnotationAdapter.assignSidebarDisplayTitles(folderImages);
+            for (const { image, title } of titled) {
+                const button = doc.createElement("button");
+                button.type = "button";
+                button.className = "image-button";
+                button.dataset.imageId = image.id;
+                button.dataset.imageName = image.name || "";
+                button.dataset.imagePath = image.relativePath || "";
+                const label = doc.createElement("span");
+                label.className = "image-button-label";
+                label.textContent = title;
+                button.title = image.relativePath || image.name || "";
+                button.append(label);
+                button.addEventListener("click", () => onSelect(image));
+                contents.append(button);
+            }
+            details.append(contents);
+            details.addEventListener("toggle", () => {
+                const expanded = Boolean(details.open);
+                contents.hidden = !expanded;
+                contents.style.display = expanded ? "" : "none";
+                if (expanded && AnnotationAdapter.slideLabelThumbsEnabled) {
+                    AnnotationAdapter.loadSlideLabelThumbs(contents);
+                }
+                try {
+                    const storageKey = `${storagePrefix}.folder.${folder}`;
+                    localStorage.setItem(storageKey, expanded ? "open" : "closed");
+                } catch (_error) {
+                    // Ignore quota / private-mode failures.
+                }
+            });
+            container.append(details);
+        }
+        if (AnnotationAdapter.slideLabelThumbsEnabled) {
+            AnnotationAdapter.loadSlideLabelThumbs(container);
         }
     }
 

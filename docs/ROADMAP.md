@@ -86,6 +86,36 @@ branch, review/test/commit, and start a **fresh** release cycle.
    Embedded metadata images must never be synthesized from diagnostic pixels.
 2. Add Z-stack navigation and playback for supported images.
 
+### Backend ticket — ingestion pre-extracted label cache
+
+**Ticket ID:** `BE-LABEL-CACHE-001`  
+**Priority:** Immediate (unblocks ~10s cold sidebar / overview label loads)  
+**Owner surface:** validation/promotion pipeline + image-serving cache under
+`~/.wsi-server/`
+
+**Problem:** Sidebar “Show Slide Labels” and overview `label.png` currently
+extract embedded labels through Bio-Formats on demand. Cold requests can take
+on the order of ~10 seconds per slide and serialize under the associated-image
+cache lock (see `docs/BIOFORMATS-PERFORMANCE-DIAGNOSIS.md`).
+
+**Plan:** During the manual validation / promotion pipeline (not during
+diagnostic viewing), run an automated pre-extraction task that:
+
+1. Reads the true embedded slide-label series once via Bio-Formats.
+2. Writes a downsampled PNG copy into a machine-local workspace cache under
+   `~/.wsi-server/` (path keyed by image identity / content fingerprint).
+3. Serves subsequent `/api/images/{id}/label.png` hits from that PNG when
+   present, eliminating real-time Bio-Formats disk reads for labels.
+4. Invalidates or regenerates the cached PNG when the source WSI changes.
+5. Never synthesizes a missing label from diagnostic specimen pixels.
+
+**Acceptance hooks (frontend already prepared):** left-column thumbnails and
+overview label requests keep using `/api/images/{id}/label.png`; once the
+cache is populated by promotion, those endpoints become fast without UI
+changes.
+
+**Status:** Documented / not yet implemented.
+
 ### Export scalability
 
 Preserve the configured **`wsi.export.max-pixels`** default of **16,000,000**.
@@ -232,6 +262,11 @@ or merged into it. Routine acquisition must therefore use either:
 This constraint preserves atomic no-overwrite behavior. A future ingestion
 design may support a different batching model, but it must not weaken that
 safety guarantee.
+
+**Label cache hook (see `BE-LABEL-CACHE-001`):** promotion/validation is the
+preferred moment to pre-extract downsampled slide-label PNGs into
+`~/.wsi-server/` so viewer label thumbnails do not pay cold Bio-Formats cost
+during case review.
 
 ## Administration and access backlog
 

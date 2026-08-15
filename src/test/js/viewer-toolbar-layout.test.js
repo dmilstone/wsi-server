@@ -103,7 +103,7 @@ assert.ok(
     html.indexOf('id="tools-tray"') < html.indexOf('class="viewer-stage"'),
     "toolbar must appear before the viewer stage"
 );
-assert.match(rule(".tools-tray"), /justify-content:\s*safe center/);
+assert.match(rule(".tools-tray"), /justify-content:\s*flex-start/);
 
 // Removed toolbar controls and collapse persistence.
 for (const removedId of [
