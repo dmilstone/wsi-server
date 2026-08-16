@@ -136,6 +136,23 @@ class ImageRegistryTests {
         callers.shutdownNow(); registry.close();
     }
 
+    @Test void companionMetadataClinicalMarkerAndZLayersArePublishedOnCatalogEntries() throws Exception {
+        Path nested = Files.createDirectories(root.resolve("case_z"));
+        Files.writeString(nested.resolve("labeled.tif"), "slide");
+        Files.writeString(nested.resolve("labeled.metadata.json"), """
+                {"clinicalMarker":"if.IgA","zPlanes":6,"depth":2,"zLayers":3,"ocrStatus":"ok","version":1}
+                """);
+        ImageRegistry registry = registry(true, new MutableClock(), Duration.ofSeconds(10));
+        assertThat(registry.getImages()).hasSize(1);
+        ImageRegistry.ImageEntry entry = registry.getImages().getFirst();
+        assertThat(entry.clinicalMarker()).isEqualTo("if.IgA");
+        assertThat(entry.zPlanes()).isEqualTo(6);
+        assertThat(entry.depth()).isEqualTo(2);
+        assertThat(entry.zLayers()).isEqualTo(3);
+        assertThat(entry.folder()).isEqualTo("case_z");
+        registry.close();
+    }
+
     private ImageRegistry registry(boolean recursive, MutableClock clock, Duration stability) throws Exception {
         return new ImageRegistry(root.toString(), recursive, Duration.ZERO, stability, clock);
     }

@@ -19,6 +19,37 @@ final class AssociatedImageSelection {
         this.overviewSeries = overviewSeries;
     }
 
+    /**
+     * True when OME/series naming or Bio-Formats thumbnail designation marks this
+     * series as a Label, Macro, Overview, Thumbnail, or Preview — never by size alone.
+     */
+    static boolean isAssociatedNonDiagnostic(String name, boolean thumbnailSeries) {
+        return isExplicitLabel(name) || isExplicitOverview(name, thumbnailSeries);
+    }
+
+    /** Specimen / diagnostic scan series (everything that is not an associated preview). */
+    static boolean isDiagnosticSpecimen(String name, boolean thumbnailSeries) {
+        return !isAssociatedNonDiagnostic(name, thumbnailSeries);
+    }
+
+    static boolean isExplicitLabel(String name) {
+        String normalized = normalizeName(name);
+        return normalized.contains("label") || normalized.contains("barcode");
+    }
+
+    static boolean isExplicitOverview(String name, boolean thumbnailSeries) {
+        String normalized = normalizeName(name);
+        return normalized.contains("macro")
+                || normalized.contains("overview")
+                || normalized.contains("thumbnail")
+                || normalized.contains("preview")
+                || thumbnailSeries;
+    }
+
+    private static String normalizeName(String name) {
+        return name == null ? "" : name.toLowerCase(Locale.ROOT);
+    }
+
     static AssociatedImageSelection select(List<SeriesIdentity> series) {
         int label = MISSING;
         long labelArea = -1;
@@ -26,11 +57,8 @@ final class AssociatedImageSelection {
         long overviewArea = -1;
         for (SeriesIdentity candidate : series) {
             if (candidate.width() <= 0 || candidate.height() <= 0) continue;
-            String name = candidate.name() == null ? "" : candidate.name().toLowerCase(Locale.ROOT);
-            boolean explicitlyLabel = name.contains("label") || name.contains("barcode");
-            boolean explicitlyOverview = name.contains("macro") || name.contains("overview")
-                    || name.contains("thumbnail") || name.contains("preview")
-                    || candidate.thumbnailSeries();
+            boolean explicitlyLabel = isExplicitLabel(candidate.name());
+            boolean explicitlyOverview = isExplicitOverview(candidate.name(), candidate.thumbnailSeries());
             long area = (long) candidate.width() * candidate.height();
             if (explicitlyLabel && area > labelArea) {
                 label = candidate.index();

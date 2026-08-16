@@ -202,8 +202,18 @@ public class ImageRegistry {
         String id = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(relativePath.getBytes(StandardCharsets.UTF_8));
         int slash = relativePath.lastIndexOf('/');
-        return new ImageEntry(id, slash < 0 ? relativePath : relativePath.substring(slash + 1), relativePath,
-                slash < 0 ? "" : relativePath.substring(0, slash), path);
+        WsiCatalogScanner.SidecarMetadata sidecar = WsiCatalogScanner.read(path);
+        return new ImageEntry(
+                id,
+                slash < 0 ? relativePath : relativePath.substring(slash + 1),
+                relativePath,
+                slash < 0 ? "" : relativePath.substring(0, slash),
+                path,
+                sidecar.clinicalMarker(),
+                sidecar.zPlanes(),
+                sidecar.depth(),
+                sidecar.zLayers()
+        );
     }
 
     static int compareNatural(String left, String right) {
@@ -237,7 +247,12 @@ public class ImageRegistry {
 
     @PreDestroy void close() { scanner.shutdownNow(); }
 
-    public record ImageEntry(String id, String name, String relativePath, String folder, Path path) {}
+    public record ImageEntry(String id, String name, String relativePath, String folder, Path path,
+                             String clinicalMarker, int zPlanes, int depth, int zLayers) {
+        public ImageEntry {
+            clinicalMarker = clinicalMarker == null ? "" : clinicalMarker;
+        }
+    }
     public record RefreshStatus(boolean running, int added, int unavailableOrPending, String failureCategory) {}
     private record Snapshot(List<ImageEntry> ordered, Map<String, ImageEntry> byId,
                             Map<String, ImageEntry> byRelative) {}

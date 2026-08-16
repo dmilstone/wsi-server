@@ -31,8 +31,10 @@ public class ImageApiController {
                 current.failureCategory(), registry.getRefreshInterval().toMillis());
     }
     @GetMapping("/{imageId}")
-    public ImageMetadataResponse metadata(@PathVariable String imageId, HttpSession session) throws Exception {
-        return service.getMetadata(imageId, session);
+    public ImageMetadataResponse metadata(@PathVariable String imageId,
+                                          @RequestParam(value = "series", defaultValue = "0") int series,
+                                          HttpSession session) throws Exception {
+        return service.getMetadata(imageId, series, session);
     }
     @GetMapping("/{imageId}/associated-images")
     public java.util.List<AssociatedImageSeriesDto> associatedImages(@PathVariable String imageId) throws Exception {
@@ -47,34 +49,43 @@ public class ImageApiController {
         return service.getDisplayThumbnail(imageId, session);
     }
     @GetMapping("/{imageId}/display")
-    public DisplayResponse display(@PathVariable String imageId, HttpSession session) throws Exception {
-        return service.getDisplay(imageId, session);
+    public DisplayResponse display(@PathVariable String imageId,
+                                   @RequestParam(value = "series", defaultValue = "0") int series,
+                                   HttpSession session) throws Exception {
+        return service.getDisplay(imageId, series, session);
     }
     @GetMapping("/{imageId}/pixel")
     public PixelSampleResponse pixel(@PathVariable String imageId,
+                                     @RequestParam(value = "series", defaultValue = "0") int series,
                                      @RequestParam int x,
                                      @RequestParam int y) throws Exception {
-        return service.getPixelSample(imageId, x, y);
+        return service.getPixelSample(imageId, series, x, y);
     }
     @GetMapping("/{imageId}/pixel-block")
     public PixelBlockResponse pixelBlock(@PathVariable String imageId,
+                                         @RequestParam(value = "series", defaultValue = "0") int series,
                                          @RequestParam int x,
                                          @RequestParam int y,
                                          @RequestParam(defaultValue = "64") int size) throws Exception {
-        return service.getPixelBlock(imageId, x, y, size);
+        return service.getPixelBlock(imageId, series, x, y, size);
     }
     @PostMapping("/{imageId}/display/reset")
-    public DisplayResponse resetDisplay(@PathVariable String imageId, HttpSession session) throws Exception {
-        return service.resetDisplay(imageId, session);
+    public DisplayResponse resetDisplay(@PathVariable String imageId,
+                                        @RequestParam(value = "series", defaultValue = "0") int series,
+                                        HttpSession session) throws Exception {
+        return service.resetDisplay(imageId, series, session);
     }
     @PostMapping("/{imageId}/display/recompute-auto")
-    public DisplayResponse recomputeAutomaticDisplay(@PathVariable String imageId, HttpSession session) throws Exception {
-        return service.recomputeAutomaticDisplay(imageId, session);
+    public DisplayResponse recomputeAutomaticDisplay(@PathVariable String imageId,
+                                                     @RequestParam(value = "series", defaultValue = "0") int series,
+                                                     HttpSession session) throws Exception {
+        return service.recomputeAutomaticDisplay(imageId, series, session);
     }
     @PutMapping("/{imageId}/display")
     public DisplayResponse updateDisplay(@PathVariable String imageId,
+                                         @RequestParam(value = "series", defaultValue = "0") int series,
                                          @RequestBody DisplayUpdateRequest request,
                                          HttpSession session) throws Exception {
-        return service.updateDisplay(imageId, request, session);
+        return service.updateDisplay(imageId, series, request, session);
     }
 }

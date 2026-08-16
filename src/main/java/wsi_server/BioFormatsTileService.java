@@ -20,6 +20,7 @@ import wsi_server.api.DisplayResponse;
 import wsi_server.api.DisplayUpdateRequest;
 import wsi_server.api.ImageListResponse;
 import wsi_server.api.ImageMetadataResponse;
+import wsi_server.api.ImageSeriesProfile;
 import wsi_server.api.ImageSummary;
 import wsi_server.api.PixelBlockResponse;
 import wsi_server.api.PixelSampleResponse;
@@ -82,28 +83,74 @@ public class BioFormatsTileService {
 
     private ImageListResponse listImagesMeasured() {
         List<ImageSummary> images = registry.getImages().stream()
-                .map(entry -> new ImageSummary(entry.id(), entry.name(), entry.relativePath(), entry.folder()))
+                .map(entry -> new ImageSummary(
+                        entry.id(),
+                        entry.name(),
+                        entry.relativePath(),
+                        entry.folder(),
+                        entry.clinicalMarker(),
+                        entry.zPlanes(),
+                        entry.depth(),
+                        entry.zLayers()))
                 .toList();
         return new ImageListResponse(registry.getRootDirectory().toString(), images);
     }
 
-    public ImageMetadataResponse getMetadata(String imageId, HttpSession session) throws Exception {
-        return timing.measure("metadata", "request_total", imageId, () -> getMetadataMeasured(imageId, session));
+    public ImageMetadataResponse getMetadata(String imageId, int series, HttpSession session) throws Exception {
+        return timing.measure("metadata", "request_total", imageId,
+                () -> getMetadataMeasured(imageId, series, session));
     }
 
-    private ImageMetadataResponse getMetadataMeasured(String imageId, HttpSession session) throws Exception {
-        ImageContext context = context(imageId);
-        SessionDisplayState state = sessionState(session, imageId, context);
+    private ImageMetadataResponse getMetadataMeasured(String imageId, int series, HttpSession session)
+            throws Exception {
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (context) {
             IFormatReader reader = context.reader();
+            List<ImageSeriesProfile> profiles = catalogSeriesProfiles(reader);
+            reader.setSeries(series);
             reader.setResolution(0);
             Double micronsPerPixelX = physicalSizeMicrons(reader, true);
             Double micronsPerPixelY = physicalSizeMicrons(reader, false);
             return new ImageMetadataResponse(imageId, context.entry().relativePath(),
                     reader.getSizeX(), reader.getSizeY(), reader.getSizeC(),
                     reader.getResolutionCount(), ImageContext.TILE_SIZE, state.revision(),
-                    micronsPerPixelX, micronsPerPixelY);
+                    micronsPerPixelX, micronsPerPixelY, zPlaneCount(reader.getSizeZ()),
+                    series, List.copyOf(profiles));
         }
+    }
+
+    /** Bio-Formats sizeZ for 2D slides is often 0/1; always expose at least one focal plane. */
+    static int zPlaneCount(int sizeZ) {
+        return Math.max(1, sizeZ);
+    }
+
+    private List<ImageSeriesProfile> catalogSeriesProfiles(IFormatReader reader) {
+        MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
+                ? retrieve : null;
+        int previous = reader.getSeries();
+        List<ImageSeriesProfile> profiles = new ArrayList<>();
+        try {
+            for (int index = 0; index < reader.getSeriesCount(); index++) {
+                reader.setSeries(index);
+                String name = seriesName(metadata, index);
+                boolean thumbnail = reader.isThumbnailSeries();
+                profiles.add(new ImageSeriesProfile(
+                        index,
+                        name,
+                        reader.getSizeX(),
+                        reader.getSizeY(),
+                        reader.getSizeC(),
+                        zPlaneCount(reader.getSizeZ()),
+                        reader.getResolutionCount(),
+                        reader.isRGB(),
+                        thumbnail,
+                        AssociatedImageSelection.isDiagnosticSpecimen(name, thumbnail)));
+            }
+        } finally {
+            reader.setSeries(previous);
+        }
+        return profiles;
     }
 
     private Double physicalSizeMicrons(IFormatReader reader, boolean horizontal) {
@@ -278,22 +325,23 @@ public class BioFormatsTileService {
         return scaled;
     }
 
-    public DisplayResponse getDisplay(String imageId, HttpSession session) throws Exception {
-        ImageContext context = context(imageId);
-        SessionDisplayState state = sessionState(session, imageId, context);
+    public DisplayResponse getDisplay(String imageId, int series, HttpSession session) throws Exception {
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) { return toDisplayResponse(state, context); }
     }
 
-    public PixelSampleResponse getPixelSample(String imageId, int x, int y) throws Exception {
-        ImageContext context = context(imageId);
+    public PixelSampleResponse getPixelSample(String imageId, int series, int x, int y) throws Exception {
+        ImageContext context = context(imageId, series);
         synchronized (context) {
             IFormatReader reader = context.reader();
+            reader.setSeries(series);
             reader.setResolution(0);
             if (x < 0 || y < 0 || x >= reader.getSizeX() || y >= reader.getSizeY()) {
                 throw new IllegalArgumentException("Pixel coordinates are outside the image.");
             }
             if (context.isRgb()) {
-                int[] rgb = readRgbRegion(reader, x, y, 1, 1);
+                int[] rgb = readRgbRegion(reader, x, y, 1, 1, 0);
                 int value = rgb[0];
                 return new PixelSampleResponse(x, y, List.of(
                         (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff));
@@ -310,10 +358,12 @@ public class BioFormatsTileService {
         }
     }
 
-    public PixelBlockResponse getPixelBlock(String imageId, int x, int y, int requestedSize) throws Exception {
-        ImageContext context = context(imageId);
+    public PixelBlockResponse getPixelBlock(String imageId, int series, int x, int y, int requestedSize)
+            throws Exception {
+        ImageContext context = context(imageId, series);
         synchronized (context) {
             IFormatReader reader = context.reader();
+            reader.setSeries(series);
             reader.setResolution(0);
 
             int size = Math.max(8, Math.min(requestedSize, 128));
@@ -322,7 +372,7 @@ public class BioFormatsTileService {
             int width = Math.min(size, reader.getSizeX() - blockX);
             int height = Math.min(size, reader.getSizeY() - blockY);
             if (context.isRgb()) {
-                int[] rgb = readRgbRegion(reader, blockX, blockY, width, height);
+                int[] rgb = readRgbRegion(reader, blockX, blockY, width, height, 0);
                 List<Integer> values = new ArrayList<>(width * height * 3);
                 for (int channel = 0; channel < 3; channel++) {
                     int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
@@ -347,34 +397,35 @@ public class BioFormatsTileService {
         }
     }
 
-    public DisplayResponse resetDisplay(String imageId, HttpSession session) throws Exception {
-        ImageContext context = context(imageId);
-        SessionDisplayState state = sessionState(session, imageId, context);
+    public DisplayResponse resetDisplay(String imageId, int series, HttpSession session) throws Exception {
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) {
             state.reset(context.newDefaultDisplayModel());
             return toDisplayResponse(state, context);
         }
     }
 
-    public DisplayResponse recomputeAutomaticDisplay(String imageId, HttpSession session) throws Exception {
-        ImageContext context = context(imageId);
+    public DisplayResponse recomputeAutomaticDisplay(String imageId, int series, HttpSession session)
+            throws Exception {
+        ImageContext context = context(imageId, series);
         synchronized (context) {
             context.recomputeAutomaticWindows();
         }
-        SessionDisplayState state = sessionState(session, imageId, context);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) {
             state.reset(context.newDefaultDisplayModel());
             return toDisplayResponse(state, context);
         }
     }
 
-    public DisplayResponse updateDisplay(String imageId, DisplayUpdateRequest request,
+    public DisplayResponse updateDisplay(String imageId, int series, DisplayUpdateRequest request,
                                          HttpSession session) throws Exception {
         if (request == null || request.channels() == null) {
             throw new IllegalArgumentException("Display update must contain channels.");
         }
-        ImageContext context = context(imageId);
-        SessionDisplayState state = sessionState(session, imageId, context);
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) {
             DisplayModel model = state.model();
             if (request.channels().size() != model.getChannelCount()) {
@@ -398,16 +449,18 @@ public class BioFormatsTileService {
     }
 
     public byte[] getTile(String imageId, int viewerLevel, int channel,
-                          int tileX, int tileY, HttpSession session) throws Exception {
-        ImageContext context = context(imageId);
-        SessionDisplayState state = sessionState(session, imageId, context);
+                          int tileX, int tileY, int z, int series, HttpSession session) throws Exception {
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (context) {
             IFormatReader reader = context.reader();
+            reader.setSeries(series);
             validateChannel(channel, reader.getSizeC());
+            validateZ(z, reader.getSizeZ());
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
-            byte[] pixels = reader.openBytes(reader.getIndex(0, channel, 0),
+            byte[] pixels = reader.openBytes(reader.getIndex(z, channel, 0),
                     region.x(), region.y(), region.width(), region.height());
             ChannelDisplaySettings channelSettings;
             synchronized (state) { channelSettings = copySettings(state.model().getChannel(channel)); }
@@ -420,9 +473,9 @@ public class BioFormatsTileService {
     }
 
     public byte[] getCompositeTile(String imageId, int viewerLevel, int tileX, int tileY,
-                                   HttpSession session) throws Exception {
-        ImageContext context = context(imageId);
-        SessionDisplayState state = sessionState(session, imageId, context);
+                                   int z, int series, HttpSession session) throws Exception {
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
         synchronized (state) {
             for (int i = 0; i < state.model().getChannelCount(); i++) {
@@ -431,11 +484,13 @@ public class BioFormatsTileService {
         }
         synchronized (context) {
             IFormatReader reader = context.reader();
+            reader.setSeries(series);
+            validateZ(z, reader.getSizeZ());
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
             return encodePng(renderCompositeRegion(context, reader, settingsSnapshot,
-                    region.x(), region.y(), region.width(), region.height()));
+                    region.x(), region.y(), region.width(), region.height(), z));
         }
     }
 
@@ -443,8 +498,9 @@ public class BioFormatsTileService {
     public byte[] exportRegion(String imageId, int x, int y, int width, int height,
                                double scale, HttpSession session) throws Exception {
         long totalStarted = System.nanoTime();
-        ImageContext context = context(imageId);
-        SessionDisplayState state = sessionState(session, imageId, context);
+        int series = ImageContext.FLUORESCENCE_SERIES;
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
         List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
         synchronized (state) {
             for (int channel = 0; channel < state.model().getChannelCount(); channel++) {
@@ -463,7 +519,7 @@ public class BioFormatsTileService {
                     reader.getSizeX(), reader.getSizeY());
 
             BufferedImage image = renderCompositeRegion(context, reader, settingsSnapshot,
-                    x, y, width, height, timings);
+                    x, y, width, height, 0, timings);
             long scalingStarted = System.nanoTime();
             BufferedImage output = scale == 1.0 ? image : scaleImage(image, scale);
             timings.scalingNanos = System.nanoTime() - scalingStarted;
@@ -481,17 +537,17 @@ public class BioFormatsTileService {
 
     private BufferedImage renderCompositeRegion(ImageContext context, IFormatReader reader,
                                                 List<ChannelDisplaySettings> settings,
-                                                int x, int y, int width, int height) throws Exception {
-        return renderCompositeRegion(context, reader, settings, x, y, width, height, null);
+                                                int x, int y, int width, int height, int z) throws Exception {
+        return renderCompositeRegion(context, reader, settings, x, y, width, height, z, null);
     }
 
     private BufferedImage renderCompositeRegion(ImageContext context, IFormatReader reader,
                                                 List<ChannelDisplaySettings> settings,
                                                 int x, int y, int width, int height,
-                                                ExportTimings timings) throws Exception {
+                                                int z, ExportTimings timings) throws Exception {
         long decodingStarted = System.nanoTime();
         if (context.isRgb()) {
-            int[] rgb = readRgbRegion(reader, x, y, width, height);
+            int[] rgb = readRgbRegion(reader, x, y, width, height, z);
             if (timings != null) timings.decodingNanos = System.nanoTime() - decodingStarted;
             long compositingStarted = System.nanoTime();
             BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
@@ -506,7 +562,7 @@ public class BioFormatsTileService {
         for (int channel = 0; channel < settings.size(); channel++) {
             ChannelDisplaySettings channelSettings = settings.get(channel);
             if (!channelSettings.isVisible() || channelSettings.getOpacity() <= 0) continue;
-            channelPixels.add(reader.openBytes(reader.getIndex(0, channel, 0), x, y, width, height));
+            channelPixels.add(reader.openBytes(reader.getIndex(z, channel, 0), x, y, width, height));
             mappers.add(new LinearWindowPixelMapper(channelSettings.getWindow(),
                     channelSettings.getLut(), channelSettings.getGamma()));
             opacities.add(channelSettings.getOpacity());
@@ -545,7 +601,8 @@ public class BioFormatsTileService {
     }
 
 
-    private int[] readRgbRegion(IFormatReader reader, int x, int y, int width, int height) throws Exception {
+    private int[] readRgbRegion(IFormatReader reader, int x, int y, int width, int height, int z)
+            throws Exception {
         int pixelCount = width * height;
         int[] rgb = new int[pixelCount];
         int bytesPerSample = FormatTools.getBytesPerPixel(reader.getPixelType());
@@ -554,7 +611,7 @@ public class BioFormatsTileService {
         }
         if (reader.isRGB()) {
             int samples = Math.max(3, reader.getRGBChannelCount());
-            byte[] bytes = reader.openBytes(reader.getIndex(0, 0, 0), x, y, width, height);
+            byte[] bytes = reader.openBytes(reader.getIndex(z, 0, 0), x, y, width, height);
             if (reader.isInterleaved()) {
                 for (int i = 0; i < pixelCount; i++) {
                     int offset = i * samples;
@@ -576,7 +633,7 @@ public class BioFormatsTileService {
         }
         byte[][] channels = new byte[3][];
         for (int channel = 0; channel < 3; channel++) {
-            channels[channel] = reader.openBytes(reader.getIndex(0, channel, 0), x, y, width, height);
+            channels[channel] = reader.openBytes(reader.getIndex(z, channel, 0), x, y, width, height);
         }
         for (int i = 0; i < pixelCount; i++) {
             rgb[i] = ((channels[0][i] & 0xff) << 16)
@@ -589,8 +646,9 @@ public class BioFormatsTileService {
     public String firstImageId() { return registry.getFirst().id(); }
 
     @SuppressWarnings("unchecked")
-    private SessionDisplayState sessionState(HttpSession session, String imageId,
+    private SessionDisplayState sessionState(HttpSession session, String imageId, int series,
                                              ImageContext context) {
+        String stateKey = sessionStateKey(imageId, series);
         synchronized (session) {
             Map<String, SessionDisplayState> states =
                     (Map<String, SessionDisplayState>) session.getAttribute(SESSION_STATES);
@@ -598,9 +656,13 @@ public class BioFormatsTileService {
                 states = new HashMap<>();
                 session.setAttribute(SESSION_STATES, states);
             }
-            return states.computeIfAbsent(imageId,
+            return states.computeIfAbsent(stateKey,
                     ignored -> new SessionDisplayState(context.newDefaultDisplayModel()));
         }
+    }
+
+    static String sessionStateKey(String imageId, int series) {
+        return imageId + "#" + series;
     }
 
     private ChannelDisplaySettings copySettings(ChannelDisplaySettings source) {
@@ -613,15 +675,16 @@ public class BioFormatsTileService {
         return copy;
     }
 
-    private ImageContext context(String imageId) throws Exception {
+    private ImageContext context(String imageId, int series) throws Exception {
         ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
-        ImageContext existing = contexts.get(imageId);
+        String key = sessionStateKey(imageId, series);
+        ImageContext existing = contexts.get(key);
         if (existing != null) return existing;
         synchronized (contexts) {
-            existing = contexts.get(imageId);
+            existing = contexts.get(key);
             if (existing == null) {
-                existing = new ImageContext(entry, timing);
-                contexts.put(imageId, existing);
+                existing = new ImageContext(entry, timing, series);
+                contexts.put(key, existing);
             }
             return existing;
         }
@@ -656,6 +719,13 @@ public class BioFormatsTileService {
     private void validateChannel(int channel, int count) {
         if (channel < 0 || channel >= count) {
             throw new IllegalArgumentException("Channel must be between 0 and " + (count - 1) + ".");
+        }
+    }
+
+    private void validateZ(int z, int sizeZ) {
+        int planes = zPlaneCount(sizeZ);
+        if (z < 0 || z >= planes) {
+            throw new IllegalArgumentException("Z-plane must be between 0 and " + (planes - 1) + ".");
         }
     }
 

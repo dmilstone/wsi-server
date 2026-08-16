@@ -1,0 +1,10 @@
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted
+/bin/bash: /Users/dm026/Downloads/wsi-server_works_cursor/ops/wsi-ops-dashboard-launchagent.sh: Operation not permitted
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted
+/bin/bash: /Users/dm026/Downloads/wsi-server_works_cursor/ops/wsi-ops-dashboard-launchagent.sh: Operation not permitted
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted
+/bin/bash: /Users/dm026/Downloads/wsi-server_works_cursor/ops/wsi-ops-dashboard-launchagent.sh: Operation not permitted
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted
+/bin/bash: /Users/dm026/Downloads/wsi-server_works_cursor/ops/wsi-ops-dashboard-launchagent.sh: Operation not permitted
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted
+/bin/bash: /Users/dm026/Downloads/wsi-server_works_cursor/ops/wsi-ops-dashboard-launchagent.sh: Operation not permitted
