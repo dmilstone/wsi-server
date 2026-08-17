@@ -96,7 +96,7 @@ function fakeItem(index, extra = {}) {
     assert.equal(opened[0].length, 4);
     assert.equal(opened[0][1].opacity, 1);
     assert.equal(opened[0][0].opacity, 0);
-    assert.equal(opened[0][3].preload, true);
+    assert.ok(opened[0].every(spec => spec.preload === true));
     assert.equal(opened[0][2].x, 0);
     assert.equal(AnnotationAdapter.currentZ, 1);
     openHandlers.forEach(handler => handler());
@@ -117,6 +117,7 @@ function fakeItem(index, extra = {}) {
     assert.equal(count, 4);
     assert.equal(viewer.openCalls, openBefore);
     assert.deepEqual(items.map(item => item.opacity), [0, 0, 0, 1]);
+    assert.deepEqual(items.map(item => item.preload), [true, true, true, true]);
     AnnotationAdapter.applyZStackLayerOpacities(viewer, 1);
     assert.deepEqual(items.map(item => item.opacity), [0, 1, 0, 0]);
 }
@@ -298,6 +299,7 @@ function fakeItem(index, extra = {}) {
     const active = specs.filter(spec => spec.zIndexProperty === 1);
     assert.equal(active.map(spec => spec.opacity).join(","), "1,0,0.5");
     assert.equal(active.map(spec => spec.channelIndex).join(","), "0,1,2");
+    assert.equal(specs.map(spec => spec.preload).join(","), "true,false,true,true,false,true");
 }
 
 {
@@ -326,9 +328,25 @@ function fakeItem(index, extra = {}) {
         { name: "TRITC", index: 2, visible: true, opacity: 1 }
     ], 1);
     assert.deepEqual(items.map(item => item.opacity), [0, 0, 0, 1, 0, 1]);
+    assert.deepEqual(items.map(item => item.preload), [true, false, true, true, false, true]);
     AnnotationAdapter.changeFocalDepth(viewer, 0);
     assert.deepEqual(items.map(item => item.opacity), [1, 0, 1, 0, 0, 0]);
+    assert.deepEqual(items.map(item => item.preload), [true, false, true, true, false, true]);
     AnnotationAdapter.rememberChannelLayerState([]);
+}
+
+{
+    assert.equal(AnnotationAdapter.zIndexFromTileUrl("/tile/slide/0/0_0.png?z=4&channel=1"), 4);
+    assert.equal(AnnotationAdapter.neighborZTileUrl("/tile/slide/0/0_0.png?z=4&channel=1", 5), "/tile/slide/0/0_0.png?z=5&channel=1");
+    AnnotationAdapter.resetZTilePrefetchCache("stack");
+    const queued = AnnotationAdapter.prefetchAdjacentZPlaneTiles({
+        url: "/tile/slide/0/0_0.png?z=2&channel=0",
+        z: 2,
+        maxZ: 8
+    });
+    assert.equal(queued, 2);
+    assert.ok(AnnotationAdapter.zTilePrefetchUrls.has("/tile/slide/0/0_0.png?z=1&channel=0"));
+    assert.ok(AnnotationAdapter.zTilePrefetchUrls.has("/tile/slide/0/0_0.png?z=3&channel=0"));
 }
 
 assert.match(adapterSource, /static applyChannelLayerOpacities\(/);
@@ -343,7 +361,8 @@ assert.doesNotMatch(
 assert.match(adapterSource, /static applyZStackLayerOpacities\(/);
 assert.match(adapterSource, /static bindZStackWheel\(/);
 assert.match(adapterSource, /static handleZStackWheel\(/);
-assert.match(adapterSource, /preload:\s*true/);
+assert.match(adapterSource, /preload:\s*visible/);
+assert.match(adapterSource, /setPreload\(channelOn\)/);
 assert.match(adapterSource, /viewer\.open\(stamped\)/);
 assert.match(adapterSource, /zIndexProperty/);
 assert.match(adapterSource, /static changeFocalDepth\(/);

@@ -8,20 +8,31 @@ const staticRoot = path.join(__dirname, "../../main/resources/static");
 const index = fs.readFileSync(path.join(staticRoot, "index.html"), "utf8");
 const guide = fs.readFileSync(path.join(staticRoot, "help/viewer-guide.html"), "utf8");
 const pdf = fs.readFileSync(path.join(staticRoot, "help/WSI-Viewer-Quick-Guide.pdf"));
+const userGuide = fs.readFileSync(path.join(staticRoot, "help/user-guide.html"), "utf8");
+const userGuidePdf = fs.readFileSync(path.join(staticRoot, "help/WSI-User-Administration-Guide.pdf"));
 
-assert.match(index, /id="viewer-help"/);
-assert.match(index, /href="\/help\/viewer-guide\.html"/);
+assert.match(userGuide, /WSI Comprehensive User/);
+assert.match(userGuide, /X-WSI-User/);
+assert.match(userGuide, /com\.wsi\.ops-dashboard/);
+assert.equal(userGuidePdf.subarray(0, 5).toString("ascii"), "%PDF-");
+
+assert.match(index, /id="user-guide-link"/);
+assert.match(index, /href="\/help\?v=20260817"/);
+assert.match(index, /id="viewer-quick-guide-link"/);
+assert.match(index, /href="\/help\/viewer-guide\.html\?v=20260817"/);
+assert.match(index, /id="admin-ops-guide-link"/);
+assert.match(index, /href="\/help\/admin-ops-guide\.html\?v=20260817"/);
 assert.match(index, /target="_blank"/);
 assert.match(index, /rel="noopener"/);
-assert.match(index, /aria-label="Open WSI Viewer quick guide in a new tab"/);
-assert.match(index, /<span>Help<\/span>/);
-assert.match(index, /\.help-link\s*\{[^}]*min-height:\s*36px[^}]*text-decoration:\s*none/s);
-assert.match(index, /\.help-link:focus-visible/);
+assert.match(index, /\["user-guide-link", "\/help\?v=20260817"\]/);
+assert.match(index, /openRelativeDocumentView\(documentPath, event\)/);
 
 assert.match(guide, /<title>WSI Viewer Quick Guide<\/title>/);
 assert.match(guide, /id="close-guide"/);
 assert.ok(guide.includes(">Close guide</button>"));
-assert.ok(guide.includes("window.close()"));assert.ok(guide.includes('if (!window.closed) window.location.assign("/")'));
+assert.ok(guide.includes("window.close()"));
+assert.ok(guide.includes('if (!window.closed) window.location.assign("/")'));
+assert.ok(guide.includes('href="/help"'));
 assert.ok(guide.includes('href="/help/WSI-Viewer-Quick-Guide.pdf"'));
 assert.ok(guide.includes(">Printable PDF</a>"));
 assert.doesNotMatch(guide, /https?:\/\//);

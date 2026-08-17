@@ -1,0 +1,181 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 7 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 3519 >>
+stream
+BT
+/F1 11 Tf
+54 738 Td
+(WSI Comprehensive User & Administration Guide) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(Viewer workflows, workstation isolation, and local ops LaunchAgent) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(1. Web Dashboard Image Ingestion Workflow) Tj
+0 -14 Td
+(The slide ingestion pipeline is a manual three-click protocol on your local loopback) Tj
+0 -14 Td
+(operations panel.) Tj
+0 -14 Td
+(- The Environment: The local operations dashboard listens strictly on) Tj
+0 -14 Td
+(http://127.0.0.1:8084/ and safely rejects external non-loopback clients.) Tj
+0 -14 Td
+(- Pre-Ingestion Step: Place each complete virtual microscope dataset inside one) Tj
+0 -14 Td
+(top-level directory under your local staging path \(/Users/dm026/wsi-ingest-staging\).) Tj
+0 -14 Td
+(Warning: Never move a lone .vsi file without its companion data folder.) Tj
+0 -14 Td
+(Execution Protocol) Tj
+0 -14 Td
+(1. Inspect your files in the directory staging pool.) Tj
+0 -14 Td
+(2. Click 1 ? Seal: type exactly SEAL to record the readiness assertion and first) Tj
+0 -14 Td
+(whole-tree observation.) Tj
+0 -14 Td
+(3. Click 2 ? Observe: wait for the configured quiet interval, then run Observe until) Tj
+0 -14 Td
+(the required observation count is met.) Tj
+0 -14 Td
+(4. Optional: run Promotion dry-run to preflight without moving data.) Tj
+0 -14 Td
+(5. Click 3 ? Promote: type exactly PROMOTE to atomically move the verified folder into) Tj
+0 -14 Td
+(production \(/Users/dm026/wsi-slides\).) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(2. Workstation Annotation Safety & Isolation) Tj
+0 -14 Td
+(To prevent cross-contamination of diagnosis data across different physical machines,) Tj
+0 -14 Td
+(drawing canvases are strictly sandboxed.) Tj
+0 -14 Td
+(- The Identity Key: Every browser workstation generates a stable unique identity) Tj
+0 -14 Td
+(string on startup, stored as wsi.workstation.id in local browser storage and mirrored) Tj
+0 -14 Td
+(in your secure tracking cookies.) Tj
+0 -14 Td
+(- The Header Loop: The files annotation-adapter.js and annotation-store.js dynamically) Tj
+0 -14 Td
+(extract this machine tag and inject it as a custom X-WSI-User header into all network) Tj
+0 -14 Td
+(fetches.) Tj
+0 -14 Td
+(- Data Segregation: The server catches this machine fingerprint and isolates your) Tj
+0 -14 Td
+(drawing paths into distinct per-workstation folders inside your storage directory. It) Tj
+0 -14 Td
+(will never drop files back into the fallback public local bucket.) Tj
+0 -14 Td
+(- Troubleshooting: If an updated canvas displays blank parameters, perform a Hard) Tj
+0 -14 Td
+(Refresh \(Cmd + Shift + R\) to force your browser to discard its cached page state and) Tj
+0 -14 Td
+(re-transmit its unique workstation identity header.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(3. com.wsi.ops-dashboard LaunchAgent Maintenance) Tj
+0 -14 Td
+(The workspace engine runs as a secure background macOS system daemon.) Tj
+0 -14 Td
+(- System Path: Because macOS TCC blocks background launch scripts from running inside) Tj
+0 -14 Td
+(user directories like ~/Downloads, the production service lives securely in your) Tj
+0 -14 Td
+(system files at: ~/Library/Application Support/com.wsi.ops-dashboard/) Tj
+0 -14 Td
+(- LaunchAgent plist: The job identifier is com.wsi.ops-dashboard. The plist is) Tj
+0 -14 Td
+(~/Library/LaunchAgents/com.wsi.ops-dashboard.plist.) Tj
+0 -14 Td
+(- Restarting Following Asset Changes: If configuration parameters or scripts change,) Tj
+0 -14 Td
+(you can completely flush the server runtime cache by letting Cursor cycle the) Tj
+0 -14 Td
+(LaunchAgent service plist file.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>
+endobj
+6 0 obj
+<< /Length 1439 >>
+stream
+BT
+/F1 11 Tf
+54 738 Td
+() Tj
+0 -14 Td
+(4. Related viewer help) Tj
+0 -14 Td
+(This User Guide covers ingestion, workstation isolation, and the ops LaunchAgent.) Tj
+0 -14 Td
+(Viewer controls and the release cycle live in the other two manuals.) Tj
+0 -14 Td
+(- Viewer Quick Guide: Open /help/viewer-guide.html for pan, zoom, channels,) Tj
+0 -14 Td
+(annotations, and export.) Tj
+0 -14 Td
+(- Admin & Ops Guide: Open /help/admin-ops-guide.html for environments, the monitored) Tj
+0 -14 Td
+(release cycle, logs, and rollback.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(LEGAL DISCLAIMER) Tj
+0 -14 Td
+(LEGAL DISCLAIMER: This software and documentation are provided for authorized research) Tj
+0 -14 Td
+(and image-server administration only. They are not a substitute for clinical judgment,) Tj
+0 -14 Td
+(validated diagnostic systems, or institutional SOP. Do not enter patient identifiers,) Tj
+0 -14 Td
+(PHI, or other sensitive clinical information into local ops tools, feedback forms, or) Tj
+0 -14 Td
+(shared logs. Operators remain responsible for environment separation \(development /) Tj
+0 -14 Td
+(staging / rehearsal / production\), de-identification of non-production images, and) Tj
+0 -14 Td
+(compliance with applicable institutional, regulatory, and privacy requirements. Access) Tj
+0 -14 Td
+(is loopback- or host-restricted where documented; do not expose administration) Tj
+0 -14 Td
+(endpoints via proxy, port forward, or alternate bind address.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000003818 00000 n 
+0000003944 00000 n 
+0000005435 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+5505
+%%EOF

@@ -14,11 +14,11 @@
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
-    <script src="/annotation-store.js?v=20260817-debug-ws"></script>
-    <script src="/annotation-adapter.js?v=20260817-debug-draw-ocr6"></script>
+    <script src="/annotation-store.js?v=20260817"></script>
+    <script src="/annotation-adapter.js?v=20260817-ai-labs-export"></script>
     <script src="/annotation-name-editor.js"></script>
     <script src="/annotation-label-layer.js"></script>
-    <script src="/annotorious-spike.js?v=20260817-debug-draw2"></script>
+    <script src="/annotorious-spike.js?v=20260817"></script>
     <style>
         :root {
             color-scheme: dark;
@@ -1599,6 +1599,56 @@
             align-items: center;
             gap: 8px;
         }
+        #ai-analytics-panel .ai-plugin-row {
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+        }
+        #ai-analytics-panel .ai-plugin-row #plugin-selector {
+            flex: 1;
+            min-height: 36px;
+            margin: 0;
+            padding: 0 8px;
+            border: 1px solid #2b3948;
+            border-radius: 6px;
+            background: #174b78;
+            color: #f7f2d8;
+            font-size: 12px;
+            font-weight: 650;
+        }
+        #ai-analytics-panel .ai-plugin-row #ai-run-plugin {
+            width: auto;
+            min-width: 64px;
+            margin-top: 0;
+        }
+        #ai-analytics-panel .ai-lab-disclaimer {
+            margin: 0 0 8px;
+            border: 1px solid rgba(240, 165, 0, .35);
+            border-radius: 6px;
+            background: rgba(11, 18, 32, .55);
+        }
+        #ai-analytics-panel .ai-lab-disclaimer > summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 6px 8px;
+            color: #c9b56a;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .02em;
+            user-select: none;
+        }
+        #ai-analytics-panel .ai-lab-disclaimer > summary::-webkit-details-marker { display: none; }
+        #ai-analytics-panel .ai-lab-disclaimer > summary::after {
+            content: "▸";
+            float: right;
+            color: #f0a500;
+            font-size: 11px;
+        }
+        #ai-analytics-panel .ai-lab-disclaimer[open] > summary::after { content: "▾"; }
+        #ai-analytics-panel .ai-lab-disclaimer .ai-lab-note {
+            margin: 0;
+            padding: 0 8px 8px;
+        }
         #ai-analytics-panel .ai-lab-note {
             margin: 0 0 8px;
             color: #c9b56a;
@@ -1643,6 +1693,57 @@
             font-size: 11px;
             text-align: right;
         }
+        #ai-analytics-panel .ai-plugin-stats {
+            margin-top: 8px;
+            overflow: auto;
+            border: 1px solid rgba(0, 255, 120, .28);
+            border-radius: 7px;
+            background: rgba(8, 18, 14, .72);
+        }
+        #ai-analytics-panel .ai-plugin-stats table {
+            width: 100%;
+            border-collapse: collapse;
+            font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: #d7ffe8;
+        }
+        #ai-analytics-panel .ai-plugin-stats th,
+        #ai-analytics-panel .ai-plugin-stats td {
+            padding: 5px 6px;
+            text-align: right;
+            border-bottom: 1px solid rgba(255,255,255,.08);
+            font-variant-numeric: tabular-nums;
+        }
+        #ai-analytics-panel .ai-plugin-stats th:first-child,
+        #ai-analytics-panel .ai-plugin-stats td:first-child {
+            text-align: left;
+            color: #9dffc2;
+        }
+        #ai-analytics-panel .ai-plugin-stats caption {
+            caption-side: top;
+            padding: 6px 8px 2px;
+            text-align: left;
+            color: #c9b56a;
+            font-size: 10px;
+            font-weight: 650;
+        }
+        .nucleus-plugin-stats {
+            pointer-events: none;
+            min-width: 220px;
+            padding: 6px 8px;
+            border: 1px solid rgba(0, 255, 0, .55);
+            border-radius: 6px;
+            background: rgba(6, 18, 12, .82);
+            color: #d7ffe8;
+            font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+        }
+        .nucleus-plugin-stats table { width: 100%; border-collapse: collapse; }
+        .nucleus-plugin-stats th, .nucleus-plugin-stats td {
+            padding: 2px 4px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .nucleus-plugin-stats th:first-child, .nucleus-plugin-stats td:first-child { text-align: left; }
         #ai-analytics-panel .ai-lab-toggle-row {
             display: flex;
             align-items: center;
@@ -2001,8 +2102,9 @@
                         <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.5v1.4M8 12.1v1.4M2.5 8h1.4M12.1 8h1.4M4.1 4.1l1 1M10.9 10.9l1 1M11.9 4.1l-1 1M5.1 10.9l-1 1"/></svg>
                     </button>
                     <a id="dashboard-link" class="toolbar-button is-env-allowed" href="/local-operations/" target="_blank" rel="noopener" data-tooltip="Dashboard&#10;Open local operations documentation" title="Dashboard — Open local operations documentation" aria-label="Dashboard">Dashboard</a>
-                    <a id="viewer-quick-guide-link" class="toolbar-button guide-link" href="/help/viewer-guide.html" target="_blank" rel="noopener" data-tooltip="Viewer Quick Guide&#10;Open the WSI Viewer quick guide" title="Viewer Quick Guide — Open the WSI Viewer quick guide" aria-label="Viewer Quick Guide">Viewer Quick Guide</a>
-                    <a id="admin-ops-guide-link" class="toolbar-button guide-link" href="/help/admin-ops-guide.html" target="_blank" rel="noopener" data-tooltip="Admin &amp; Ops Guide&#10;Open the administration and operations guide" title="Admin &amp; Ops Guide — Open the administration and operations guide" aria-label="Admin &amp; Ops Guide">Admin &amp; Ops Guide</a>
+                    <a id="user-guide-link" class="toolbar-button guide-link" href="/help?v=20260817" target="_blank" rel="noopener" data-tooltip="User Guide&#10;Open the comprehensive user and administration guide" title="User Guide — Open the comprehensive user and administration guide" aria-label="User Guide">User Guide</a>
+                    <a id="viewer-quick-guide-link" class="toolbar-button guide-link" href="/help/viewer-guide.html?v=20260817" target="_blank" rel="noopener" data-tooltip="Viewer Quick Guide&#10;Open the WSI Viewer quick guide" title="Viewer Quick Guide — Open the WSI Viewer quick guide" aria-label="Viewer Quick Guide">Viewer Quick Guide</a>
+                    <a id="admin-ops-guide-link" class="toolbar-button guide-link" href="/help/admin-ops-guide.html?v=20260817" target="_blank" rel="noopener" data-tooltip="Admin &amp; Ops Guide&#10;Open the administration and operations guide" title="Admin &amp; Ops Guide — Open the administration and operations guide" aria-label="Admin &amp; Ops Guide">Admin &amp; Ops Guide</a>
                 </div>
             </div>
         </nav>
@@ -2176,10 +2278,20 @@
         <details id="ai-analytics-panel" class="ai-analytics-panel">
             <summary>🔬 Computational Pathology AI Labs</summary>
             <div class="ai-lab-actions">
-                <p class="ai-lab-note">Experimental viewport simulation on this browser only. Results are not diagnostic and are not saved to the annotation store.</p>
-                <button id="ai-segment-nuclei" class="action" type="button">1. Segment Cell Nuclei</button>
+                <details class="ai-lab-disclaimer">
+                    <summary>System Diagnostic Disclaimer</summary>
+                    <p class="ai-lab-note">Experimental viewport simulation on this browser only. Results are not diagnostic and are not saved to the annotation store.</p>
+                </details>
+                <button id="ai-segment-nuclei" class="action" type="button">1. Segment Nuclei</button>
+                <div class="ai-plugin-row">
+                    <select id="plugin-selector" aria-label="Plugin action">
+                        <option value="quantify-nuclei-pixel">Run Pixel Intensity Plugin</option>
+                        <option value="per-object-pixel-quantifier">Quantify Individual Objects (Color Code)</option>
+                    </select>
+                    <button id="ai-run-plugin" class="action" type="button">Run</button>
+                </div>
                 <div class="ai-nuclei-row">
-                    <button id="ai-nuclei-visible" class="action" type="button" aria-pressed="true" title="Hide segmented nuclei" aria-label="Nuclei">Nuclei</button>
+                    <button id="ai-nuclei-visible" class="action" type="button" aria-pressed="false" title="Show" aria-label="Show">Show</button>
                     <label class="ai-lab-field" for="ai-seg-target" style="margin:0;flex:1;">
                         <select id="ai-seg-target" aria-label="Segmentation target">
                             <option value="viewport" selected>Visible region</option>
@@ -2187,6 +2299,7 @@
                         </select>
                     </label>
                 </div>
+                <div id="ai-plugin-stats" class="ai-plugin-stats" hidden></div>
                 <button id="ai-extract-br-features" class="action" type="button">2. Extract Breast Tissue Features (BR)</button>
                 <div id="ai-status-stack" class="ai-status-stack">
                     <div id="ai-lab-config" class="ai-lab-config">
@@ -2568,13 +2681,6 @@
                 ? AnnotationAdapter.filterImagesForCase(catalogImages, selectedCase)
                 : catalogImages;
             AnnotationAdapter.scheduleSidebarClinicalOcrBatch(imageListElement, matched);
-            // #region agent log
-            wsiDebugLog("D", "index.html:refreshRenderedImages", "skip rebuild, keep in-flight OCR", {
-                imageCount: next.length,
-                matched: matched.length,
-                mode
-            }, "post-fix");
-            // #endregion
             return 0;
         }
         const expanded = new Set(Array.from(imageListElement.querySelectorAll("details[open] summary"), summary => summary.textContent.replace(/ \(\d+\)$/, "")));
@@ -2625,19 +2731,12 @@
             AnnotationAdapter.setEmptyViewportGuidanceVisible(document, false);
             statusElement.textContent = `Opening ${image.name}…`;
             clearTimeout(updateTimer);
-            updateSequence++;
+            const generation = ++updateSequence;
             closeImageLightbox(false);
             prepareSlideOverviewForImageChange();
             selectedImage = image;
             AnnotationAdapter.currentImageId = image.id;
             AnnotationAdapter.onSlideClicked(image, document);
-            // #region agent log
-            wsiDebugLog("E", "index.html:selectImage", "image selected", {
-                imageId: image?.id,
-                sidecar: image?.clinicalMarker || "",
-                tesseract: typeof Tesseract !== "undefined"
-            });
-            // #endregion
             AnnotationAdapter.resetZTilePrefetchCache(image.id);
             updateSelectedAnnotationExportState();
             // Start annotation I/O alongside metadata/display loading. The store
@@ -2652,6 +2751,7 @@
                 button.classList.toggle("active", button.dataset.imageId === image.id)
             );
             const catalog = await request(`/api/images/${encodeURIComponent(image.id)}?series=0`);
+            if (generation !== updateSequence || selectedImage?.id !== image.id) return;
             const preferredSeries = chooseDefaultSeries(catalog.seriesProfiles);
             setCurrentSeries(preferredSeries);
             [metadata, display] = await Promise.all([
@@ -2669,6 +2769,7 @@
                     return result;
                 })
             ]);
+            if (generation !== updateSequence || selectedImage?.id !== image.id) return;
             syncSeriesSelectControl(metadata);
             const saved = loadLocalDisplay(image.id, currentSeries);
             if (saved && compatibleDisplay(saved, display)) {
@@ -2677,6 +2778,7 @@
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({channels: saved.channels})
                 });
+                if (generation !== updateSequence || selectedImage?.id !== image.id) return;
             }
             localStorage.setItem(`${STORAGE_PREFIX}.selectedImage`, image.id);
             AnnotationAdapter.applyHeaderIdentity(document, image);
@@ -2691,6 +2793,7 @@
             if (measureModeButton) measureModeButton.disabled = false;
             if (!slideOverview.hidden) refreshSlideOverview();
             renderChannels();
+            if (generation !== updateSequence || selectedImage?.id !== image.id) return;
             openViewer();
             statusElement.textContent = `${metadata.width} × ${metadata.height} · ${metadata.channels} channels · series ${currentSeries}`;
         } catch (error) {
@@ -3138,20 +3241,9 @@
                     }
                 );
                 AnnotationAdapter.annotationSpike = annotationSpike;
-                // #region agent log
-                wsiDebugLog("A", "index.html:openViewer", "spike assigned", {
-                    hasSpike: Boolean(annotationSpike),
-                    hasAnnotator: Boolean(annotationSpike?.annotator)
-                }, "post-fix");
-                // #endregion
             } catch (error) {
                 annotationSpike = null;
                 AnnotationAdapter.annotationSpike = null;
-                // #region agent log
-                wsiDebugLog("A", "index.html:openViewer", "spike constructor failed", {
-                    error: String(error?.message || error || "")
-                }, "post-fix");
-                // #endregion
                 console.error("Annotorious failed to initialize", error);
             }
             const updatePointerCoordinates = event => {
@@ -4004,14 +4096,6 @@
     });
     document.getElementById("annotation-mode")?.addEventListener("click", () => {
         const spike = annotationSpike || AnnotationAdapter.annotationSpike;
-        // #region agent log
-        wsiDebugLog("A", "index.html:annotation-mode-click", "rectangle button", {
-            hasSpike: Boolean(spike),
-            hasAnnotator: Boolean(spike?.annotator),
-            drawingEnabled: Boolean(spike?.drawingEnabled),
-            earlyReturn: Boolean(spike?.setDrawingEnabled && spike.annotator)
-        }, "post-fix");
-        // #endregion
         if (AnnotationAdapter.isMeasurementModeActive) setMeasurementModeActive(false);
         if (spike?.setDrawingEnabled && spike.annotator) return;
         // Do not disable mouse-nav here. That fallback left pan/scroll dead
@@ -4140,16 +4224,19 @@
             togglePilotFeedbackPanel();
         }
     });
-    document.getElementById("admin-ops-guide-link")?.addEventListener("click", (event) => {
-        if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) {
-            openRelativeDocumentView("/help/admin-ops-guide.html", event);
-        }
-    });
-    document.getElementById("local-operations")?.addEventListener("click", (event) => {
-        if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) {
-            openRelativeDocumentView("/local-operations/", event);
-        }
-    });
+    const documentViews = [
+        ["user-guide-link", "/help?v=20260817"],
+        ["viewer-quick-guide-link", "/help/viewer-guide.html?v=20260817"],
+        ["admin-ops-guide-link", "/help/admin-ops-guide.html?v=20260817"],
+        ["local-operations", "/local-operations/"],
+    ];
+    for (const [elementId, documentPath] of documentViews) {
+        document.getElementById(elementId)?.addEventListener("click", (event) => {
+            if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) {
+                openRelativeDocumentView(documentPath, event);
+            }
+        });
+    }
 
     document.addEventListener("keydown", (event) => {
         const api = pilotFeedbackApi();

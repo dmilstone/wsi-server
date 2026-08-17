@@ -97,6 +97,10 @@ class SecurityCsrfTests {
 
     @Test
     void helpGuideRequiresAuthentication() throws Exception {
+        mockMvc.perform(get("/help"))
+                .andExpect(status().is3xxRedirection());
+        mockMvc.perform(get("/api/help/download-pdf"))
+                .andExpect(status().is3xxRedirection());
         mockMvc.perform(get("/help/viewer-guide.html"))
                 .andExpect(status().is3xxRedirection());
         mockMvc.perform(get("/help/WSI-Viewer-Quick-Guide.pdf"))
@@ -105,10 +109,24 @@ class SecurityCsrfTests {
 
     @Test
     void authenticatedUserCanOpenHelpGuideAndPdf() throws Exception {
-        mockMvc.perform(get("/help/viewer-guide.html")
+        mockMvc.perform(get("/help")
+                        .with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("WSI Comprehensive User")));
+        mockMvc.perform(get("/api/help/download-pdf")
+                        .with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("application/pdf"));
+        mockMvc.perform(get("/help/admin-ops-guide.html")
                         .with(user("viewer").roles("VIEWER")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"));
+        mockMvc.perform(get("/help/user-guide.html")
+                        .with(user("viewer").roles("VIEWER")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("WSI Comprehensive User")));
         mockMvc.perform(get("/help/WSI-Viewer-Quick-Guide.pdf")
                         .with(user("viewer").roles("VIEWER")))
                 .andExpect(status().isOk())

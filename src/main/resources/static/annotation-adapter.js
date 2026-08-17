@@ -19,24 +19,6 @@ let ocrAutoBaseline = { prob: 0.5, nms: 0.4 };
 /** In-memory cell polygons drawn on the native OSD canvas overlay. */
 let localizedCellObjects = [];
 
-// #region agent log
-function wsiDebugLog(hypothesisId, location, message, data, runId) {
-    fetch("http://127.0.0.1:7556/ingest/8748b9e4-d4bb-410e-a080-1a8c2a88a2f1", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "c733f2" },
-        body: JSON.stringify({
-            sessionId: "c733f2",
-            runId: runId || "pre-fix",
-            hypothesisId,
-            location,
-            message,
-            data: data || {},
-            timestamp: Date.now()
-        })
-    }).catch(() => {});
-}
-// #endregion
-
 function renderSynchronizedCellObjects() {
     return AnnotationAdapter.renderSynchronizedCellObjects();
 }
@@ -1178,37 +1160,17 @@ class AnnotationAdapter {
         if (list.length) {
             AnnotationAdapter.cacheCatalogSidecarMetadata(list);
         }
-        const sidecarFilled = list.filter((image) => AnnotationAdapter.extractIfEpitopeMarker(
-            image?.clinicalMarker || image?.clinical_marker || image?.epitope || ""
-        )).length;
-        // #region agent log
-        wsiDebugLog("D", "annotation-adapter.js:applyCatalogClinicalMarkers", "catalog markers", {
-            allowBrowserFallback,
-            imageCount: list.length,
-            tesseract: typeof Tesseract !== "undefined"
-        });
-        wsiDebugLog("A", "annotation-adapter.js:applyCatalogClinicalMarkers", "ingest sidecar coverage", {
-            imageCount: list.length,
-            sidecarFilled,
-            sidecarEmpty: Math.max(0, list.length - sidecarFilled),
-            allowBrowserFallback
-        }, "post-fix");
-        // #endregion
         const byId = new Map();
         for (const image of list) {
             if (image?.id) byId.set(String(image.id), image);
         }
         const missing = [];
         let painted = 0;
-        let cachedHit = 0;
-        let cachedEmpty = 0;
-        let noNode = 0;
         for (const button of container.querySelectorAll(".image-button")) {
             const key = AnnotationAdapter.sidebarOcrCacheKey(button);
             const targetNode = AnnotationAdapter.ensureSidebarOcrResultNode(button, doc)
                 || button.querySelector(".ocr-result-text");
             if (!targetNode) {
-                noNode += 1;
                 continue;
             }
             const existing = AnnotationAdapter.extractIfEpitopeMarker(targetNode.textContent || "");
@@ -1226,11 +1188,9 @@ class AnnotationAdapter {
             const thorough = Boolean(AnnotationAdapter.ocrThoroughAttempt?.has?.(key));
             if (marker) {
                 AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
-                cachedHit += 1;
             } else if (targetNode.classList?.contains?.("ocr-result-raw")) {
                 // Keep manual-scan RAW debug until a real marker arrives.
             } else if (cachedEmptyMiss && thorough) {
-                cachedEmpty += 1;
                 if (!existing) AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
             } else if (allowBrowserFallback) {
                 if (!targetNode.classList?.contains?.("ocr-result-pending")) {
@@ -1242,22 +1202,7 @@ class AnnotationAdapter {
             }
             painted += 1;
         }
-        // #region agent log
-        wsiDebugLog("D", "annotation-adapter.js:applyCatalogClinicalMarkers", "row outcomes", {
-            painted,
-            queued: missing.length,
-            cachedHit,
-            cachedEmpty,
-            noNode,
-            allowBrowserFallback
-        }, "post-fix");
-        // #endregion
         if (allowBrowserFallback && missing.length) {
-            // #region agent log
-            wsiDebugLog("D", "annotation-adapter.js:applyCatalogClinicalMarkers", "ocr fallback queued", {
-                missing: missing.length
-            });
-            // #endregion
             void AnnotationAdapter.runBrowserOcrFallbackBatch(missing);
         }
         return painted;
@@ -1327,13 +1272,6 @@ class AnnotationAdapter {
                     if (marker) AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
                     else AnnotationAdapter.renderOcrRawDebug(targetNode, result?.engineRaw || result?.rawText || "");
                 }
-                // #region agent log
-                wsiDebugLog("D", "annotation-adapter.js:runBrowserOcrFallbackBatch", "list row ocr done", {
-                    cacheKey,
-                    marker: marker || "",
-                    angle: result?.angle ?? null
-                }, "post-fix");
-                // #endregion
             } catch (error) {
                 console.error("[wsi-ocr] browser Tesseract fallback failed", cacheKey, error);
                 AnnotationAdapter.writeOcrSessionCache(cacheKey, "");
@@ -1369,13 +1307,6 @@ class AnnotationAdapter {
         const controls = AnnotationAdapter.ensureOverviewOcrControls(doc);
         if (!controls?.result) return;
         const marker = AnnotationAdapter.clinicalMarkerFromImage(image);
-        // #region agent log
-        wsiDebugLog("E", "annotation-adapter.js:applyOverviewClinicalMarker", "overview marker at selection", {
-            imageId: image?.id,
-            sidecarMarker: marker || "",
-            tesseract: typeof Tesseract !== "undefined"
-        });
-        // #endregion
         if (marker) {
             AnnotationAdapter.renderOcrClinicalMarker(controls.result, marker);
             AnnotationAdapter.paintSelectedRowEpitope(image, marker, doc);
@@ -1408,12 +1339,6 @@ class AnnotationAdapter {
         if (cached) {
             AnnotationAdapter.renderOcrClinicalMarker(overviewNode, cached);
             AnnotationAdapter.paintSelectedRowEpitope(image, cached, doc);
-            // #region agent log
-            wsiDebugLog("E", "annotation-adapter.js:ocrSelectedImageIfMissing", "used session cache", {
-                imageId: image?.id || "",
-                marker: cached
-            }, "post-fix");
-            // #endregion
             return cached;
         }
         if (overviewNode) AnnotationAdapter.beginOcrPendingDisplay(overviewNode);
@@ -1429,22 +1354,8 @@ class AnnotationAdapter {
             if (marker) AnnotationAdapter.renderOcrClinicalMarker(overviewNode, marker);
             else AnnotationAdapter.renderOcrRawDebug(overviewNode, raw);
             AnnotationAdapter.paintSelectedRowEpitope(image, marker, doc);
-            // #region agent log
-            wsiDebugLog("E", "annotation-adapter.js:ocrSelectedImageIfMissing", "tesseract on select", {
-                imageId: image?.id || "",
-                marker: marker || "",
-                hasRaw: Boolean(raw),
-                angle
-            }, "post-fix");
-            // #endregion
             return marker;
         } catch (error) {
-            // #region agent log
-            wsiDebugLog("E", "annotation-adapter.js:ocrSelectedImageIfMissing", "tesseract failed", {
-                imageId: image?.id || "",
-                error: String(error?.message || error || "")
-            }, "post-fix");
-            // #endregion
             if (overviewNode) {
                 AnnotationAdapter.renderOcrRawDebug(overviewNode, String(error?.message || error || ""));
             }
@@ -1519,12 +1430,15 @@ class AnnotationAdapter {
             const item = viewer.world.getItemAt(index);
             if (!item || typeof item.setOpacity !== "function") continue;
             const tagged = AnnotationAdapter.taggedZIndex(item);
-            const active = taggedCount > 0 && tagged != null
+            const isActivePlane = taggedCount > 0 && tagged != null
                 ? tagged === targetZIndex
                 : index === targetZIndex;
             const channelOn = AnnotationAdapter.channelLayerIsVisible(item, visibility);
             const layerOpacity = AnnotationAdapter.channelLayerOpacity(item, opacities);
-            item.setOpacity(active && channelOn ? layerOpacity : 0);
+            if (typeof item.setPreload === "function") {
+                item.setPreload(channelOn);
+            }
+            item.setOpacity(isActivePlane && channelOn ? layerOpacity : 0);
         }
         if (typeof viewer.forceRedraw === "function") viewer.forceRedraw();
         return count;
@@ -1651,7 +1565,7 @@ class AnnotationAdapter {
             specs.push({
                 tileSource,
                 opacity: z === activeZ && visible ? layerOpacity : 0,
-                preload: true,
+                preload: visible,
                 compositeOperation: "lighter",
                 x: 0,
                 y: 0,
@@ -1713,7 +1627,9 @@ class AnnotationAdapter {
             }
             return true;
         };
-        if (goHomeNow()) return true;
+        if (goHomeNow()) {
+            return true;
+        }
         if (typeof viewer.addHandler !== "function") return false;
         const onReady = () => {
             if (!goHomeNow()) return;
@@ -1733,16 +1649,9 @@ class AnnotationAdapter {
             const pending = AnnotationAdapter.pendingOpenViewport || {};
             AnnotationAdapter.pendingOpenViewport = null;
             if (pending.preserveViewport) return;
-            // Defer one frame so OSD can finish attaching the tile source
-            // dimensions before centering — never zoom/tier-scale on the same tick.
-            const frame = typeof requestAnimationFrame === "function"
-                ? requestAnimationFrame
-                : (fn) => setTimeout(fn, 0);
-            frame(() => {
-                AnnotationAdapter.centerHomeAfterTileSourceReady(viewer, {
-                    metadata: pending.metadata || AnnotationAdapter.imageMetadata
-                });
-            });
+            // OSD Viewer.open already calls goHome before raising "open".
+            // A second goHome here resets coverage while the 27-layer stack is
+            // still fetching tiles ("Ignoring tile loaded before reset").
         });
         viewer._wsiHomeOnOpenBound = true;
         return true;
@@ -1908,6 +1817,13 @@ class AnnotationAdapter {
         return `${source}${source.includes("?") ? "&" : "?"}z=${neighborZ}`;
     }
 
+    static zIndexFromTileUrl(url) {
+        const match = String(url || "").match(/[?&]z=([^&]*)/i);
+        if (!match) return null;
+        const z = Number(match[1]);
+        return Number.isFinite(z) ? z : null;
+    }
+
     static drainZTilePrefetchQueue() {
         const max = AnnotationAdapter.Z_TILE_PREFETCH_CONCURRENCY;
         while (
@@ -1982,10 +1898,11 @@ class AnnotationAdapter {
         viewer.addHandler("tile-loaded", event => {
             try {
                 const url = event?.tile?.getUrl?.() || event?.tile?.url || "";
-                AnnotationAdapter.schedulePrefetchAdjacentZPlaneTiles({
+                const tileZ = AnnotationAdapter.zIndexFromTileUrl(url);
+                AnnotationAdapter.prefetchAdjacentZPlaneTiles({
                     viewer,
                     url,
-                    z: AnnotationAdapter.currentZ,
+                    z: tileZ ?? AnnotationAdapter.currentZ,
                     maxZ: Math.max(0, (options.planeCount || AnnotationAdapter.zStackPlaneCount) - 1)
                 });
             } catch (_error) {
@@ -3975,6 +3892,8 @@ class AnnotationAdapter {
     static NUCLEUS_MAX_COUNT = 2500;
     static NUCLEUS_FETCH_CONCURRENCY = 3;
     static lastNucleiCircles = [];
+    static lastPluginStatsOverlay = null;
+    static aiNucleusOverlayParts = [];
 
     static get ocrAutoBaseline() { return ocrAutoBaseline; }
     static get localizedCellObjects() { return localizedCellObjects; }
@@ -4135,7 +4054,7 @@ class AnnotationAdapter {
         if (nucleiButton && typeof nucleiButton.addEventListener === "function"
             && nucleiButton.dataset?.aiBound !== "1") {
             nucleiButton.addEventListener("click", () => {
-                AnnotationAdapter.setNucleiOverlaysVisible(!AnnotationAdapter.aiOverlayVisible);
+                AnnotationAdapter.setNucleiOverlaysVisible(!AnnotationAdapter.nucleiOverlaysRendered());
             });
             if (nucleiButton.dataset) nucleiButton.dataset.aiBound = "1";
             AnnotationAdapter.setNucleiOverlaysVisible(AnnotationAdapter.aiOverlayVisible !== false);
@@ -4162,6 +4081,51 @@ class AnnotationAdapter {
                 });
             });
             if (resetBtn.dataset) resetBtn.dataset.aiBound = "1";
+        }
+        const runSelectedPlugin = () => {
+            const selector = host.getElementById("plugin-selector");
+            const pluginId = String(selector && selector.value ? selector.value : "");
+            if (pluginId === "per-object-pixel-quantifier") {
+                void AnnotationAdapter.runPerObjectPixelQuantifier({
+                    root: host,
+                    viewer: AnnotationAdapter.viewer
+                });
+                return;
+            }
+            if (pluginId === "quantify-nuclei-pixel") {
+                void AnnotationAdapter.runPixelIntensityPlugin({
+                    root: host,
+                    viewer: AnnotationAdapter.viewer
+                });
+            }
+        };
+        const pluginRunButton = host.getElementById("ai-run-plugin");
+        if (pluginRunButton && typeof pluginRunButton.addEventListener === "function"
+            && pluginRunButton.dataset?.aiBound !== "1") {
+            pluginRunButton.addEventListener("click", runSelectedPlugin);
+            if (pluginRunButton.dataset) pluginRunButton.dataset.aiBound = "1";
+        }
+        const pluginButton = host.getElementById("ai-run-pixel-plugin");
+        if (pluginButton && typeof pluginButton.addEventListener === "function"
+            && pluginButton.dataset?.aiBound !== "1") {
+            pluginButton.addEventListener("click", () => {
+                void AnnotationAdapter.runPixelIntensityPlugin({
+                    root: host,
+                    viewer: AnnotationAdapter.viewer
+                });
+            });
+            if (pluginButton.dataset) pluginButton.dataset.aiBound = "1";
+        }
+        const objectPluginButton = host.getElementById("ai-quantify-objects");
+        if (objectPluginButton && typeof objectPluginButton.addEventListener === "function"
+            && objectPluginButton.dataset?.aiBound !== "1") {
+            objectPluginButton.addEventListener("click", () => {
+                void AnnotationAdapter.runPerObjectPixelQuantifier({
+                    root: host,
+                    viewer: AnnotationAdapter.viewer
+                });
+            });
+            if (objectPluginButton.dataset) objectPluginButton.dataset.aiBound = "1";
         }
         return true;
     }
@@ -4208,6 +4172,26 @@ class AnnotationAdapter {
         return AnnotationAdapter.setNucleiOverlaysVisible(visible);
     }
 
+    static nucleiOverlaysRendered() {
+        return AnnotationAdapter.aiOverlayVisible !== false
+            && (AnnotationAdapter.aiNucleusOverlayElements || []).length > 0;
+    }
+
+    static syncNucleiVisibilityButton(root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const button = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-nuclei-visible")
+            : null;
+        if (!button) return AnnotationAdapter.nucleiOverlaysRendered();
+        const showing = AnnotationAdapter.nucleiOverlaysRendered();
+        const label = showing ? "Hide" : "Show";
+        button.textContent = label;
+        button.title = label;
+        button.setAttribute("aria-label", label);
+        button.setAttribute("aria-pressed", String(showing));
+        return showing;
+    }
+
     static setNucleiOverlaysVisible(visible) {
         AnnotationAdapter.aiOverlayVisible = !!visible;
         const overlay = AnnotationAdapter.aiNucleiOverlayEl;
@@ -4216,16 +4200,6 @@ class AnnotationAdapter {
             if (element?.style) element.style.display = visible ? "" : "none";
         }
         const host = typeof document !== "undefined" ? document : null;
-        const button = host && typeof host.getElementById === "function"
-            ? host.getElementById("ai-nuclei-visible")
-            : null;
-        if (button) {
-            button.setAttribute("aria-pressed", String(!!visible));
-            button.textContent = "Nuclei";
-            const action = visible ? "Hide segmented nuclei" : "Show segmented nuclei";
-            button.title = action;
-            button.setAttribute("aria-label", "Nuclei");
-        }
         const toggle = host && typeof host.getElementById === "function"
             ? host.getElementById("ai-overlay-visible")
             : null;
@@ -4242,6 +4216,7 @@ class AnnotationAdapter {
                 );
             }
         }
+        AnnotationAdapter.syncNucleiVisibilityButton(host);
         return AnnotationAdapter.aiOverlayVisible;
     }
 
@@ -5239,15 +5214,6 @@ class AnnotationAdapter {
         const target = String(options.segTarget || AnnotationAdapter.readAiLabConfig(options.root).segTarget || "viewport");
         if (target === "annotation") {
             const selected = AnnotationAdapter.readSelectedAnnotationImageBounds();
-            // #region agent log
-            wsiDebugLog("F", "annotation-adapter.js:readViewportImageBounds", "seg target annotation", {
-                hasBounds: Boolean(selected),
-                x: selected?.x,
-                y: selected?.y,
-                width: selected?.width,
-                height: selected?.height
-            });
-            // #endregion
             if (selected) {
                 return {
                     ...selected,
@@ -5661,7 +5627,9 @@ class AnnotationAdapter {
             }
         }
         AnnotationAdapter.aiNucleusOverlayElements = [];
+        AnnotationAdapter.aiNucleusOverlayParts = [];
         AnnotationAdapter.aiNucleiOverlayEl = null;
+        AnnotationAdapter.syncNucleiVisibilityButton();
     }
 
     static paintNucleiCircleOverlays(viewer, circles) {
@@ -5685,6 +5653,7 @@ class AnnotationAdapter {
             if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) continue;
             const overlayElement = doc.createElement("div");
             overlayElement.className = "nucleus-vector-ring";
+            overlayElement.dataset.nucleusIndex = String(overlays.length);
             overlayElement.style.border = "2px solid #00FF00";
             overlayElement.style.borderRadius = "50%";
             overlayElement.style.pointerEvents = "none";
@@ -5727,6 +5696,8 @@ class AnnotationAdapter {
             overlays.push(overlayElement);
         }
         AnnotationAdapter.aiNucleusOverlayElements = overlays;
+        AnnotationAdapter.aiNucleusOverlayParts = overlays;
+        AnnotationAdapter.syncNucleiVisibilityButton();
         return overlays.length;
     }
 
@@ -5771,7 +5742,9 @@ class AnnotationAdapter {
         svg.style.height = "100%";
         svg.style.overflow = "visible";
         svg.style.pointerEvents = "none";
-        for (const nucleus of nuclei) {
+        const polygons = new Array(nuclei.length);
+        for (let index = 0; index < nuclei.length; index += 1) {
+            const nucleus = nuclei[index];
             const ring = nucleus.imageCoordinates || [];
             if (ring.length < 3) continue;
             const polygon = doc.createElementNS(svgNs, "polygon");
@@ -5780,7 +5753,9 @@ class AnnotationAdapter {
             polygon.setAttribute("stroke", "#00FF00");
             polygon.setAttribute("stroke-width", "1.75");
             polygon.setAttribute("vector-effect", "non-scaling-stroke");
+            polygon.setAttribute("data-nucleus-index", String(index));
             svg.appendChild(polygon);
+            polygons[index] = polygon;
         }
         let location;
         try {
@@ -5797,6 +5772,8 @@ class AnnotationAdapter {
         if (svg.style) svg.style.pointerEvents = "none";
         if (svg.parentElement?.style) svg.parentElement.style.pointerEvents = "none";
         AnnotationAdapter.aiNucleusOverlayElements = [svg];
+        AnnotationAdapter.aiNucleusOverlayParts = polygons;
+        AnnotationAdapter.syncNucleiVisibilityButton();
         return 1;
     }
 
@@ -5821,6 +5798,285 @@ class AnnotationAdapter {
             objects: circles,
             localizedCellObjects: circles
         };
+    }
+
+    static visiblePluginChannels() {
+        const names = AnnotationAdapter.FLUORESCENT_CHANNEL_NAMES.slice();
+        const visibility = AnnotationAdapter.channelLayerState?.visibility;
+        if (!visibility) return names;
+        const selected = names.filter((name, index) =>
+            visibility[name] !== false && visibility[index] !== false
+        );
+        return selected.length ? selected : names;
+    }
+
+    static nucleiFootprintsForPlugin(circles) {
+        const list = Array.isArray(circles) ? circles : AnnotationAdapter.lastNucleiCircles || [];
+        const footprints = [];
+        for (const nucleus of list) {
+            const cx = Number(nucleus?.centerX ?? nucleus?.cx ?? nucleus?.x);
+            const cy = Number(nucleus?.centerY ?? nucleus?.cy ?? nucleus?.y);
+            const radius = Number(nucleus?.radius ?? nucleus?.r);
+            if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+            footprints.push({
+                cx,
+                cy,
+                r: Math.max(1, Number.isFinite(radius) ? radius : 12)
+            });
+        }
+        return footprints;
+    }
+
+    static pluginStatsTableHtml(result) {
+        const channels = Array.isArray(result?.channels) ? result.channels : [];
+        const rows = channels.map((channel) => {
+            const name = String(channel?.name || "band");
+            const mean = Number(channel?.mean) || 0;
+            const std = Number(channel?.stdDev) || 0;
+            const max = Number(channel?.maximum ?? channel?.max) || 0;
+            const min = Number(channel?.minimum ?? channel?.min) || 0;
+            return `<tr><th>${name}</th><td>${mean.toFixed(1)}</td><td>${std.toFixed(1)}</td><td>${max}</td><td>${min}</td></tr>`;
+        }).join("");
+        const n = Number(result?.sampleCount) || 0;
+        const nuclei = Number(result?.nucleusCount) || 0;
+        const caption = nuclei
+            ? `n=${n} samples inside ${nuclei} nuclear circles`
+            : `n=${n} samples across viewport footprint`;
+        return `<table><caption>${caption}</caption><thead><tr><th>Band</th><th>Mean</th><th>SD</th><th>Max</th><th>Min</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    static renderPluginStatsTable(result, root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const mount = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-plugin-stats")
+            : null;
+        if (!mount) return false;
+        mount.innerHTML = AnnotationAdapter.pluginStatsTableHtml(result);
+        mount.hidden = false;
+        return true;
+    }
+
+    static clearPluginStatsOverlay(viewer) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const element = AnnotationAdapter.lastPluginStatsOverlay;
+        if (host && element && typeof host.removeOverlay === "function") {
+            try { host.removeOverlay(element); } catch (_error) { /* already gone */ }
+        }
+        if (element && typeof element.remove === "function") element.remove();
+        AnnotationAdapter.lastPluginStatsOverlay = null;
+    }
+
+    static paintPluginStatsOverlay(viewer, result) {
+        const host = viewer || AnnotationAdapter.viewer;
+        AnnotationAdapter.clearPluginStatsOverlay(host);
+        const doc = typeof document !== "undefined" ? document : null;
+        if (!host || !doc || typeof host.addOverlay !== "function" || !result) return false;
+        const panel = doc.createElement("div");
+        panel.className = "nucleus-plugin-stats";
+        panel.setAttribute("data-ai-plugin-stats", "1");
+        panel.innerHTML = AnnotationAdapter.pluginStatsTableHtml(result);
+        const OpenSeadragon = AnnotationAdapter._openSeadragon();
+        const item = host.world && typeof host.world.getItemAt === "function"
+            ? host.world.getItemAt(0)
+            : null;
+        const mapper = (item && typeof item.imageToViewportCoordinates === "function")
+            ? item
+            : host.viewport;
+        const x = Number(result.x) || 0;
+        const y = Number(result.y) || 0;
+        const width = Math.max(1, Number(result.width) || 1);
+        const height = Math.max(1, Number(result.height) || 1);
+        let location = { x: 0, y: 0 };
+        try {
+            if (OpenSeadragon?.Point && mapper && typeof mapper.imageToViewportCoordinates === "function") {
+                location = mapper.imageToViewportCoordinates(
+                    new OpenSeadragon.Point(x, y + height)
+                );
+            }
+        } catch (_error) {
+            location = { x: 0, y: 0 };
+        }
+        host.addOverlay({
+            element: panel,
+            location,
+            placement: OpenSeadragon?.Placement?.TOP_LEFT || "TOP_LEFT",
+            checkResize: false
+        });
+        if (panel.parentElement?.style) panel.parentElement.style.pointerEvents = "none";
+        AnnotationAdapter.lastPluginStatsOverlay = panel;
+        return true;
+    }
+
+    static async runPixelIntensityPlugin(options = {}) {
+        const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
+        const viewer = options.viewer || AnnotationAdapter.viewer;
+        const imageId = options.imageId || AnnotationAdapter.currentImageId;
+        if (!imageId) {
+            AnnotationAdapter.setAiStatus("AI Pipeline: Open a slide before running the pixel plugin.", root);
+            return null;
+        }
+        const bounds = AnnotationAdapter.readViewportImageBounds(viewer, { root, ...options });
+        const payload = {
+            imageId,
+            x: Math.max(0, Math.floor(Number(bounds?.x) || 0)),
+            y: Math.max(0, Math.floor(Number(bounds?.y) || 0)),
+            width: Math.max(1, Math.floor(Number(bounds?.width) || 1)),
+            height: Math.max(1, Math.floor(Number(bounds?.height) || 1)),
+            channels: AnnotationAdapter.visiblePluginChannels(),
+            pluginId: "quantify-nuclei-pixel",
+            series: Number(AnnotationAdapter.currentSeries) || 0,
+            z: Number(AnnotationAdapter.currentZ) || 0,
+            nuclei: AnnotationAdapter.nucleiFootprintsForPlugin(options.nuclei)
+        };
+        AnnotationAdapter.setAiStatus("AI Pipeline: Quantifying nuclear pixel intensity…", root);
+        try {
+            const csrf = (typeof window !== "undefined" && window.WsiCsrf)
+                || (typeof globalThis !== "undefined" && globalThis.WsiCsrf)
+                || null;
+            const fetchFn = csrf && typeof csrf.csrfFetch === "function"
+                ? csrf.csrfFetch.bind(csrf)
+                : (typeof fetch === "function" ? fetch : null);
+            if (!fetchFn) throw new Error("fetch is unavailable");
+            const response = await fetchFn("/api/plugins/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (!response || !response.ok) {
+                const text = response && typeof response.text === "function"
+                    ? await response.text()
+                    : "";
+                throw new Error(text || `plugin ${response ? response.status : "failed"}`);
+            }
+            const result = await response.json();
+            AnnotationAdapter.renderPluginStatsTable(result, root);
+            AnnotationAdapter.paintPluginStatsOverlay(viewer, result);
+            const n = Number(result?.sampleCount) || 0;
+            AnnotationAdapter.setAiStatus(`AI Pipeline: Pixel plugin complete (n=${n}).`, root);
+            return result;
+        } catch (error) {
+            AnnotationAdapter.setAiStatus(
+                `AI Pipeline: Pixel plugin failed (${error?.message || error}).`,
+                root
+            );
+            return null;
+        }
+    }
+
+    static rainbowRgbFromNormalized(t) {
+        const x = Math.max(0, Math.min(1, Number(t) || 0));
+        const stops = [
+            { t: 0, r: 0, g: 0, b: 255 },
+            { t: 1 / 3, r: 0, g: 255, b: 0 },
+            { t: 2 / 3, r: 255, g: 255, b: 0 },
+            { t: 1, r: 255, g: 0, b: 0 }
+        ];
+        let index = 0;
+        while (index < stops.length - 2 && x > stops[index + 1].t) index += 1;
+        const start = stops[index];
+        const end = stops[index + 1];
+        const span = (end.t - start.t) || 1;
+        const u = (x - start.t) / span;
+        const r = Math.round(start.r + (end.r - start.r) * u);
+        const g = Math.round(start.g + (end.g - start.g) * u);
+        const b = Math.round(start.b + (end.b - start.b) * u);
+        return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    static rainbowColorFromKeys(value, min, max) {
+        if (!Number.isFinite(value)) return AnnotationAdapter.rainbowRgbFromNormalized(0.5);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) {
+            return AnnotationAdapter.rainbowRgbFromNormalized(0.5);
+        }
+        return AnnotationAdapter.rainbowRgbFromNormalized((value - min) / (max - min));
+    }
+
+    static applyNucleusRainbowStyle(overlayElement, computedObjectColor) {
+        if (!overlayElement || !computedObjectColor) return false;
+        const tag = String(overlayElement.tagName || "").toLowerCase();
+        const fill = computedObjectColor.replace("rgb", "rgba").replace(")", ", 0.25)");
+        if (tag === "polygon") {
+            overlayElement.setAttribute("stroke", computedObjectColor);
+            overlayElement.setAttribute("fill", fill);
+            return true;
+        }
+        if (!overlayElement.style) return false;
+        overlayElement.style.border = `2px solid ${computedObjectColor}`;
+        overlayElement.style.background = `${computedObjectColor.replace('rgb', 'rgba').replace(')', ', 0.25)')}`;
+        return true;
+    }
+
+    static applyObjectRainbowColors(objects) {
+        const list = Array.isArray(objects) ? objects : [];
+        let min = Infinity;
+        let max = -Infinity;
+        for (const item of list) {
+            const value = Number(item?.key);
+            if (!Number.isFinite(value)) continue;
+            if (value < min) min = value;
+            if (value > max) max = value;
+        }
+        const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
+        for (const item of list) {
+            const index = Number(item?.index);
+            if (!Number.isInteger(index) || index < 0 || index >= parts.length) continue;
+            const computedObjectColor = AnnotationAdapter.rainbowColorFromKeys(Number(item.key), min, max);
+            AnnotationAdapter.applyNucleusRainbowStyle(parts[index], computedObjectColor);
+        }
+        return list.length;
+    }
+
+    static async runPerObjectPixelQuantifier(options = {}) {
+        const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
+        const viewer = options.viewer || AnnotationAdapter.viewer;
+        const imageId = options.imageId || AnnotationAdapter.currentImageId;
+        const nuclei = AnnotationAdapter.nucleiFootprintsForPlugin(options.nuclei);
+        if (!imageId) {
+            AnnotationAdapter.setAiStatus("AI Pipeline: Open a slide before color coding objects.", root);
+            return null;
+        }
+        if (!nuclei.length) {
+            AnnotationAdapter.setAiStatus("AI Pipeline: Segment nuclei before color coding objects.", root);
+            return null;
+        }
+        const bounds = AnnotationAdapter.readViewportImageBounds(viewer, { root, ...options });
+        const payload = {
+            imageId,
+            x: Math.max(0, Math.floor(Number(bounds?.x) || 0)),
+            y: Math.max(0, Math.floor(Number(bounds?.y) || 0)),
+            width: Math.max(1, Math.floor(Number(bounds?.width) || 1)),
+            height: Math.max(1, Math.floor(Number(bounds?.height) || 1)),
+            channels: AnnotationAdapter.visiblePluginChannels(),
+            pluginId: "per-object-pixel-quantifier",
+            series: Number(AnnotationAdapter.currentSeries) || 0,
+            z: Number(AnnotationAdapter.currentZ) || 0,
+            nuclei
+        };
+        AnnotationAdapter.setAiStatus("AI Pipeline: Color coding objects…", root);
+        try {
+            const csrf = (typeof window !== "undefined" && window.WsiCsrf)
+                || (typeof globalThis !== "undefined" && globalThis.WsiCsrf)
+                || null;
+            const fetchFn = csrf && typeof csrf.csrfFetch === "function"
+                ? csrf.csrfFetch.bind(csrf)
+                : (typeof fetch === "function" ? fetch : null);
+            if (!fetchFn) throw new Error("fetch is unavailable");
+            const response = await fetchFn("/api/plugins/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (!response || !response.ok) {
+                throw new Error("plugin request failed");
+            }
+            const result = await response.json();
+            AnnotationAdapter.applyObjectRainbowColors(result?.objects);
+            AnnotationAdapter.setAiStatus("AI Pipeline: Object color coding complete.", root);
+            return result;
+        } catch (_error) {
+            AnnotationAdapter.setAiStatus("AI Pipeline: Object color coding failed.", root);
+            return null;
+        }
     }
 
     static segmentCellNuclei(options = {}) {

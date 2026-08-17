@@ -23,7 +23,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import traceback
 import urllib.parse
 import urllib.request
@@ -56,26 +55,6 @@ PANEL_ALIASES = {
     "iggnephr": "if.IgG/Nephr",
 }
 DEFAULT_SERVER = "http://127.0.0.1:8080"
-DEBUG_LOG = Path("/Users/dm026/Downloads/wsi-server_works_cursor/.cursor/debug-c733f2.log")
-
-
-# #region agent log
-def agent_log(hypothesis_id: str, location: str, message: str, data: dict, run_id: str = "pre-fix") -> None:
-    try:
-        payload = {
-            "sessionId": "c733f2",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-            "runId": run_id,
-        }
-        with DEBUG_LOG.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload) + "\n")
-    except OSError:
-        pass
-# #endregion
 
 
 def normalize_if_epitope(text: str) -> str:
@@ -223,13 +202,6 @@ class ViewerSession:
         with self.opener.open(request, timeout=30) as response:
             path = urllib.parse.urlparse(response.geturl()).path.rstrip("/")
             has_session = bool(cookie_value(self.jar, "JSESSIONID"))
-            # #region agent log
-            agent_log("C", "retro_build_metadata.py:ViewerSession.login", "login result", {
-                "pathEmptyOrRoot": path in ("", "/"),
-                "stayedOnLogin": path.endswith("login"),
-                "hasSession": has_session,
-            })
-            # #endregion
             if path.endswith("login") or not has_session:
                 raise RuntimeError("login rejected")
 
@@ -241,12 +213,7 @@ class ViewerSession:
             with self.opener.open(url, timeout=60) as response:
                 data = response.read()
                 return data or None
-        except HTTPError as error:
-            # #region agent log
-            agent_log("C", "retro_build_metadata.py:ViewerSession.fetch_label_png", "label fetch failed", {
-                "httpStatus": int(error.code or 0),
-            })
-            # #endregion
+        except HTTPError:
             return None
         except (URLError, TimeoutError, OSError):
             return None
@@ -318,12 +285,6 @@ def ocr_with_tesseract_cli(data: bytes, angles=(90, 0, 180, 270)) -> str:
                 continue
             token = extract_if_epitope(tesseract_stdout(rotated))
             if token:
-                # #region agent log
-                agent_log("D", "retro_build_metadata.py:ocr_with_tesseract_cli", "cli token", {
-                    "angle": int(angle),
-                    "found": True,
-                })
-                # #endregion
                 return token
     return ""
 
@@ -420,16 +381,6 @@ def update_slide(slide_path: Path, root: Path, args, ocr_enabled: bool = True, s
                 if marker:
                     source = "server-label"
 
-    # #region agent log
-    agent_log("C", "retro_build_metadata.py:update_slide", "slide outcome", {
-        "ocrEnabled": bool(ocr_enabled),
-        "hadExisting": bool(existing),
-        "fetchOk": fetch_ok,
-        "pngBytes": png_bytes,
-        "wrote": bool(marker),
-        "sourceKind": "server" if source == "server-label" else ("sibling" if source else "none"),
-    })
-    # #endregion
 
     if not marker:
         if raw and not existing:
@@ -501,31 +452,13 @@ def main(argv=None) -> int:
         try:
             session.login()
         except Exception as error:
-            # #region agent log
-            agent_log("C", "retro_build_metadata.py:main", "viewer login failed", {
-                "errorType": type(error).__name__,
-            })
-            # #endregion
             print(f"[ERROR] viewer form login failed: {type(error).__name__}", file=sys.stderr)
             return 1
         args.session = session
         print(f"Logged in to {args.server_url} for label.png")
-        # #region agent log
-        agent_log("B", "retro_build_metadata.py:main", "viewer login ok", {
-            "backend": backend,
-            "hasServer": True,
-        })
-        # #endregion
 
     slides = iter_slides(root)
     print(f"Updating if.epitope sidecars under {root} ({len(slides)} slides, ocr={backend or 'off'})")
-    # #region agent log
-    agent_log("A", "retro_build_metadata.py:main", "sweep start", {
-        "slideCount": len(slides),
-        "backend": backend or "none",
-        "hasServer": bool(args.server_url),
-    })
-    # #endregion
     counts = {"keep": 0, "write": 0, "pending": 0, "missing": 0}
     for slide in slides:
         try:
@@ -540,15 +473,6 @@ def main(argv=None) -> int:
         f"\n[SUCCESS] keep={counts.get('keep', 0)} write={counts.get('write', 0)} "
         f"pending={counts.get('pending', 0)} missing={counts.get('missing', 0)}"
     )
-    # #region agent log
-    agent_log("A", "retro_build_metadata.py:main", "sweep summary", {
-        "keep": counts.get("keep", 0),
-        "write": counts.get("write", 0),
-        "pending": counts.get("pending", 0),
-        "missing": counts.get("missing", 0),
-        "backend": backend or "none",
-    })
-    # #endregion
     return 0
 
 

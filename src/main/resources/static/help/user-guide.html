@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>WSI Comprehensive User &amp; Administration Guide</title>
+<style>
+:root{font-family:Arial,Helvetica,sans-serif;color:#0e1b2a;background:#eef3f8}
+*{box-sizing:border-box}
+body{margin:0;padding:24px}
+.page{max-width:980px;margin:auto;background:#fff;padding:28px 32px;border:1px solid #c9d5e2;box-shadow:0 8px 28px #17324d22}
+h1{text-align:center;margin:0;color:#0e1b2a;font-size:26px;line-height:1.25}
+.sub{text-align:center;color:#526579;margin:8px 0 20px;font-style:italic}
+.guide-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin:0 0 16px}
+.guide-actions a,.guide-actions button{display:inline-flex;align-items:center;min-height:40px;padding:8px 14px;border:1px solid #2f80c8;border-radius:7px;color:#155f9d;background:#fff;text-decoration:none;font:700 14px Arial,Helvetica,sans-serif;cursor:pointer}
+.guide-actions a.primary{background:#1769aa;border-color:#174b78;color:#fff}
+.guide-actions a:hover,.guide-actions a:focus-visible,.guide-actions button:hover,.guide-actions button:focus-visible{outline:3px solid #2f80c855;outline-offset:2px}
+.guide-actions a.primary:hover,.guide-actions a.primary:focus-visible{background:#0e578f}
+.grid{display:grid;grid-template-columns:1fr;gap:14px}
+.card{border:1px solid #c9d5e2;padding:16px 18px;border-radius:8px}
+h2{font-size:17px;color:#174b78;margin:0 0 10px;letter-spacing:.01em}
+h3{font-size:14px;color:#2f80c8;margin:14px 0 8px}
+.intro{margin:0 0 10px;line-height:1.45;color:#243447}
+ul{margin:0;padding-left:19px}
+ol.protocol{margin:0;padding-left:22px}
+li{margin:7px 0;line-height:1.4}
+li strong{color:#0e1b2a}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.95em}
+.disclaimer{margin-top:18px;padding:12px 14px;background:#fff4d6;border:1px solid #e3b341;font-size:13px;line-height:1.4}
+.foot{font-size:12px;color:#526579;margin:10px 0 0}
+@media(max-width:720px){body{padding:0}.page{border:0;padding:18px;border-radius:0}}
+</style>
+</head>
+<body>
+<main class="page">
+<nav class="guide-actions" aria-label="Guide actions">
+  <a class="primary" href="/api/help/download-pdf">Download PDF</a>
+  <a href="/help/viewer-guide.html">Viewer Quick Guide</a>
+  <a href="/help/admin-ops-guide.html">Admin &amp; Ops Guide</a>
+  <button id="close-guide" type="button">Close</button>
+</nav>
+<h1>WSI Comprehensive User &amp; Administration Guide</h1>
+<p class="sub">Viewer workflows, workstation isolation, and local ops LaunchAgent</p>
+<div class="grid"><section class="card"><h2>1. Web Dashboard Image Ingestion Workflow</h2><p class="intro">The slide ingestion pipeline is a manual three-click protocol on your local loopback operations panel.</p><ul><li><strong>The Environment:</strong> The local operations dashboard listens strictly on http://127.0.0.1:8084/ and safely rejects external non-loopback clients.</li><li><strong>Pre-Ingestion Step:</strong> Place each complete virtual microscope dataset inside one top-level directory under your local staging path (/Users/dm026/wsi-ingest-staging). Warning: Never move a lone .vsi file without its companion data folder.</li></ul><h3>Execution Protocol</h3><ol class="protocol"><li>Inspect your files in the directory staging pool.</li><li>Click 1 — Seal: type exactly SEAL to record the readiness assertion and first whole-tree observation.</li><li>Click 2 — Observe: wait for the configured quiet interval, then run Observe until the required observation count is met.</li><li>Optional: run Promotion dry-run to preflight without moving data.</li><li>Click 3 — Promote: type exactly PROMOTE to atomically move the verified folder into production (/Users/dm026/wsi-slides).</li></ol></section><section class="card"><h2>2. Workstation Annotation Safety &amp; Isolation</h2><p class="intro">To prevent cross-contamination of diagnosis data across different physical machines, drawing canvases are strictly sandboxed.</p><ul><li><strong>The Identity Key:</strong> Every browser workstation generates a stable unique identity string on startup, stored as wsi.workstation.id in local browser storage and mirrored in your secure tracking cookies.</li><li><strong>The Header Loop:</strong> The files annotation-adapter.js and annotation-store.js dynamically extract this machine tag and inject it as a custom X-WSI-User header into all network fetches.</li><li><strong>Data Segregation:</strong> The server catches this machine fingerprint and isolates your drawing paths into distinct per-workstation folders inside your storage directory. It will never drop files back into the fallback public local bucket.</li><li><strong>Troubleshooting:</strong> If an updated canvas displays blank parameters, perform a Hard Refresh (Cmd + Shift + R) to force your browser to discard its cached page state and re-transmit its unique workstation identity header.</li></ul></section><section class="card"><h2>3. com.wsi.ops-dashboard LaunchAgent Maintenance</h2><p class="intro">The workspace engine runs as a secure background macOS system daemon.</p><ul><li><strong>System Path:</strong> Because macOS TCC blocks background launch scripts from running inside user directories like ~/Downloads, the production service lives securely in your system files at: ~/Library/Application Support/com.wsi.ops-dashboard/</li><li><strong>LaunchAgent plist:</strong> The job identifier is com.wsi.ops-dashboard. The plist is ~/Library/LaunchAgents/com.wsi.ops-dashboard.plist.</li><li><strong>Restarting Following Asset Changes:</strong> If configuration parameters or scripts change, you can completely flush the server runtime cache by letting Cursor cycle the LaunchAgent service plist file.</li></ul></section><section class="card"><h2>4. Related viewer help</h2><p class="intro">This User Guide covers ingestion, workstation isolation, and the ops LaunchAgent. Viewer controls and the release cycle live in the other two manuals.</p><ul><li><strong>Viewer Quick Guide:</strong> Open /help/viewer-guide.html for pan, zoom, channels, annotations, and export.</li><li><strong>Admin &amp; Ops Guide:</strong> Open /help/admin-ops-guide.html for environments, the monitored release cycle, logs, and rollback.</li></ul></section></div>
+<p class="disclaimer" role="note"><strong>Legal disclaimer.</strong> LEGAL DISCLAIMER: This software and documentation are provided for authorized research and image-server administration only. They are not a substitute for clinical judgment, validated diagnostic systems, or institutional SOP. Do not enter patient identifiers, PHI, or other sensitive clinical information into local ops tools, feedback forms, or shared logs. Operators remain responsible for environment separation (development / staging / rehearsal / production), de-identification of non-production images, and compliance with applicable institutional, regulatory, and privacy requirements. Access is loopback- or host-restricted where documented; do not expose administration endpoints via proxy, port forward, or alternate bind address.</p>
+<p class="foot">Authenticated operators only. Loopback administration endpoints must remain host-local.</p>
+</main>
+<script>
+document.getElementById("close-guide").addEventListener("click", () => {
+  window.close();
+  window.setTimeout(() => { if (!window.closed) window.location.assign("/"); }, 100);
+});
+</script>
+</body>
+</html>

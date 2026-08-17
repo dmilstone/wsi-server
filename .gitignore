@@ -22,3 +22,7 @@ __pycache__/
 *.py[cod]
 
 .venv-release-docs/
+
+# Local plugin metric exports
+exports/*
+!exports/.gitkeep

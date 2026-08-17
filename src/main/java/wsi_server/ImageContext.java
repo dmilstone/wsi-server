@@ -2,8 +2,6 @@ package wsi_server;
 
 import loci.formats.FormatTools;
 import loci.formats.IFormatReader;
-import loci.formats.ImageReader;
-import loci.formats.MetadataTools;
 import loci.formats.meta.MetadataRetrieve;
 import wsi_server.model.DisplayModel;
 import wsi_server.model.DisplayWindow;
@@ -15,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-/** Shared immutable image metadata, automatic windows, and synchronized reader. */
+/** Shared immutable image metadata. Tile decode uses {@link BioFormatsReaderPool}. */
 final class ImageContext implements AutoCloseable {
     static final int FLUORESCENCE_SERIES = 2;
     static final int TILE_SIZE = 512;
@@ -29,44 +27,52 @@ final class ImageContext implements AutoCloseable {
     private static final long MIN_SIGNAL_PIXELS = 256;
 
     private final ImageRegistry.ImageEntry entry;
+    private final BioFormatsReaderPool readerPool;
     private final int series;
-    private final IFormatReader reader;
-    private final DisplayWindow[] automaticWindows;
+    private final int sizeX;
+    private final int sizeY;
+    private final int sizeC;
+    private final int sizeZ;
+    private final int resolutionCount;
+    private final boolean littleEndian;
     private final boolean rgb;
     private final String[] channelLabels;
+    private volatile DisplayWindow[] automaticWindows;
 
-    ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing) throws Exception {
-        this(entry, timing, FLUORESCENCE_SERIES);
-    }
-
-    ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing, int series) throws Exception {
+    ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing, int series,
+                 BioFormatsReaderPool readerPool) throws Exception {
         this.entry = entry;
+        this.readerPool = readerPool;
         this.series = series;
         String imageId = entry.id();
-        DiagnosticTiming.CheckedSupplier<ImageReader> readerFactory = ImageReader::new;
-        this.reader = timing.measure("metadata", "reader_create", imageId, readerFactory);
-        reader.setMetadataStore(MetadataTools.createOMEXMLMetadata());
-        reader.setFlattenedResolutions(false);
-        timing.measureVoid("metadata", "set_id_metadata_parse", imageId,
-                () -> reader.setId(entry.path().toString()));
-        if (series < 0 || series >= reader.getSeriesCount()) {
-            throw new IllegalArgumentException(
-                    "Series must be between 0 and " + (reader.getSeriesCount() - 1) + ".");
-        }
-        timing.measureVoid("metadata", "series_select", imageId,
-                () -> reader.setSeries(series));
-        this.rgb = reader.getPixelType() == FormatTools.UINT8 && (reader.isRGB() || reader.getSizeC() >= 3);
-        validatePixelType();
-        this.channelLabels = timing.measure("metadata", "metadata_extract", imageId,
-                this::initializeChannelLabels);
-        this.automaticWindows = new DisplayWindow[reader.getSizeC()];
-        if (rgb) {
-            for (int channel = 0; channel < automaticWindows.length; channel++) {
-                automaticWindows[channel] = new DisplayWindow(0, 255);
+        try (BioFormatsReaderPool.Lease lease = readerPool.acquire(entry.path())) {
+            IFormatReader reader = lease.reader();
+            if (series < 0 || series >= reader.getSeriesCount()) {
+                throw new IllegalArgumentException(
+                        "Series must be between 0 and " + (reader.getSeriesCount() - 1) + ".");
             }
-        } else {
-            timing.measureVoid("metadata", "automatic_window_open_bytes", imageId,
-                    this::initializeSlideDisplayWindows);
+            timing.measureVoid("metadata", "series_select", imageId, () -> reader.setSeries(series));
+            reader.setResolution(0);
+            this.rgb = reader.getPixelType() == FormatTools.UINT8 && (reader.isRGB() || reader.getSizeC() >= 3);
+            validatePixelType(reader);
+            this.sizeX = reader.getSizeX();
+            this.sizeY = reader.getSizeY();
+            this.sizeC = reader.getSizeC();
+            this.sizeZ = reader.getSizeZ();
+            this.resolutionCount = reader.getResolutionCount();
+            this.littleEndian = reader.isLittleEndian();
+            this.channelLabels = timing.measure("metadata", "metadata_extract", imageId,
+                    () -> initializeChannelLabels(reader));
+            DisplayWindow[] windows = new DisplayWindow[this.sizeC];
+            if (rgb) {
+                for (int channel = 0; channel < windows.length; channel++) {
+                    windows[channel] = new DisplayWindow(0, 255);
+                }
+                this.automaticWindows = windows;
+            } else {
+                timing.measureVoid("metadata", "automatic_window_open_bytes", imageId,
+                        () -> this.automaticWindows = computeAutomaticWindows(reader));
+            }
         }
     }
 
@@ -74,19 +80,52 @@ final class ImageContext implements AutoCloseable {
         return series;
     }
 
-    synchronized IFormatReader reader() {
-        reader.setSeries(series);
-        return reader;
+    int sizeX() {
+        return sizeX;
     }
 
-    synchronized DisplayModel newDefaultDisplayModel() {
-        DisplayModel model = new DisplayModel(reader.getSizeC());
+    int sizeY() {
+        return sizeY;
+    }
+
+    int sizeC() {
+        return sizeC;
+    }
+
+    int sizeZ() {
+        return sizeZ;
+    }
+
+    int resolutionCount() {
+        return resolutionCount;
+    }
+
+    boolean isLittleEndian() {
+        return littleEndian;
+    }
+
+    <T> T withReader(ReaderWork<T> work) throws Exception {
+        try (BioFormatsReaderPool.Lease lease = readerPool.acquire(entry.path())) {
+            IFormatReader reader = lease.reader();
+            reader.setSeries(series);
+            return work.apply(reader);
+        }
+    }
+
+    @FunctionalInterface
+    interface ReaderWork<T> {
+        T apply(IFormatReader reader) throws Exception;
+    }
+
+    DisplayModel newDefaultDisplayModel() {
+        DisplayModel model = new DisplayModel(sizeC);
         LutType[] defaults = {LutType.BLUE, LutType.GREEN, LutType.RED,
                 LutType.MAGENTA, LutType.CYAN, LutType.GRAY};
+        DisplayWindow[] windows = automaticWindows;
         for (int channel = 0; channel < model.getChannelCount(); channel++) {
             var settings = model.getChannel(channel);
             settings.setVisible(true);
-            settings.setWindow(automaticWindows[channel]);
+            settings.setWindow(windows[channel]);
             settings.setLut(defaults[channel % defaults.length]);
             settings.setGamma(rgb ? 1.0 : 0.85);
             settings.setOpacity(rgb ? 1.0 : 0.70);
@@ -103,7 +142,7 @@ final class ImageContext implements AutoCloseable {
         return channelLabels[channel];
     }
 
-    private String[] initializeChannelLabels() {
+    private String[] initializeChannelLabels(IFormatReader reader) {
         String[] labels = new String[reader.getSizeC()];
         for (int channel = 0; channel < labels.length; channel++) {
             String base = "Channel " + channel;
@@ -111,18 +150,18 @@ final class ImageContext implements AutoCloseable {
                 labels[channel] = base;
                 continue;
             }
-            String designation = acquisitionDesignation(channel);
+            String designation = acquisitionDesignation(reader, channel);
             labels[channel] = designation == null || designation.isBlank()
                     ? base : base + " - " + designation;
         }
         return labels;
     }
 
-    private String acquisitionDesignation(int channel) {
+    private String acquisitionDesignation(IFormatReader reader, int channel) {
         List<String> candidates = new ArrayList<>();
         if (reader.getMetadataStore() instanceof MetadataRetrieve metadata) {
-            addCandidate(candidates, invokeMetadataString(metadata, "getChannelName", channel));
-            addCandidate(candidates, invokeMetadataString(metadata, "getChannelFluor", channel));
+            addCandidate(candidates, invokeMetadataString(metadata, "getChannelName", reader.getSeries(), channel));
+            addCandidate(candidates, invokeMetadataString(metadata, "getChannelFluor", reader.getSeries(), channel));
         }
         collectChannelMetadataCandidates(candidates, reader.getSeriesMetadata(), channel);
         collectChannelMetadataCandidates(candidates, reader.getGlobalMetadata(), channel);
@@ -138,10 +177,10 @@ final class ImageContext implements AutoCloseable {
         return null;
     }
 
-    private String invokeMetadataString(MetadataRetrieve metadata, String methodName, int channel) {
+    private String invokeMetadataString(MetadataRetrieve metadata, String methodName, int series, int channel) {
         try {
             Method method = metadata.getClass().getMethod(methodName, int.class, int.class);
-            Object value = method.invoke(metadata, reader.getSeries(), channel);
+            Object value = method.invoke(metadata, series, channel);
             return value == null ? null : value.toString();
         } catch (ReflectiveOperationException | RuntimeException ignored) {
             return null;
@@ -200,23 +239,26 @@ final class ImageContext implements AutoCloseable {
         return cleaned;
     }
 
-    private synchronized void initializeSlideDisplayWindows() throws Exception {
-        recomputeAutomaticWindows();
+    void recomputeAutomaticWindows() throws Exception {
+        if (rgb) return;
+        automaticWindows = withReader(this::computeAutomaticWindows);
     }
 
-    synchronized void recomputeAutomaticWindows() throws Exception {
-        if (rgb) return;
+    private DisplayWindow[] computeAutomaticWindows(IFormatReader reader) throws Exception {
         reader.setSeries(series);
         reader.setResolution(reader.getResolutionCount() - 1);
-        boolean littleEndian = reader.isLittleEndian();
-        for (int channel = 0; channel < reader.getSizeC(); channel++) {
-            automaticWindows[channel] = calculateChannelDisplayWindow(channel, littleEndian);
+        boolean endian = reader.isLittleEndian();
+        DisplayWindow[] windows = new DisplayWindow[reader.getSizeC()];
+        for (int channel = 0; channel < windows.length; channel++) {
+            windows[channel] = calculateChannelDisplayWindow(reader, channel, endian);
         }
         reader.setResolution(0);
+        return windows;
     }
 
-    private DisplayWindow calculateChannelDisplayWindow(int channel, boolean littleEndian) throws Exception {
-        long[] histogram = sampleHistogram(channel, littleEndian);
+    private DisplayWindow calculateChannelDisplayWindow(IFormatReader reader, int channel, boolean endian)
+            throws Exception {
+        long[] histogram = sampleHistogram(reader, channel, endian);
         long total = totalCount(histogram, 0);
         if (total == 0) return new DisplayWindow(0, 65535);
 
@@ -236,7 +278,6 @@ final class ImageContext implements AutoCloseable {
             white = percentileFrom(histogram, 0, total, FALLBACK_HIGH_PERCENTILE);
         }
 
-        // Preserve a useful tonal range for sparse or nearly uniform channels.
         if (white <= black + 16) {
             int observedMax = highestObserved(histogram);
             white = Math.max(black + 1, observedMax);
@@ -249,7 +290,7 @@ final class ImageContext implements AutoCloseable {
         return new DisplayWindow(black, white);
     }
 
-    private long[] sampleHistogram(int channel, boolean littleEndian) throws Exception {
+    private long[] sampleHistogram(IFormatReader reader, int channel, boolean endian) throws Exception {
         long[] histogram = new long[HISTOGRAM_SIZE];
         int width = reader.getSizeX(), height = reader.getSizeY();
         int tilesX = Math.max(1, (width + TILE_SIZE - 1) / TILE_SIZE);
@@ -266,7 +307,7 @@ final class ImageContext implements AutoCloseable {
             int w = Math.min(TILE_SIZE, width - x), h = Math.min(TILE_SIZE, height - y);
             byte[] pixels = reader.openBytes(plane, x, y, w, h);
             for (int offset = 0; offset < pixels.length; offset += BYTES_PER_PIXEL) {
-                histogram[readUint16(pixels, offset, littleEndian)]++;
+                histogram[readUint16(pixels, offset, endian)]++;
             }
         }
         return histogram;
@@ -318,12 +359,12 @@ final class ImageContext implements AutoCloseable {
         return 65535;
     }
 
-    private int readUint16(byte[] pixels, int offset, boolean littleEndian) {
+    private int readUint16(byte[] pixels, int offset, boolean endian) {
         int first = pixels[offset] & 0xff, second = pixels[offset + 1] & 0xff;
-        return littleEndian ? first | (second << 8) : (first << 8) | second;
+        return endian ? first | (second << 8) : (first << 8) | second;
     }
 
-    private void validatePixelType() {
+    private void validatePixelType(IFormatReader reader) {
         if (rgb) return;
         if (reader.getPixelType() != FormatTools.UINT16) {
             throw new IllegalStateException("Supported primary images are 8-bit RGB or UINT16 fluorescence. Received: "
@@ -331,5 +372,8 @@ final class ImageContext implements AutoCloseable {
         }
     }
 
-    @Override public synchronized void close() throws Exception { reader.close(); }
+    @Override
+    public void close() {
+        // Readers live in {@link BioFormatsReaderPool}; nothing exclusive to close here.
+    }
 }

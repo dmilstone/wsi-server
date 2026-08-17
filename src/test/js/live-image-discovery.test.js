@@ -70,3 +70,90 @@ test("overlap is prevented and failures retain the rendered list", async () => {
   assert.equal(await first, false); assert.equal(applied, 0);
   assert.equal(messages.at(-1), "Refresh failed; existing list retained");
 });
+
+function flush() {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
+async function waitIdle(discovery) {
+  for (let i = 0; i < 30 && discovery.running; i++) await flush();
+}
+
+async function pump(discovery, tick) {
+  tick();
+  await flush();
+  await waitIdle(discovery);
+}
+
+test("three consecutive connection refusals halt the poll interval", async () => {
+  const doc = documentStub();
+  let tick;
+  let cleared = false;
+  let requests = 0;
+  const discovery = new LiveImageDiscovery({document:doc, intervalMs:1,
+    setIntervalFn: fn => { tick = fn; return 11; },
+    clearIntervalFn: id => { cleared = id === 11; },
+    request: async () => { requests++; throw new TypeError("Failed to fetch"); },
+    applyImages: () => 0, status: () => {}});
+  discovery.start();
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  assert.equal(requests, 3);
+  assert.equal(cleared, true);
+  assert.equal(discovery.halted, true);
+  await pump(discovery, tick);
+  assert.equal(requests, 3);
+});
+
+test("success resets refusal count so later refusals do not halt early", async () => {
+  const doc = documentStub();
+  let tick;
+  let cleared = false;
+  let refuse = true;
+  const discovery = new LiveImageDiscovery({document:doc, intervalMs:1,
+    setIntervalFn: fn => { tick = fn; return 13; },
+    clearIntervalFn: id => { cleared = id === 13; },
+    request: async url => {
+      if (refuse) throw new TypeError("ERR_CONNECTION_REFUSED");
+      return url.endsWith("discovery") ? {running:false} : {images:[]};
+    },
+    applyImages: () => 0, status: () => {}});
+  discovery.start();
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  assert.equal(discovery.halted, false);
+  refuse = false;
+  await pump(discovery, tick);
+  refuse = true;
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  assert.equal(cleared, false);
+  assert.equal(discovery.halted, false);
+});
+
+test("manual refresh after halt restarts polling", async () => {
+  const doc = documentStub();
+  let tick;
+  let intervalId = 0;
+  let liveTimer = null;
+  let refuse = true;
+  const discovery = new LiveImageDiscovery({document:doc, intervalMs:1,
+    setIntervalFn: fn => { tick = fn; liveTimer = ++intervalId; return liveTimer; },
+    clearIntervalFn: id => { if (id === liveTimer) liveTimer = null; },
+    request: async url => {
+      if (refuse) throw new TypeError("Failed to fetch");
+      return url.endsWith("discovery") ? {running:false} : {images:[]};
+    },
+    applyImages: () => 0, status: () => {}});
+  discovery.start();
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  assert.equal(discovery.halted, true);
+  assert.equal(liveTimer, null);
+  refuse = false;
+  assert.equal(await discovery.refresh(true), true);
+  assert.equal(discovery.halted, false);
+  assert.notEqual(liveTimer, null);
+});

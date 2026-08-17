@@ -94,12 +94,68 @@ assert.doesNotMatch(adapterSource, /host\.clearOverlays\(\)/);
 assert.match(adapterSource, /startDisabled:\s*true/);
 assert.match(adapterSource, /static setMeasureTracking\(/);
 assert.match(html, /id="ai-nuclei-visible"/);
-assert.match(html, />Nuclei</);
+assert.match(html, />1\. Segment Nuclei</);
+assert.doesNotMatch(html, /Segment Cell Nuclei/);
+assert.match(html, /id="plugin-selector"/);
+assert.match(html, /<option value="quantify-nuclei-pixel">Run Pixel Intensity Plugin</);
+assert.match(html, /<option value="per-object-pixel-quantifier">Quantify Individual Objects \(Color Code\)</);
+assert.match(html, /<summary>System Diagnostic Disclaimer<\/summary>/);
+assert.match(html, /Experimental viewport simulation on this browser only/);
+assert.match(adapterSource, /static async runPerObjectPixelQuantifier\(/);
+assert.match(adapterSource, /per-object-pixel-quantifier/);
+assert.match(adapterSource, /rainbowRgbFromNormalized/);
+assert.match(adapterSource, /2px solid \$\{computedObjectColor\}/);
+assert.doesNotMatch(adapterSource, /runPerObjectPixelQuantifier[\s\S]{0,1200}renderPluginStatsTable/);
+assert.match(adapterSource, /\/api\/plugins\/execute/);
+assert.equal(AnnotationAdapter.rainbowRgbFromNormalized(0), "rgb(0, 0, 255)");
+assert.equal(AnnotationAdapter.rainbowRgbFromNormalized(1 / 3), "rgb(0, 255, 0)");
+assert.equal(AnnotationAdapter.rainbowRgbFromNormalized(2 / 3), "rgb(255, 255, 0)");
+assert.equal(AnnotationAdapter.rainbowRgbFromNormalized(1), "rgb(255, 0, 0)");
+
+{
+    const cold = { style: {}, tagName: "DIV" };
+    const hot = { style: {}, tagName: "DIV" };
+    AnnotationAdapter.aiNucleusOverlayParts = [cold, hot];
+    AnnotationAdapter.applyObjectRainbowColors([
+        { index: 0, key: 10 },
+        { index: 1, key: 40 }
+    ]);
+    assert.equal(cold.style.border, "2px solid rgb(0, 0, 255)");
+    assert.equal(cold.style.background, "rgba(0, 0, 255, 0.25)");
+    assert.equal(hot.style.border, "2px solid rgb(255, 0, 0)");
+    assert.equal(hot.style.background, "rgba(255, 0, 0, 0.25)");
+    assert.equal(cold.style.innerHTML, undefined);
+    assert.equal(hot.textContent, undefined);
+}
+
+{
+    const button = {
+        textContent: "Show",
+        title: "Show",
+        attrs: {},
+        setAttribute(name, value) { this.attrs[name] = String(value); }
+    };
+    const root = { getElementById: (id) => (id === "ai-nuclei-visible" ? button : null) };
+    AnnotationAdapter.aiOverlayVisible = true;
+    AnnotationAdapter.aiNucleusOverlayElements = [{ style: {} }];
+    AnnotationAdapter.syncNucleiVisibilityButton(root);
+    assert.equal(button.textContent, "Hide");
+    assert.equal(button.attrs["aria-pressed"], "true");
+    AnnotationAdapter.aiOverlayVisible = false;
+    AnnotationAdapter.syncNucleiVisibilityButton(root);
+    assert.equal(button.textContent, "Show");
+    assert.equal(button.attrs["aria-pressed"], "false");
+    AnnotationAdapter.aiNucleusOverlayElements = [];
+}
+
 assert.match(html, /id="ai-seg-target"/);
 assert.doesNotMatch(html, />Target</);
 assert.doesNotMatch(html, /Display Segmentation Mask Overlays/);
 assert.match(html, /#ai-nuclei-visible\[aria-pressed="true"\]/);
+assert.match(adapterSource, /button\.textContent = label/);
+assert.match(adapterSource, /showing \? "Hide" : "Show"/);
 assert.doesNotMatch(html, /Hide Segmented Nuclei/);
+assert.doesNotMatch(html, />Nuclei</);
 assert.match(spikeSource, /setDrawingTool\("rectangle"\)/);
 assert.match(spikeSource, /setMeasureTracking\(false\)/);
 

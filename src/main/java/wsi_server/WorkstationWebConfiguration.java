@@ -1,6 +1,7 @@
 package wsi_server;
 
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.CacheControl;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -12,7 +13,8 @@ public class WorkstationWebConfiguration implements WebMvcConfigurer {
         registry.addResourceHandler("/local-operations/**")
                 .addResourceLocations("classpath:/static/local-operations/");
         registry.addResourceHandler("/help/**")
-                .addResourceLocations("classpath:/static/help/");
+                .addResourceLocations("classpath:/static/help/")
+                .setCacheControl(CacheControl.noStore());
         registry.addResourceHandler("/pilot-feedback/**")
                 .addResourceLocations("classpath:/static/pilot-feedback/");
     }

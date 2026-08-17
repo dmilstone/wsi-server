@@ -31,6 +31,7 @@ import wsi_server.model.DisplayModel;
 import wsi_server.model.DisplaySettings;
 import wsi_server.model.DisplayWindow;
 import wsi_server.model.LutType;
+import wsi_server.plugin.PluginSampleGrid;
 import wsi_server.renderer.FluorescenceTileRenderer;
 import wsi_server.renderer.MultichannelTileRenderer;
 
@@ -57,6 +58,8 @@ public class BioFormatsTileService {
     private final ExportReaderFactory exportReaderFactory;
     private final ExportValidator exportValidator;
     private final DiagnosticTiming timing;
+    private final BioFormatsReaderPool readerPool;
+    private final PngTileCache tileCache;
     private final Map<String, ImageContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, AssociatedImages> associatedImageCache = new ConcurrentHashMap<>();
     private final Map<String, Object> associatedLocks = new ConcurrentHashMap<>();
@@ -66,12 +69,16 @@ public class BioFormatsTileService {
                                  MultichannelTileRenderer multichannelRenderer,
                                  ExportReaderFactory exportReaderFactory,
                                  ExportValidator exportValidator,
+                                 BioFormatsReaderPool readerPool,
+                                 PngTileCache tileCache,
                                  @Value("${wsi.diagnostic-timing.enabled:false}") boolean diagnosticTimingEnabled) {
         this.registry = registry;
         this.fluorescenceRenderer = fluorescenceRenderer;
         this.multichannelRenderer = multichannelRenderer;
         this.exportReaderFactory = exportReaderFactory;
         this.exportValidator = exportValidator;
+        this.readerPool = readerPool;
+        this.tileCache = tileCache;
         this.timing = new DiagnosticTiming(diagnosticTimingEnabled);
     }
 
@@ -107,8 +114,7 @@ public class BioFormatsTileService {
             throws Exception {
         ImageContext context = context(imageId, series);
         SessionDisplayState state = sessionState(session, imageId, series, context);
-        synchronized (context) {
-            IFormatReader reader = context.reader();
+        return context.withReader(reader -> {
             List<ImageSeriesProfile> profiles = catalogSeriesProfiles(reader);
             reader.setSeries(series);
             reader.setResolution(0);
@@ -119,7 +125,7 @@ public class BioFormatsTileService {
                     reader.getResolutionCount(), ImageContext.TILE_SIZE, state.revision(),
                     micronsPerPixelX, micronsPerPixelY, zPlaneCount(reader.getSizeZ()),
                     series, List.copyOf(profiles));
-        }
+        });
     }
 
     /** Bio-Formats sizeZ for 2D slides is often 0/1; always expose at least one focal plane. */
@@ -369,9 +375,7 @@ public class BioFormatsTileService {
 
     public PixelSampleResponse getPixelSample(String imageId, int series, int x, int y) throws Exception {
         ImageContext context = context(imageId, series);
-        synchronized (context) {
-            IFormatReader reader = context.reader();
-            reader.setSeries(series);
+        return context.withReader(reader -> {
             reader.setResolution(0);
             if (x < 0 || y < 0 || x >= reader.getSizeX() || y >= reader.getSizeY()) {
                 throw new IllegalArgumentException("Pixel coordinates are outside the image.");
@@ -391,15 +395,13 @@ public class BioFormatsTileService {
                 values.add(littleEndian ? first | (second << 8) : (first << 8) | second);
             }
             return new PixelSampleResponse(x, y, values);
-        }
+        });
     }
 
     public PixelBlockResponse getPixelBlock(String imageId, int series, int x, int y, int requestedSize)
             throws Exception {
         ImageContext context = context(imageId, series);
-        synchronized (context) {
-            IFormatReader reader = context.reader();
-            reader.setSeries(series);
+        return context.withReader(reader -> {
             reader.setResolution(0);
 
             int size = Math.max(8, Math.min(requestedSize, 128));
@@ -430,7 +432,7 @@ public class BioFormatsTileService {
                 }
             }
             return new PixelBlockResponse(blockX, blockY, width, height, channels, values);
-        }
+        });
     }
 
     public DisplayResponse resetDisplay(String imageId, int series, HttpSession session) throws Exception {
@@ -445,9 +447,7 @@ public class BioFormatsTileService {
     public DisplayResponse recomputeAutomaticDisplay(String imageId, int series, HttpSession session)
             throws Exception {
         ImageContext context = context(imageId, series);
-        synchronized (context) {
-            context.recomputeAutomaticWindows();
-        }
+        context.recomputeAutomaticWindows();
         SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) {
             state.reset(context.newDefaultDisplayModel());
@@ -488,46 +488,61 @@ public class BioFormatsTileService {
                           int tileX, int tileY, int z, int series, HttpSession session) throws Exception {
         ImageContext context = context(imageId, series);
         SessionDisplayState state = sessionState(session, imageId, series, context);
-        synchronized (context) {
-            IFormatReader reader = context.reader();
-            reader.setSeries(series);
+        validateZ(z, context.sizeZ());
+        long revision;
+        ChannelDisplaySettings channelSettings;
+        synchronized (state) {
+            validateChannel(channel, state.model().getChannelCount());
+            revision = state.revision();
+            channelSettings = copySettings(state.model().getChannel(channel));
+        }
+        String cacheKey = PngTileCache.key(imageId, z, "c" + channel, viewerLevel, tileX, tileY,
+                revision, displayFingerprint(channelSettings));
+        byte[] cached = tileCache.get(cacheKey);
+        if (cached != null) return cached;
+        byte[] png = context.withReader(reader -> {
             validateChannel(channel, reader.getSizeC());
-            validateZ(z, reader.getSizeZ());
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
             byte[] pixels = reader.openBytes(reader.getIndex(z, channel, 0),
                     region.x(), region.y(), region.width(), region.height());
-            ChannelDisplaySettings channelSettings;
-            synchronized (state) { channelSettings = copySettings(state.model().getChannel(channel)); }
             PixelMapper mapper = new LinearWindowPixelMapper(channelSettings.getWindow(),
                     channelSettings.getLut(), channelSettings.getGamma());
             BufferedImage image = fluorescenceRenderer.render(pixels, region.width(), region.height(),
                     DisplaySettings.forPixelData(reader.isLittleEndian()), mapper);
             return encodePng(image);
-        }
+        });
+        tileCache.put(cacheKey, png);
+        return png;
     }
 
     public byte[] getCompositeTile(String imageId, int viewerLevel, int tileX, int tileY,
                                    int z, int series, HttpSession session) throws Exception {
         ImageContext context = context(imageId, series);
         SessionDisplayState state = sessionState(session, imageId, series, context);
+        validateZ(z, context.sizeZ());
+        long revision;
         List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
         synchronized (state) {
+            revision = state.revision();
             for (int i = 0; i < state.model().getChannelCount(); i++) {
                 settingsSnapshot.add(copySettings(state.model().getChannel(i)));
             }
         }
-        synchronized (context) {
-            IFormatReader reader = context.reader();
-            reader.setSeries(series);
-            validateZ(z, reader.getSizeZ());
+        String cacheKey = PngTileCache.key(imageId, z, "composite", viewerLevel, tileX, tileY,
+                revision, displayFingerprint(settingsSnapshot));
+        byte[] cached = tileCache.get(cacheKey);
+        if (cached != null) return cached;
+        byte[] png = context.withReader(reader -> {
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
             return encodePng(renderCompositeRegion(context, reader, settingsSnapshot,
                     region.x(), region.y(), region.width(), region.height(), z));
-        }
+        });
+        tileCache.put(cacheKey, png);
+        return png;
     }
 
     /**
@@ -547,8 +562,7 @@ public class BioFormatsTileService {
             }
         }
         int cap = maxEdge > 0 ? Math.min(maxEdge, 4096) : 2048;
-        synchronized (context) {
-            IFormatReader reader = context.reader();
+        return context.withReader(reader -> {
             validateZ(z, reader.getSizeZ());
             reader.setResolution(0);
             int fullW = reader.getSizeX();
@@ -582,7 +596,7 @@ public class BioFormatsTileService {
             } finally {
                 reader.setResolution(0);
             }
-        }
+        });
     }
 
     /** Renders resolution zero with the tile display pipeline and an export-owned reader. */
@@ -774,7 +788,7 @@ public class BioFormatsTileService {
         synchronized (contexts) {
             existing = contexts.get(key);
             if (existing == null) {
-                existing = new ImageContext(entry, timing, series);
+                existing = new ImageContext(entry, timing, series, readerPool);
                 contexts.put(key, existing);
             }
             return existing;
@@ -837,13 +851,207 @@ public class BioFormatsTileService {
         private long encodingNanos;
     }
 
-    @PreDestroy public void closeReaders() {
-        for (ImageContext context : contexts.values()) {
-            try { context.close(); }
-            catch (Exception exception) {
-                System.err.println("Could not close reader for " + context.entry().name() + ": " + exception.getMessage());
-            }
+    private static String displayFingerprint(ChannelDisplaySettings settings) {
+        return (settings.isVisible() ? "1" : "0")
+                + ":" + settings.getLut().name()
+                + ":" + settings.getWindow().black()
+                + ":" + settings.getWindow().white()
+                + ":" + settings.getGamma()
+                + ":" + settings.getOpacity();
+    }
+
+    private static String displayFingerprint(List<ChannelDisplaySettings> settings) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < settings.size(); i++) {
+            if (i > 0) builder.append('|');
+            builder.append(displayFingerprint(settings.get(i)));
         }
+        return builder.toString();
+    }
+
+    /**
+     * Raw intensity planes for plugin analysis. Large footprints are read at a
+     * pyramid level that stays at or under {@code 512×512} samples.
+     */
+    public PluginSampleGrid readPluginSampleGrid(
+            String imageId,
+            int series,
+            int z,
+            int x,
+            int y,
+            int width,
+            int height,
+            List<String> requestedChannels
+    ) throws Exception {
+        ImageContext context = context(imageId, series);
+        return context.withReader(reader -> {
+            reader.setResolution(0);
+            int fullX = context.sizeX();
+            int fullY = context.sizeY();
+            int clipX = Math.max(0, x);
+            int clipY = Math.max(0, y);
+            int clipW = Math.max(0, Math.min(width, fullX - clipX));
+            int clipH = Math.max(0, Math.min(height, fullY - clipY));
+            if (clipW <= 0 || clipH <= 0) {
+                throw new IllegalArgumentException("Plugin region is outside the image.");
+            }
+            int planeZ = Math.max(0, Math.min(z, Math.max(0, context.sizeZ() - 1)));
+            int maxPixels = 512 * 512;
+            int resolution = 0;
+            if ((long) clipW * clipH > maxPixels) {
+                int count = Math.max(1, reader.getResolutionCount());
+                for (int res = 1; res < count; res++) {
+                    reader.setResolution(res);
+                    double sx = reader.getSizeX() / (double) fullX;
+                    double sy = reader.getSizeY() / (double) fullY;
+                    int rw = Math.max(1, (int) Math.round(clipW * sx));
+                    int rh = Math.max(1, (int) Math.round(clipH * sy));
+                    resolution = res;
+                    if ((long) rw * rh <= maxPixels) break;
+                }
+            }
+            reader.setResolution(resolution);
+            double scaleX = reader.getSizeX() / (double) fullX;
+            double scaleY = reader.getSizeY() / (double) fullY;
+            int sampleX = Math.max(0, Math.min(reader.getSizeX() - 1, (int) Math.floor(clipX * scaleX)));
+            int sampleY = Math.max(0, Math.min(reader.getSizeY() - 1, (int) Math.floor(clipY * scaleY)));
+            int sampleW = Math.max(1, Math.min(reader.getSizeX() - sampleX, Math.max(1, (int) Math.round(clipW * scaleX))));
+            int sampleH = Math.max(1, Math.min(reader.getSizeY() - sampleY, Math.max(1, (int) Math.round(clipH * scaleY))));
+            if ((long) sampleW * sampleH > maxPixels) {
+                double shrink = Math.sqrt(maxPixels / (double) sampleW / sampleH);
+                sampleW = Math.max(1, (int) Math.floor(sampleW * shrink));
+                sampleH = Math.max(1, (int) Math.floor(sampleH * shrink));
+            }
+
+            int[] channelIndexes = resolvePluginChannels(context, requestedChannels);
+            String[] names = new String[channelIndexes.length];
+            int[][] planes = new int[channelIndexes.length][];
+            if (context.isRgb()) {
+                int[] rgb = readRgbRegion(reader, sampleX, sampleY, sampleW, sampleH, planeZ);
+                for (int i = 0; i < channelIndexes.length; i++) {
+                    int channel = channelIndexes[i];
+                    names[i] = pluginChannelName(context, channel, requestedChannels, i);
+                    int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
+                    int[] plane = new int[rgb.length];
+                    for (int p = 0; p < rgb.length; p++) {
+                        plane[p] = (rgb[p] >> shift) & 0xff;
+                    }
+                    planes[i] = plane;
+                }
+            } else {
+                boolean littleEndian = reader.isLittleEndian();
+                int bytesPerSample = FormatTools.getBytesPerPixel(reader.getPixelType());
+                for (int i = 0; i < channelIndexes.length; i++) {
+                    int channel = channelIndexes[i];
+                    names[i] = pluginChannelName(context, channel, requestedChannels, i);
+                    byte[] bytes = reader.openBytes(
+                            reader.getIndex(planeZ, channel, 0), sampleX, sampleY, sampleW, sampleH);
+                    planes[i] = decodeIntensityPlane(bytes, sampleW * sampleH, bytesPerSample, littleEndian);
+                }
+            }
+            return new PluginSampleGrid(
+                    clipX,
+                    clipY,
+                    clipW,
+                    clipH,
+                    sampleX,
+                    sampleY,
+                    sampleW,
+                    sampleH,
+                    scaleX,
+                    scaleY,
+                    List.of(names),
+                    channelIndexes,
+                    planes
+            );
+        });
+    }
+
+    private static final String[] PLUGIN_BAND_NAMES = {"DAPI", "FITC", "TRITC"};
+
+    private static int[] resolvePluginChannels(ImageContext context, List<String> requested) {
+        int sizeC = Math.max(1, context.sizeC());
+        if (requested == null || requested.isEmpty()) {
+            int count = Math.min(3, sizeC);
+            int[] indexes = new int[count];
+            for (int i = 0; i < count; i++) indexes[i] = i;
+            return indexes;
+        }
+        List<Integer> resolved = new ArrayList<>();
+        for (String token : requested) {
+            int index = pluginChannelIndex(token, context, sizeC);
+            if (index >= 0 && !resolved.contains(index)) resolved.add(index);
+        }
+        if (resolved.isEmpty()) {
+            throw new IllegalArgumentException("No matching channels for plugin request.");
+        }
+        return resolved.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private static int pluginChannelIndex(String token, ImageContext context, int sizeC) {
+        String raw = token == null ? "" : token.trim();
+        if (raw.isEmpty()) return -1;
+        try {
+            int parsed = Integer.parseInt(raw);
+            if (parsed >= 0 && parsed < sizeC) return parsed;
+        } catch (NumberFormatException ignored) {
+            // Fall through to name matching.
+        }
+        String key = raw.toUpperCase(java.util.Locale.ROOT).replace("CHANNEL", "").trim();
+        if (key.equals("DAPI") || key.equals("BLUE") || key.equals("1") || key.equals("B")) {
+            return sizeC > 0 ? 0 : -1;
+        }
+        if (key.equals("FITC") || key.equals("GREEN") || key.equals("2") || key.equals("G")) {
+            return sizeC > 1 ? 1 : -1;
+        }
+        if (key.equals("TRITC") || key.equals("RED") || key.equals("3") || key.equals("R")) {
+            return sizeC > 2 ? 2 : -1;
+        }
+        for (int i = 0; i < sizeC; i++) {
+            String label = context.channelLabel(i);
+            if (label != null && label.equalsIgnoreCase(raw)) return i;
+        }
+        return -1;
+    }
+
+    private static String pluginChannelName(
+            ImageContext context,
+            int channel,
+            List<String> requested,
+            int requestedIndex
+    ) {
+        if (requested != null && requestedIndex >= 0 && requestedIndex < requested.size()) {
+            String given = requested.get(requestedIndex);
+            if (given != null && !given.isBlank()) return given.trim();
+        }
+        if (channel >= 0 && channel < PLUGIN_BAND_NAMES.length) return PLUGIN_BAND_NAMES[channel];
+        return context.channelLabel(channel);
+    }
+
+    private static int[] decodeIntensityPlane(byte[] bytes, int pixelCount, int bytesPerSample, boolean littleEndian) {
+        int[] plane = new int[pixelCount];
+        if (bytes == null || bytes.length == 0) return plane;
+        if (bytesPerSample <= 1) {
+            int n = Math.min(pixelCount, bytes.length);
+            for (int i = 0; i < n; i++) plane[i] = bytes[i] & 0xff;
+            return plane;
+        }
+        int n = Math.min(pixelCount, bytes.length / 2);
+        for (int i = 0; i < n; i++) {
+            int first = bytes[i * 2] & 0xff;
+            int second = bytes[i * 2 + 1] & 0xff;
+            plane[i] = littleEndian ? first | (second << 8) : (first << 8) | second;
+        }
+        return plane;
+    }
+
+    @PreDestroy public void closeReaders() {
+        try {
+            readerPool.close();
+        } catch (Exception exception) {
+            LOGGER.warn("Could not close the Bio-Formats reader pool: {}", exception.getMessage());
+        }
+        contexts.clear();
     }
 
     private record TileRegion(int x, int y, int width, int height) {
