@@ -153,6 +153,19 @@ class ImageRegistryTests {
         registry.close();
     }
 
+    @Test void publishedSidecarsAreRestampedOnCatalogReadWithoutRestart() throws Exception {
+        Files.writeString(root.resolve("slide.tif"), "x");
+        ImageRegistry registry = registry(true, new MutableClock(), Duration.ofSeconds(10));
+        assertThat(registry.getImages().getFirst().clinicalMarker()).isEmpty();
+
+        Files.writeString(root.resolve("slide.metadata.json"), """
+                {"clinicalMarker":"if.IgG","zPlanes":4}
+                """);
+        assertThat(registry.getImages().getFirst().clinicalMarker()).isEqualTo("if.IgG");
+        assertThat(registry.getImages().getFirst().zPlanes()).isEqualTo(4);
+        registry.close();
+    }
+
     private ImageRegistry registry(boolean recursive, MutableClock clock, Duration stability) throws Exception {
         return new ImageRegistry(root.toString(), recursive, Duration.ZERO, stability, clock);
     }

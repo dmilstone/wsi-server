@@ -19,6 +19,24 @@ let ocrAutoBaseline = { prob: 0.5, nms: 0.4 };
 /** In-memory cell polygons drawn on the native OSD canvas overlay. */
 let localizedCellObjects = [];
 
+// #region agent log
+function wsiDebugLog(hypothesisId, location, message, data, runId) {
+    fetch("http://127.0.0.1:7556/ingest/8748b9e4-d4bb-410e-a080-1a8c2a88a2f1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "c733f2" },
+        body: JSON.stringify({
+            sessionId: "c733f2",
+            runId: runId || "pre-fix",
+            hypothesisId,
+            location,
+            message,
+            data: data || {},
+            timestamp: Date.now()
+        })
+    }).catch(() => {});
+}
+// #endregion
+
 function renderSynchronizedCellObjects() {
     return AnnotationAdapter.renderSynchronizedCellObjects();
 }
@@ -145,10 +163,13 @@ class AnnotationAdapter {
         "Use the dropdown menu on the left to select slides for viewing.";
     /** When true, left-column slide rows show async macro label thumbnails. */
     static slideLabelThumbsEnabled = false;
+    static slideLabelThumbObserver = null;
     /** Invalidates in-flight sidebar OCR when the case list is rebuilt. */
     static sidebarOcrBatchGeneration = 0;
     static slideLabelThumbGeneration = 0;
     static sidebarOcrInFlight = typeof Set !== "undefined" ? new Set() : null;
+    /** Keys that already received a full-angle list OCR attempt this session. */
+    static ocrThoroughAttempt = typeof Set !== "undefined" ? new Set() : null;
 
     /**
      * True when the case filter is on the blank privacy placeholder
@@ -230,6 +251,7 @@ class AnnotationAdapter {
         if (imageInfo) imageInfo.hidden = true;
 
         for (const id of [
+            "z-controls-card",
             "z-depth-controls",
             "measure-session-panel",
             "series-select-control"
@@ -250,6 +272,11 @@ class AnnotationAdapter {
         if (channelsHeader) channelsHeader.hidden = true;
         const aiPanel = root.getElementById("ai-analytics-panel");
         if (aiPanel) aiPanel.hidden = true;
+        const aiLabs = root.getElementById("ai-labs-panel");
+        if (aiLabs) {
+            aiLabs.hidden = true;
+            aiLabs.classList.remove("show");
+        }
         AnnotationAdapter.clearAiNucleiOverlay({ remove: true });
         AnnotationAdapter.setAiStatus("AI Pipeline: Idle", root);
 
@@ -281,7 +308,7 @@ class AnnotationAdapter {
     /** Macro label thumbnail URL for a catalog slide id (native Bio-Formats pipeline). */
     static slideLabelThumbUrl(imageId) {
         if (!imageId) return "";
-        return `/api/images/${encodeURIComponent(imageId)}/label.png`;
+        return `/api/images/${encodeURIComponent(imageId)}/label.png?max=160`;
     }
 
     /**
@@ -540,6 +567,8 @@ class AnnotationAdapter {
 
             const thumb = wrap.querySelector(".slide-label-thumb");
             if (!thumb) continue;
+            thumb.loading = "lazy";
+            thumb.decoding = "async";
             const url = AnnotationAdapter.slideLabelThumbUrl(imageId);
             thumb.onload = () => {
                 if (generation !== AnnotationAdapter.slideLabelThumbGeneration) return;
@@ -553,12 +582,45 @@ class AnnotationAdapter {
                 thumb.removeAttribute("src");
                 button.classList.remove("has-slide-label-thumb");
             };
-            if (thumb.src !== url) thumb.src = url;
-            if (thumb.complete && (thumb.naturalWidth || 0) > 0) {
+            if (thumb.complete && (thumb.naturalWidth || 0) > 0 && thumb.src) {
                 AnnotationAdapter.revealSlideLabelThumb(button, slot, wrap, thumb);
+                continue;
+            }
+            if (AnnotationAdapter.isSlideRowVisibleForLabel(button)) {
+                AnnotationAdapter.observeSlideLabelThumb(button, thumb, url);
             }
         }
         return generation;
+    }
+
+    static isSlideRowVisibleForLabel(button) {
+        const contents = button?.closest?.(".folder-contents");
+        if (contents && (contents.hidden || contents.style?.display === "none")) return false;
+        return true;
+    }
+
+    static observeSlideLabelThumb(button, thumb, url) {
+        if (!thumb || !url) return;
+        if (typeof IntersectionObserver !== "function") {
+            if (thumb.src !== url) thumb.src = url;
+            return;
+        }
+        if (!AnnotationAdapter.slideLabelThumbObserver) {
+            const root = (typeof document !== "undefined")
+                ? document.getElementById("images-panel")
+                : null;
+            AnnotationAdapter.slideLabelThumbObserver = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue;
+                    const img = entry.target;
+                    const pending = img.dataset?.labelSrc;
+                    if (pending && img.src !== pending) img.src = pending;
+                    AnnotationAdapter.slideLabelThumbObserver.unobserve(img);
+                }
+            }, { root, rootMargin: "120px", threshold: 0.01 });
+        }
+        if (thumb.dataset) thumb.dataset.labelSrc = url;
+        AnnotationAdapter.slideLabelThumbObserver.observe(thumb);
     }
 
     /**
@@ -660,7 +722,104 @@ class AnnotationAdapter {
         const greedy = source.match(/if[\s\.]+\S+/i);
         const normalized = AnnotationAdapter.normalizeOcrClinicalText(greedy ? greedy[0] : source);
         const match = String(normalized || "").match(/if\.\S+/i);
-        return match ? match[0] : "";
+        if (!match) return "";
+        const token = match[0];
+        if (/^if\.(pending|none|unknown|n\/?a)\b/i.test(token)) return "";
+        return token;
+    }
+
+    static catalogSidecarCache = new Map();
+
+    static readPositiveSidecarInt(value) {
+        const number = Number(value);
+        return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+    }
+
+    /**
+     * Flatten a sidecar / catalog row into one immutable record. Nested alias
+     * walks happen once here, never during listing paint.
+     */
+    static mapSidecarProperties(raw = {}) {
+        const source = raw && typeof raw === "object" ? raw : {};
+        const folder = String(source.folder || source.directory || "");
+        const clinicalMarker = AnnotationAdapter.extractIfEpitopeMarker(
+            source.clinicalMarker || source.clinical_marker || source.epitope || ""
+        );
+        const zPlanes = AnnotationAdapter.readPositiveSidecarInt(
+            source.zPlanes ?? source.z_planes ?? source.zPlaneCount ?? source.z_plane_count
+        );
+        const depth = AnnotationAdapter.readPositiveSidecarInt(
+            source.depth ?? source.zDepth ?? source.z_depth
+        );
+        const zLayers = AnnotationAdapter.readPositiveSidecarInt(
+            source.zLayers ?? source.z_layers ?? source.layers
+        );
+        return Object.freeze({
+            id: source.id || "",
+            name: source.name || "",
+            relativePath: source.relativePath || source.relative_path || "",
+            folder,
+            clinicalMarker,
+            zPlanes,
+            depth,
+            zLayers
+        });
+    }
+
+    static isMultiLayerSlide(image) {
+        const mapped = AnnotationAdapter.mapSidecarProperties(image);
+        return mapped.zPlanes > 1
+            || mapped.depth > 1
+            || mapped.zLayers > 1
+            || Boolean(mapped.folder && mapped.folder.includes("_z"));
+    }
+
+    static zPlaneCountFromSlide(image) {
+        const mapped = AnnotationAdapter.mapSidecarProperties(image);
+        let count = Math.max(mapped.zPlanes, mapped.depth, mapped.zLayers, 1);
+        if (count < 2 && mapped.folder && mapped.folder.includes("_z")) count = 2;
+        return count;
+    }
+
+    /**
+     * One-pass catalog ingest: id / name / path → frozen sidecar record.
+     */
+    static cacheCatalogSidecarMetadata(images = []) {
+        const cache = new Map();
+        const list = Array.isArray(images) ? images : [];
+        for (const image of list) {
+            const mapped = AnnotationAdapter.mapSidecarProperties(image);
+            const keys = [mapped.id, mapped.name, mapped.relativePath, image?.id, image?.name, image?.relativePath];
+            for (const key of keys) {
+                const token = String(key || "").trim();
+                if (token) cache.set(token, mapped);
+            }
+            if (mapped.clinicalMarker) {
+                const cacheKey = AnnotationAdapter.sidebarOcrCacheKey(image) || mapped.id;
+                AnnotationAdapter.writeOcrSessionCache(cacheKey, mapped.clinicalMarker);
+            }
+        }
+        AnnotationAdapter.catalogSidecarCache = cache;
+        return cache;
+    }
+
+    static sidecarRecordForImage(image) {
+        if (!image) return null;
+        const cache = AnnotationAdapter.catalogSidecarCache;
+        if (!cache || typeof cache.get !== "function") return null;
+        const keys = [
+            image.dataset?.imageId,
+            image.id,
+            image.name,
+            image.relativePath,
+            image.dataset?.imageName,
+            image.dataset?.imagePath
+        ];
+        for (const key of keys) {
+            const token = String(key || "").trim();
+            if (token && cache.has(token)) return cache.get(token);
+        }
+        return null;
     }
 
     /** Flatten Tesseract output to a single debug line. */
@@ -761,7 +920,7 @@ class AnnotationAdapter {
             || (typeof document !== "undefined" ? document : null);
         if (!scope?.querySelectorAll) return;
         for (const node of scope.querySelectorAll(".ocr-result-text")) {
-            if (!includeSidebar && node.closest?.(".image-button")) continue;
+            if (!includeSidebar && (node.closest?.(".image-button") || node.closest?.(".slide-row"))) continue;
             node.textContent = "";
             if (typeof node.classList?.remove === "function") {
                 node.classList.remove("ocr-result-pending");
@@ -912,6 +1071,30 @@ class AnnotationAdapter {
         return result;
     }
 
+    /**
+     * Previous listing row: filename plus ingest-time {@code if.epitope}
+     * immediately underneath. No accordion — the sidecar token is the
+     * first-view clinical label.
+     */
+    static createSlideRow(doc, image, title, extraClass, onSelect) {
+        const button = doc.createElement("button");
+        button.type = "button";
+        button.className = extraClass ? `image-button ${extraClass}` : "image-button";
+        button.dataset.imageId = image.id;
+        button.dataset.imageName = image.name || "";
+        button.dataset.imagePath = image.relativePath || "";
+        button.dataset.clinicalMarker = image.clinicalMarker || "";
+        button.dataset.slideLabel = title;
+        button.title = image.relativePath || image.name || "";
+        const label = doc.createElement("span");
+        label.className = "image-button-label";
+        label.textContent = title;
+        button.append(label);
+        button.addEventListener("click", () => onSelect(image));
+        AnnotationAdapter.paintSidecarEpitopeOnButton(button, image, doc);
+        return { row: button, button };
+    }
+
     static sidebarOcrCacheKey(buttonOrImage) {
         if (!buttonOrImage) return "";
         const imageId = String(
@@ -945,60 +1128,109 @@ class AnnotationAdapter {
     }
 
     /**
-     * Catalog marker only — never cache empty values here (empty must stay
-     * eligible for browser-tier OCR fallback).
+     * Catalog marker only — never cache empty / Pending placeholders here
+     * (empty must stay eligible for an explicit browser-tier OCR fallback).
      */
     static clinicalMarkerFromImage(image) {
         if (!image || typeof image !== "object") return "";
         const fromApi = AnnotationAdapter.extractIfEpitopeMarker(
-            image.clinicalMarker || image.clinical_marker || ""
+            image.clinicalMarker || image.clinical_marker || image.epitope || ""
         );
         const cacheKey = AnnotationAdapter.sidebarOcrCacheKey(image);
         if (fromApi) {
             AnnotationAdapter.writeOcrSessionCache(cacheKey, fromApi);
             return fromApi;
         }
+        const sidecar = AnnotationAdapter.sidecarRecordForImage(image);
+        if (sidecar?.clinicalMarker) {
+            AnnotationAdapter.writeOcrSessionCache(cacheKey, sidecar.clinicalMarker);
+            return sidecar.clinicalMarker;
+        }
         if (AnnotationAdapter.hasOcrSessionCacheEntry(cacheKey)) {
-            return AnnotationAdapter.readOcrSessionCache(cacheKey) || "";
+            return AnnotationAdapter.extractIfEpitopeMarker(
+                AnnotationAdapter.readOcrSessionCache(cacheKey) || ""
+            );
         }
         return "";
     }
 
+    static paintSidecarEpitopeOnButton(button, image, doc) {
+        const targetNode = AnnotationAdapter.ensureSidebarOcrResultNode(button, doc);
+        if (!targetNode) return "";
+        const marker = AnnotationAdapter.clinicalMarkerFromImage(image || {
+            id: button?.dataset?.imageId,
+            name: button?.dataset?.imageName,
+            relativePath: button?.dataset?.imagePath
+        });
+        if (marker) AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
+        return marker;
+    }
+
     /**
-     * Hybrid catalog loop: paint backend markers instantly; queue browser OCR
-     * for any row still missing a marker (safe-catch for legacy inventory).
+     * Paint cached {@code if.<epitope>} tokens onto listing rows.
+     * Browser OCR is opt-in only ({@code allowBrowserFallback === true}).
      */
     static applyCatalogClinicalMarkers(container, images = [], options = {}) {
         if (!container || typeof container.querySelectorAll !== "function") return 0;
         const doc = typeof document !== "undefined" ? document : null;
-        // Browser fallback is the default safe-catch; callers may opt out.
-        const allowBrowserFallback = options.allowBrowserFallback !== false;
+        const allowBrowserFallback = options.allowBrowserFallback === true;
+        const list = Array.isArray(images) ? images : [];
+        if (list.length) {
+            AnnotationAdapter.cacheCatalogSidecarMetadata(list);
+        }
+        const sidecarFilled = list.filter((image) => AnnotationAdapter.extractIfEpitopeMarker(
+            image?.clinicalMarker || image?.clinical_marker || image?.epitope || ""
+        )).length;
+        // #region agent log
+        wsiDebugLog("D", "annotation-adapter.js:applyCatalogClinicalMarkers", "catalog markers", {
+            allowBrowserFallback,
+            imageCount: list.length,
+            tesseract: typeof Tesseract !== "undefined"
+        });
+        wsiDebugLog("A", "annotation-adapter.js:applyCatalogClinicalMarkers", "ingest sidecar coverage", {
+            imageCount: list.length,
+            sidecarFilled,
+            sidecarEmpty: Math.max(0, list.length - sidecarFilled),
+            allowBrowserFallback
+        }, "post-fix");
+        // #endregion
         const byId = new Map();
-        for (const image of Array.isArray(images) ? images : []) {
-            const key = AnnotationAdapter.sidebarOcrCacheKey(image);
-            if (!key) continue;
-            byId.set(key, AnnotationAdapter.clinicalMarkerFromImage(image));
+        for (const image of list) {
+            if (image?.id) byId.set(String(image.id), image);
         }
         const missing = [];
         let painted = 0;
+        let cachedHit = 0;
+        let cachedEmpty = 0;
+        let noNode = 0;
         for (const button of container.querySelectorAll(".image-button")) {
             const key = AnnotationAdapter.sidebarOcrCacheKey(button);
             const targetNode = AnnotationAdapter.ensureSidebarOcrResultNode(button, doc)
                 || button.querySelector(".ocr-result-text");
-            if (!targetNode) continue;
-            const existing = AnnotationAdapter.extractIfEpitopeMarker(targetNode.textContent || "");
-            let marker = "";
-            if (byId.has(key) && byId.get(key)) marker = byId.get(key);
-            else if (existing) marker = existing;
-            else if (AnnotationAdapter.hasOcrSessionCacheEntry(key)) {
-                marker = AnnotationAdapter.readOcrSessionCache(key) || "";
+            if (!targetNode) {
+                noNode += 1;
+                continue;
             }
+            const existing = AnnotationAdapter.extractIfEpitopeMarker(targetNode.textContent || "");
+            const catalogImage = byId.get(String(key)) || {
+                id: key,
+                name: button.dataset?.imageName,
+                relativePath: button.dataset?.imagePath,
+                clinicalMarker: button.dataset?.clinicalMarker
+            };
+            const marker = AnnotationAdapter.clinicalMarkerFromImage(catalogImage) || existing;
+            const cachedEmptyMiss = AnnotationAdapter.hasOcrSessionCacheEntry(key)
+                && !AnnotationAdapter.extractIfEpitopeMarker(
+                    AnnotationAdapter.readOcrSessionCache(key) || ""
+                );
+            const thorough = Boolean(AnnotationAdapter.ocrThoroughAttempt?.has?.(key));
             if (marker) {
                 AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
+                cachedHit += 1;
             } else if (targetNode.classList?.contains?.("ocr-result-raw")) {
                 // Keep manual-scan RAW debug until a real marker arrives.
-            } else if (AnnotationAdapter.hasOcrSessionCacheEntry(key)) {
-                // Already scanned this session — keep the compact row, no retry loop.
+            } else if (cachedEmptyMiss && thorough) {
+                cachedEmpty += 1;
                 if (!existing) AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
             } else if (allowBrowserFallback) {
                 if (!targetNode.classList?.contains?.("ocr-result-pending")) {
@@ -1010,7 +1242,22 @@ class AnnotationAdapter {
             }
             painted += 1;
         }
+        // #region agent log
+        wsiDebugLog("D", "annotation-adapter.js:applyCatalogClinicalMarkers", "row outcomes", {
+            painted,
+            queued: missing.length,
+            cachedHit,
+            cachedEmpty,
+            noNode,
+            allowBrowserFallback
+        }, "post-fix");
+        // #endregion
         if (allowBrowserFallback && missing.length) {
+            // #region agent log
+            wsiDebugLog("D", "annotation-adapter.js:applyCatalogClinicalMarkers", "ocr fallback queued", {
+                missing: missing.length
+            });
+            // #endregion
             void AnnotationAdapter.runBrowserOcrFallbackBatch(missing);
         }
         return painted;
@@ -1027,26 +1274,29 @@ class AnnotationAdapter {
      * Results commit to {@link OcrSessionCache} so list rebuilds never re-scan.
      */
     static async runBrowserOcrFallbackBatch(buttons) {
-        const generation = AnnotationAdapter.sidebarOcrBatchGeneration;
         const inFlight = AnnotationAdapter.sidebarOcrInFlight;
         const doc = typeof document !== "undefined" ? document : null;
         const list = Array.isArray(buttons) ? buttons : [];
         for (const button of list) {
-            if (generation !== AnnotationAdapter.sidebarOcrBatchGeneration) return;
             const cacheKey = AnnotationAdapter.sidebarOcrCacheKey(button);
             const targetNode = AnnotationAdapter.ensureSidebarOcrResultNode(button, doc)
                 || button.querySelector(".ocr-result-text");
             if (!targetNode || !cacheKey) continue;
-            if (AnnotationAdapter.hasOcrSessionCacheEntry(cacheKey)) {
-                AnnotationAdapter.renderOcrClinicalMarker(
-                    targetNode,
-                    AnnotationAdapter.readOcrSessionCache(cacheKey)
-                );
+            const cachedMarker = AnnotationAdapter.extractIfEpitopeMarker(
+                AnnotationAdapter.readOcrSessionCache(cacheKey) || ""
+            );
+            if (cachedMarker) {
+                AnnotationAdapter.renderOcrClinicalMarker(targetNode, cachedMarker);
+                continue;
+            }
+            if (AnnotationAdapter.ocrThoroughAttempt?.has?.(cacheKey)) {
+                AnnotationAdapter.renderOcrClinicalMarker(targetNode, cachedMarker);
                 continue;
             }
             if (inFlight?.has?.(cacheKey)) continue;
             if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
                 AnnotationAdapter.writeOcrSessionCache(cacheKey, "");
+                AnnotationAdapter.ocrThoroughAttempt?.add?.(cacheKey);
                 AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
                 continue;
             }
@@ -1059,23 +1309,38 @@ class AnnotationAdapter {
                 : AnnotationAdapter.slideLabelFullResUrl(cacheKey);
             if (!source) {
                 AnnotationAdapter.writeOcrSessionCache(cacheKey, "");
+                AnnotationAdapter.ocrThoroughAttempt?.add?.(cacheKey);
                 AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
                 continue;
             }
             inFlight?.add?.(cacheKey);
             try {
-                const result = await AnnotationAdapter.recognizeLabelImage(source);
-                if (generation !== AnnotationAdapter.sidebarOcrBatchGeneration) return;
+                const result = await AnnotationAdapter.recognizeLabelImageSweep(source, {
+                    angles: AnnotationAdapter.OCR_QUADRANT_DEG
+                });
                 const marker = AnnotationAdapter.extractIfEpitopeMarker(
                     result?.marker || result?.rawText || result?.text || ""
                 );
                 AnnotationAdapter.writeOcrSessionCache(cacheKey, marker);
-                AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
+                AnnotationAdapter.ocrThoroughAttempt?.add?.(cacheKey);
+                if (targetNode.isConnected !== false) {
+                    if (marker) AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
+                    else AnnotationAdapter.renderOcrRawDebug(targetNode, result?.engineRaw || result?.rawText || "");
+                }
+                // #region agent log
+                wsiDebugLog("D", "annotation-adapter.js:runBrowserOcrFallbackBatch", "list row ocr done", {
+                    cacheKey,
+                    marker: marker || "",
+                    angle: result?.angle ?? null
+                }, "post-fix");
+                // #endregion
             } catch (error) {
-                if (generation !== AnnotationAdapter.sidebarOcrBatchGeneration) return;
                 console.error("[wsi-ocr] browser Tesseract fallback failed", cacheKey, error);
                 AnnotationAdapter.writeOcrSessionCache(cacheKey, "");
-                AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
+                AnnotationAdapter.ocrThoroughAttempt?.add?.(cacheKey);
+                if (targetNode.isConnected !== false) {
+                    AnnotationAdapter.renderOcrClinicalMarker(targetNode, "");
+                }
             } finally {
                 inFlight?.delete?.(cacheKey);
             }
@@ -1103,10 +1368,88 @@ class AnnotationAdapter {
     static applyOverviewClinicalMarker(image, doc = null) {
         const controls = AnnotationAdapter.ensureOverviewOcrControls(doc);
         if (!controls?.result) return;
-        AnnotationAdapter.renderOcrClinicalMarker(
-            controls.result,
-            AnnotationAdapter.clinicalMarkerFromImage(image)
-        );
+        const marker = AnnotationAdapter.clinicalMarkerFromImage(image);
+        // #region agent log
+        wsiDebugLog("E", "annotation-adapter.js:applyOverviewClinicalMarker", "overview marker at selection", {
+            imageId: image?.id,
+            sidecarMarker: marker || "",
+            tesseract: typeof Tesseract !== "undefined"
+        });
+        // #endregion
+        if (marker) {
+            AnnotationAdapter.renderOcrClinicalMarker(controls.result, marker);
+            AnnotationAdapter.paintSelectedRowEpitope(image, marker, doc);
+            return marker;
+        }
+        void AnnotationAdapter.ocrSelectedImageIfMissing(image, controls.result, doc);
+        return "";
+    }
+
+    static paintSelectedRowEpitope(image, marker, doc = null) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        const imageId = String(image?.id || "").trim();
+        if (!root || !imageId || typeof root.querySelector !== "function") return;
+        const button = root.querySelector(`.image-button[data-image-id="${imageId}"]`);
+        if (!button) return;
+        const node = AnnotationAdapter.ensureSidebarOcrResultNode(button, root);
+        if (marker) AnnotationAdapter.renderOcrClinicalMarker(node, marker);
+    }
+
+    /**
+     * Sidecar files are often {@code if.Pending}. Previous viewers ran Tesseract
+     * on the selected label at image selection; restore that for the chosen slide
+     * only (not the whole catalog).
+     */
+    static async ocrSelectedImageIfMissing(image, overviewNode, doc = null) {
+        const cacheKey = AnnotationAdapter.sidebarOcrCacheKey(image);
+        const cached = AnnotationAdapter.hasOcrSessionCacheEntry(cacheKey)
+            ? AnnotationAdapter.extractIfEpitopeMarker(AnnotationAdapter.readOcrSessionCache(cacheKey) || "")
+            : "";
+        if (cached) {
+            AnnotationAdapter.renderOcrClinicalMarker(overviewNode, cached);
+            AnnotationAdapter.paintSelectedRowEpitope(image, cached, doc);
+            // #region agent log
+            wsiDebugLog("E", "annotation-adapter.js:ocrSelectedImageIfMissing", "used session cache", {
+                imageId: image?.id || "",
+                marker: cached
+            }, "post-fix");
+            // #endregion
+            return cached;
+        }
+        if (overviewNode) AnnotationAdapter.beginOcrPendingDisplay(overviewNode);
+        try {
+            const source = AnnotationAdapter.slideLabelFullResUrl(image?.id);
+            const angle = AnnotationAdapter.getSlideLabelRotation(image?.id);
+            const result = await AnnotationAdapter.recognizeLabelImageSweep(source, {
+                angles: [angle]
+            });
+            const raw = result?.engineRaw || result?.rawText || result?.text || "";
+            const marker = AnnotationAdapter.extractIfEpitopeMarker(result?.marker || raw);
+            AnnotationAdapter.writeOcrSessionCache(cacheKey, marker);
+            if (marker) AnnotationAdapter.renderOcrClinicalMarker(overviewNode, marker);
+            else AnnotationAdapter.renderOcrRawDebug(overviewNode, raw);
+            AnnotationAdapter.paintSelectedRowEpitope(image, marker, doc);
+            // #region agent log
+            wsiDebugLog("E", "annotation-adapter.js:ocrSelectedImageIfMissing", "tesseract on select", {
+                imageId: image?.id || "",
+                marker: marker || "",
+                hasRaw: Boolean(raw),
+                angle
+            }, "post-fix");
+            // #endregion
+            return marker;
+        } catch (error) {
+            // #region agent log
+            wsiDebugLog("E", "annotation-adapter.js:ocrSelectedImageIfMissing", "tesseract failed", {
+                imageId: image?.id || "",
+                error: String(error?.message || error || "")
+            }, "post-fix");
+            // #endregion
+            if (overviewNode) {
+                AnnotationAdapter.renderOcrRawDebug(overviewNode, String(error?.message || error || ""));
+            }
+            return "";
+        }
     }
 
     /**
@@ -1116,24 +1459,298 @@ class AnnotationAdapter {
     static zStackPlaneCount = 0;
     static zStackActiveIndex = 0;
 
-    static applyZStackLayerOpacities(viewer, activeZ) {
+    static FLUORESCENT_CHANNEL_NAMES = ["DAPI", "FITC", "TRITC"];
+    static BASELINE_PYRAMID_LEVEL = 4;
+
+    static fluorescentChannelAssets(options = {}) {
+        const names = AnnotationAdapter.FLUORESCENT_CHANNEL_NAMES;
+        const count = Math.max(1, Math.min(
+            names.length,
+            Math.floor(Number(options.channelCount) || names.length)
+        ));
+        return names.slice(0, count).map((name, index) => ({ name, index }));
+    }
+
+    static decorateOpenSeadragonOptions(options = {}) {
+        return {
+            immediateRender: true,
+            placeholderFillStyle: "#111821",
+            animationTime: 0,
+            blendTime: 0,
+            maxImageCacheCount: 4000,
+            ...options,
+            immediateRender: true,
+            placeholderFillStyle: options.placeholderFillStyle || "#111821"
+        };
+    }
+
+    static taggedZIndex(item) {
+        const fromOptions = item?.options?.zIndexProperty ?? item?.options?.zIndices;
+        if (fromOptions != null && fromOptions !== "") {
+            const tagged = Number(fromOptions);
+            return Number.isFinite(tagged) ? tagged : null;
+        }
+        const fromSource = item?.source?.zIndexProperty ?? item?.source?.zIndices;
+        if (fromSource == null || fromSource === "") return null;
+        const tagged = Number(fromSource);
+        if (!Number.isFinite(tagged)) return null;
+        if (item.options && typeof item.options === "object") {
+            item.options.zIndexProperty = tagged;
+        }
+        return tagged;
+    }
+
+    static applyZStackLayerOpacities(viewer, activeZ, options = {}) {
         if (!viewer?.world || typeof viewer.world.getItemCount !== "function") return 0;
         const count = viewer.world.getItemCount();
-        const active = Math.max(0, Number(activeZ) || 0);
-        AnnotationAdapter.zStackActiveIndex = active;
-        AnnotationAdapter.zStackPlaneCount = count;
+        const targetZIndex = Math.max(0, Number(activeZ) || 0);
+        AnnotationAdapter.zStackActiveIndex = targetZIndex;
+        const state = options && typeof options === "object"
+            ? options
+            : AnnotationAdapter.channelLayerState;
+        const visibility = state?.visibility || AnnotationAdapter.channelLayerState?.visibility;
+        const opacities = state?.opacity || AnnotationAdapter.channelLayerState?.opacity;
+        let taggedCount = 0;
+        for (let index = 0; index < count; index += 1) {
+            const item = viewer.world.getItemAt(index);
+            if (AnnotationAdapter.taggedZIndex(item) != null) taggedCount += 1;
+        }
         for (let index = 0; index < count; index += 1) {
             const item = viewer.world.getItemAt(index);
             if (!item || typeof item.setOpacity !== "function") continue;
-            item.setOpacity(index === active ? 1 : 0);
+            const tagged = AnnotationAdapter.taggedZIndex(item);
+            const active = taggedCount > 0 && tagged != null
+                ? tagged === targetZIndex
+                : index === targetZIndex;
+            const channelOn = AnnotationAdapter.channelLayerIsVisible(item, visibility);
+            const layerOpacity = AnnotationAdapter.channelLayerOpacity(item, opacities);
+            item.setOpacity(active && channelOn ? layerOpacity : 0);
         }
         if (typeof viewer.forceRedraw === "function") viewer.forceRedraw();
         return count;
     }
 
+    static channelLayerState = { visibility: null, opacity: null };
+
+    static rememberChannelLayerState(channels) {
+        const list = Array.isArray(channels) ? channels : [];
+        if (!list.length) {
+            AnnotationAdapter.channelLayerState = { visibility: null, opacity: null };
+            return AnnotationAdapter.channelLayerState;
+        }
+        const visibility = {};
+        const opacity = {};
+        for (const channel of list) {
+            if (!channel || typeof channel !== "object") continue;
+            const visible = channel.visible !== false;
+            const amount = Number(channel.opacity);
+            const layerOpacity = Number.isFinite(amount) ? Math.max(0, Math.min(1, amount)) : 1;
+            if (channel.index != null && channel.index !== "") {
+                visibility[channel.index] = visible;
+                opacity[channel.index] = layerOpacity;
+            }
+            const name = String(channel.name || "").trim();
+            if (name) {
+                visibility[name] = visible;
+                opacity[name] = layerOpacity;
+            }
+        }
+        AnnotationAdapter.channelLayerState = { visibility, opacity };
+        return AnnotationAdapter.channelLayerState;
+    }
+
+    static taggedChannelIndex(item) {
+        const fromOptions = item?.options?.channelIndex;
+        if (fromOptions != null && fromOptions !== "") {
+            const tagged = Number(fromOptions);
+            return Number.isFinite(tagged) ? tagged : null;
+        }
+        const fromSource = item?.source?.channelIndex;
+        if (fromSource == null || fromSource === "") return null;
+        const tagged = Number(fromSource);
+        if (!Number.isFinite(tagged)) return null;
+        if (item.options && typeof item.options === "object") {
+            item.options.channelIndex = tagged;
+        }
+        return tagged;
+    }
+
+    static taggedChannelName(item) {
+        const fromOptions = item?.options?.channelName;
+        if (fromOptions != null && String(fromOptions).trim()) return String(fromOptions).trim();
+        const fromSource = item?.source?.channelName;
+        return fromSource != null && String(fromSource).trim() ? String(fromSource).trim() : "";
+    }
+
+    static channelLayerIsVisible(item, visibility) {
+        if (!visibility || typeof visibility !== "object") return true;
+        const index = AnnotationAdapter.taggedChannelIndex(item);
+        if (index != null && Object.prototype.hasOwnProperty.call(visibility, index)) {
+            return visibility[index] !== false;
+        }
+        const name = AnnotationAdapter.taggedChannelName(item);
+        if (name && Object.prototype.hasOwnProperty.call(visibility, name)) {
+            return visibility[name] !== false;
+        }
+        return true;
+    }
+
+    static channelLayerOpacity(item, opacities) {
+        if (!opacities || typeof opacities !== "object") return 1;
+        const index = AnnotationAdapter.taggedChannelIndex(item);
+        if (index != null && Object.prototype.hasOwnProperty.call(opacities, index)) {
+            const amount = Number(opacities[index]);
+            return Number.isFinite(amount) ? Math.max(0, Math.min(1, amount)) : 1;
+        }
+        const name = AnnotationAdapter.taggedChannelName(item);
+        if (name && Object.prototype.hasOwnProperty.call(opacities, name)) {
+            const amount = Number(opacities[name]);
+            return Number.isFinite(amount) ? Math.max(0, Math.min(1, amount)) : 1;
+        }
+        return 1;
+    }
+
+    static applyChannelLayerOpacities(viewer, channels, activeZ) {
+        AnnotationAdapter.rememberChannelLayerState(channels);
+        return AnnotationAdapter.applyZStackLayerOpacities(
+            viewer,
+            activeZ ?? AnnotationAdapter.zStackActiveIndex ?? AnnotationAdapter.currentZ
+        );
+    }
+
+    static changeFocalDepth(viewer, z) {
+        const next = AnnotationAdapter.setCurrentZ(z);
+        return AnnotationAdapter.applyZStackLayerOpacities(viewer, next);
+    }
+
+    static buildZStackLayerSpecs(options = {}) {
+        const build = options.tileSourceForPlane;
+        const planeCount = Math.max(1, Math.floor(Number(options.planeCount) || 1));
+        const activeZ = Math.max(
+            0,
+            Math.min(planeCount - 1, Math.floor(Number(options.activeZ) || 0))
+        );
+        const rawChannels = Array.isArray(options.channels) ? options.channels : null;
+        const channels = rawChannels && rawChannels.length
+            ? rawChannels.map((channel, index) => (
+                typeof channel === "string" ? { name: channel, index } : channel
+            ))
+            : null;
+        const specs = [];
+        const pushSpec = (z, channel, tileSource) => {
+            const channelIndex = Number(channel?.index);
+            const visible = channel?.visible !== false;
+            const amount = Number(channel?.opacity);
+            const layerOpacity = Number.isFinite(amount) ? Math.max(0, Math.min(1, amount)) : 1;
+            if (tileSource && typeof tileSource === "object") {
+                tileSource.zIndexProperty = z;
+                tileSource.zIndices = z;
+                if (Number.isFinite(channelIndex)) tileSource.channelIndex = channelIndex;
+                tileSource.channelName = channel?.name || "composite";
+            }
+            specs.push({
+                tileSource,
+                opacity: z === activeZ && visible ? layerOpacity : 0,
+                preload: true,
+                compositeOperation: "lighter",
+                x: 0,
+                y: 0,
+                width: 1,
+                showInNavigator: specs.length === 0,
+                index: specs.length,
+                zIndexProperty: z,
+                zIndices: z,
+                channelIndex: Number.isFinite(channelIndex) ? channelIndex : undefined,
+                channelName: channel?.name || "composite"
+            });
+        };
+        if (typeof build !== "function") return specs;
+        if (channels) {
+            for (let z = 0; z < planeCount; z += 1) {
+                for (const channel of channels) {
+                    pushSpec(z, channel, build(z, channel));
+                }
+            }
+        } else {
+            for (let z = 0; z < planeCount; z += 1) {
+                pushSpec(z, { name: "composite" }, build(z));
+            }
+        }
+        return specs;
+    }
+
+    static applyBaselinePyramidZoom(viewer, options = {}) {
+        if (options.preserveViewport) return false;
+        return AnnotationAdapter.centerHomeAfterTileSourceReady(viewer, options);
+    }
+
+    static tileSourceDimensionsReady(viewer, metadata = null) {
+        const meta = metadata || AnnotationAdapter.imageMetadata;
+        const item = viewer?.world && typeof viewer.world.getItemCount === "function"
+            ? viewer.world.getItemAt(0)
+            : null;
+        const source = item?.source;
+        const width = Number(source?.width ?? meta?.width);
+        const height = Number(source?.height ?? meta?.height);
+        if (!(width > 1 && height > 1)) return false;
+        if (meta?.series != null && source?.series != null
+            && Number(meta.series) !== Number(source.series)) {
+            return false;
+        }
+        return Boolean(viewer?.viewport && typeof viewer.viewport.goHome === "function");
+    }
+
+    static centerHomeAfterTileSourceReady(viewer, options = {}) {
+        if (!viewer?.viewport) return false;
+        if (options.preserveViewport) return false;
+        const metadata = options.metadata || AnnotationAdapter.imageMetadata;
+        const goHomeNow = () => {
+            if (!AnnotationAdapter.tileSourceDimensionsReady(viewer, metadata)) return false;
+            try {
+                viewer.viewport.goHome(true);
+            } catch (_error) {
+                return false;
+            }
+            return true;
+        };
+        if (goHomeNow()) return true;
+        if (typeof viewer.addHandler !== "function") return false;
+        const onReady = () => {
+            if (!goHomeNow()) return;
+            if (typeof viewer.removeHandler === "function") {
+                try { viewer.removeHandler("tile-loaded", onReady); } catch (_error) { /* ignore */ }
+            }
+        };
+        viewer.addHandler("tile-loaded", onReady);
+        return false;
+    }
+
+    static bindViewportHomeOnOpen(viewer) {
+        if (!viewer || typeof viewer.addHandler !== "function" || viewer._wsiHomeOnOpenBound) {
+            return false;
+        }
+        viewer.addHandler("open", () => {
+            const pending = AnnotationAdapter.pendingOpenViewport || {};
+            AnnotationAdapter.pendingOpenViewport = null;
+            if (pending.preserveViewport) return;
+            // Defer one frame so OSD can finish attaching the tile source
+            // dimensions before centering — never zoom/tier-scale on the same tick.
+            const frame = typeof requestAnimationFrame === "function"
+                ? requestAnimationFrame
+                : (fn) => setTimeout(fn, 0);
+            frame(() => {
+                AnnotationAdapter.centerHomeAfterTileSourceReady(viewer, {
+                    metadata: pending.metadata || AnnotationAdapter.imageMetadata
+                });
+            });
+        });
+        viewer._wsiHomeOnOpenBound = true;
+        return true;
+    }
+
     /**
-     * Open plane 0, then addTiledImage for every remaining Z with preload:true.
-     * Depth changes later only flip opacities — never reopen the viewer.
+     * Open every Z plane in one stamped world list. Depth changes later only
+     * flip opacities — never reopen the viewer.
      */
     static openMultiPlaneZStack(viewer, options = {}) {
         if (!viewer || typeof viewer.open !== "function") return false;
@@ -1147,13 +1764,20 @@ class AnnotationAdapter {
         AnnotationAdapter.zStackPlaneCount = planeCount;
         AnnotationAdapter.zStackActiveIndex = activeZ;
         AnnotationAdapter.setCurrentZ(activeZ);
+        AnnotationAdapter.rememberChannelLayerState(options.channels || []);
 
-        const firstSource = build(0);
-        viewer.open({
-            tileSource: firstSource,
-            opacity: activeZ === 0 ? 1 : 0,
-            preload: true
+        const stamped = AnnotationAdapter.buildZStackLayerSpecs({
+            planeCount,
+            activeZ,
+            tileSourceForPlane: build,
+            channels: options.channels
         });
+        AnnotationAdapter.pendingOpenViewport = {
+            preserveViewport: Boolean(options.preserveViewport),
+            metadata: options.metadata || AnnotationAdapter.imageMetadata
+        };
+        AnnotationAdapter.bindViewportHomeOnOpen(viewer);
+        viewer.open(stamped);
 
         viewer.addOnceHandler("open", () => {
             const preserved = options.preserveViewport;
@@ -1167,55 +1791,22 @@ class AnnotationAdapter {
                     // Ignore restore races during image switch.
                 }
             }
-
-            if (planeCount <= 1) {
-                AnnotationAdapter.applyZStackLayerOpacities(viewer, activeZ);
-                if (typeof options.onReady === "function") options.onReady(viewer);
-                return;
-            }
-
-            let remaining = planeCount - 1;
-            const finishOne = () => {
-                remaining -= 1;
-                if (remaining > 0) return;
-                AnnotationAdapter.applyZStackLayerOpacities(viewer, activeZ);
-                if (typeof options.onReady === "function") options.onReady(viewer);
-            };
-
-            for (let z = 1; z < planeCount; z += 1) {
-                viewer.addTiledImage({
-                    tileSource: build(z),
-                    opacity: z === activeZ ? 1 : 0,
-                    preload: true,
-                    success: finishOne,
-                    error: finishOne
-                });
-            }
+            AnnotationAdapter.applyZStackLayerOpacities(viewer, activeZ);
+            AnnotationAdapter.bindZTilePrefetch(viewer, options);
+            if (typeof options.onReady === "function") options.onReady(viewer);
         });
         return true;
     }
 
-    /**
-     * Focal depth via Alt+wheel or ArrowUp/ArrowDown only.
-     * Does not bind a canvas wheel interceptor — native OSD scroll-zoom stays free.
-     */
-    static bindZStackWheel(viewer, hooks = {}) {
-        if (!viewer || viewer._wsiZStackFocalBound) return false;
-
-        if (viewer.gestureSettingsMouse) {
-            viewer.gestureSettingsMouse.scrollToZoom = true;
-        }
-
+    static resolveZStackDeltaHooks(hooks = {}) {
         const resolveMaxZ = () => Math.max(0, Number(
             typeof hooks.getMaxZ === "function" ? hooks.getMaxZ() : 0
         ) || 0);
-
         const resolveCurrentZ = () => Math.max(0, Number(
             typeof hooks.getZ === "function"
                 ? hooks.getZ()
-                : AnnotationAdapter.zStackActiveIndex
+                : AnnotationAdapter.currentZ
         ) || 0);
-
         const applyDelta = delta => {
             const maxZ = resolveMaxZ();
             if (maxZ < 1 || !delta) return false;
@@ -1224,46 +1815,61 @@ class AnnotationAdapter {
             const next = Math.max(0, Math.min(maxZ, current + delta));
             if (next === current) return false;
             if (typeof hooks.onZChange === "function") hooks.onZChange(next);
-            else AnnotationAdapter.applyZStackLayerOpacities(viewer, next);
+            else AnnotationAdapter.changeFocalDepth(hooks.viewer || AnnotationAdapter.viewer, next);
             return true;
         };
+        return { resolveMaxZ, resolveCurrentZ, applyDelta };
+    }
 
-        const onCanvasScroll = event => {
-            const original = event?.originalEvent;
-            if (!original?.altKey) return;
-            const maxZ = resolveMaxZ();
-            if (maxZ < 1) return;
-            if (AnnotationAdapter.isMeasurementModeActive) return;
-            event.preventDefaultAction = true;
-            if (typeof original.preventDefault === "function") original.preventDefault();
-            const deltaY = Number(original.deltaY);
-            const scroll = Number(event.scroll);
-            const delta = Number.isFinite(deltaY) && deltaY !== 0
-                ? (deltaY > 0 ? 1 : -1)
-                : (Number.isFinite(scroll) && scroll !== 0 ? (scroll > 0 ? -1 : 1) : 0);
-            applyDelta(delta);
-        };
+    static handleZStackWheel(event, hooks = {}) {
+        if (!event?.altKey) return false;
+        const { resolveMaxZ, applyDelta } = AnnotationAdapter.resolveZStackDeltaHooks(hooks);
+        if (resolveMaxZ() < 1) return false;
+        if (AnnotationAdapter.isMeasurementModeActive) return false;
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        const deltaY = Number(event.deltaY);
+        const delta = Number.isFinite(deltaY) && deltaY !== 0
+            ? (deltaY > 0 ? 1 : -1)
+            : 0;
+        return applyDelta(delta);
+    }
 
-        const onKeyDown = event => {
-            if (event.altKey || event.metaKey || event.ctrlKey) return;
-            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-            const target = event.target;
-            if (target && (
-                target.tagName === "INPUT"
-                || target.tagName === "TEXTAREA"
-                || target.tagName === "SELECT"
-                || target.isContentEditable
-            )) return;
-            const maxZ = resolveMaxZ();
-            if (maxZ < 1) return;
-            if (AnnotationAdapter.isMeasurementModeActive) return;
-            event.preventDefault();
-            const delta = event.key === "ArrowUp" ? -1 : 1;
-            applyDelta(delta);
-        };
+    static onZScroll(event, hooks = {}) {
+        return AnnotationAdapter.handleZStackWheel(event, hooks);
+    }
 
-        if (typeof viewer.addHandler === "function") {
-            viewer.addHandler("canvas-scroll", onCanvasScroll);
+    static handleZStackKeyDown(event, hooks = {}) {
+        if (!event || event.altKey || event.metaKey || event.ctrlKey) return false;
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return false;
+        const target = event.target;
+        if (target && (
+            target.tagName === "INPUT"
+            || target.tagName === "TEXTAREA"
+            || target.tagName === "SELECT"
+            || target.isContentEditable
+        )) return false;
+        const { resolveMaxZ, applyDelta } = AnnotationAdapter.resolveZStackDeltaHooks(hooks);
+        if (resolveMaxZ() < 1) return false;
+        if (AnnotationAdapter.isMeasurementModeActive) return false;
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        return applyDelta(event.key === "ArrowUp" ? -1 : 1);
+    }
+
+    /**
+     * Focal depth via Alt+wheel or ArrowUp/ArrowDown only.
+     * Native OSD scroll-zoom stays free (no canvas-scroll interceptor).
+     */
+    static bindZStackWheel(viewer, hooks = {}) {
+        if (!viewer || viewer._wsiZStackFocalBound) return false;
+        if (viewer.gestureSettingsMouse) {
+            viewer.gestureSettingsMouse.scrollToZoom = true;
+        }
+        const boundHooks = { ...hooks, viewer };
+        const onWheel = event => AnnotationAdapter.handleZStackWheel(event, boundHooks);
+        const onKeyDown = event => AnnotationAdapter.handleZStackKeyDown(event, boundHooks);
+        if (viewer.element && typeof viewer.element.addEventListener === "function") {
+            viewer.element.addEventListener("wheel", onWheel, { capture: true, passive: false });
         }
         if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
             window.addEventListener("keydown", onKeyDown);
@@ -1273,11 +1879,14 @@ class AnnotationAdapter {
         return true;
     }
 
-    /** Quietly pre-load adjacent Z-plane tiles — superseded by opacity stack preload. */
+    /** Quiet adjacent-Z tile buffer — fills browser cache ahead of focal scroll. */
     static zTilePrefetchUrls = typeof Set !== "undefined" ? new Set() : null;
+    static zTilePrefetchQueue = [];
+    static zTilePrefetchInFlight = 0;
     static zTilePrefetchImageId = null;
     static zTilePrefetchTimer = null;
     static Z_TILE_PREFETCH_PAUSE_MS = 120;
+    static Z_TILE_PREFETCH_CONCURRENCY = 4;
 
     static resetZTilePrefetchCache(imageId = null) {
         if (AnnotationAdapter.zTilePrefetchTimer != null) {
@@ -1287,21 +1896,104 @@ class AnnotationAdapter {
         if (AnnotationAdapter.zTilePrefetchUrls?.clear) {
             AnnotationAdapter.zTilePrefetchUrls.clear();
         }
+        AnnotationAdapter.zTilePrefetchQueue = [];
+        AnnotationAdapter.zTilePrefetchInFlight = 0;
         AnnotationAdapter.zTilePrefetchImageId = imageId || null;
     }
 
-    static prefetchTileUrl(_url) {
-        // No-op: multi-plane opacity stack preloads via OSD tiled images.
+    static neighborZTileUrl(url, neighborZ) {
+        const source = String(url || "");
+        if (!source) return "";
+        if (/[?&]z=/.test(source)) return source.replace(/([?&]z=)[^&]*/i, `$1${neighborZ}`);
+        return `${source}${source.includes("?") ? "&" : "?"}z=${neighborZ}`;
+    }
+
+    static drainZTilePrefetchQueue() {
+        const max = AnnotationAdapter.Z_TILE_PREFETCH_CONCURRENCY;
+        while (
+            AnnotationAdapter.zTilePrefetchInFlight < max
+            && AnnotationAdapter.zTilePrefetchQueue.length
+        ) {
+            const url = AnnotationAdapter.zTilePrefetchQueue.shift();
+            if (!url) continue;
+            AnnotationAdapter.zTilePrefetchInFlight += 1;
+            const finish = () => {
+                AnnotationAdapter.zTilePrefetchInFlight = Math.max(
+                    0,
+                    AnnotationAdapter.zTilePrefetchInFlight - 1
+                );
+                AnnotationAdapter.drainZTilePrefetchQueue();
+            };
+            try {
+                if (typeof Image !== "undefined") {
+                    const img = new Image();
+                    img.decoding = "async";
+                    img.onload = finish;
+                    img.onerror = finish;
+                    img.src = url;
+                } else if (typeof fetch === "function") {
+                    void fetch(url, { credentials: "same-origin", cache: "force-cache" })
+                        .catch(() => {})
+                        .finally(finish);
+                } else {
+                    finish();
+                }
+            } catch (_error) {
+                finish();
+            }
+        }
+    }
+
+    static prefetchTileUrl(url) {
+        const href = String(url || "");
+        if (!href) return false;
+        if (AnnotationAdapter.zTilePrefetchUrls?.has?.(href)) return false;
+        AnnotationAdapter.zTilePrefetchUrls?.add?.(href);
+        AnnotationAdapter.zTilePrefetchQueue.push(href);
+        AnnotationAdapter.drainZTilePrefetchQueue();
+        return true;
     }
 
     static prefetchAdjacentZPlaneTiles(options = {}) {
-        const viewer = options.viewer || AnnotationAdapter.viewer;
-        if (!viewer?.world) return 0;
-        // Keep active plane opaque; neighbors already preloaded at opacity 0.
-        return AnnotationAdapter.applyZStackLayerOpacities(
-            viewer,
-            options.z ?? AnnotationAdapter.currentZ
+        const z = Math.max(0, Number(options.z ?? AnnotationAdapter.currentZ) || 0);
+        const maxZ = Math.max(
+            0,
+            Number(options.maxZ ?? (AnnotationAdapter.zStackPlaneCount - 1)) || 0
         );
+        const url = options.url
+            || options.tile?.getUrl?.()
+            || options.tile?.url
+            || "";
+        let queued = 0;
+        if (url) {
+            for (const neighbor of [z - 1, z + 1]) {
+                if (neighbor < 0 || neighbor > maxZ) continue;
+                if (AnnotationAdapter.prefetchTileUrl(
+                    AnnotationAdapter.neighborZTileUrl(url, neighbor)
+                )) queued += 1;
+            }
+        }
+        return queued;
+    }
+
+    static bindZTilePrefetch(viewer, options = {}) {
+        if (!viewer || viewer._wsiZTilePrefetchBound) return false;
+        if (typeof viewer.addHandler !== "function") return false;
+        viewer.addHandler("tile-loaded", event => {
+            try {
+                const url = event?.tile?.getUrl?.() || event?.tile?.url || "";
+                AnnotationAdapter.schedulePrefetchAdjacentZPlaneTiles({
+                    viewer,
+                    url,
+                    z: AnnotationAdapter.currentZ,
+                    maxZ: Math.max(0, (options.planeCount || AnnotationAdapter.zStackPlaneCount) - 1)
+                });
+            } catch (_error) {
+                // Never block tile drawing on prefetch faults.
+            }
+        });
+        viewer._wsiZTilePrefetchBound = true;
+        return true;
     }
 
     static schedulePrefetchAdjacentZPlaneTiles(options = {}, delayMs = null) {
@@ -1334,10 +2026,7 @@ class AnnotationAdapter {
             || (typeof document !== "undefined" ? document.getElementById("image-list") : null);
         if (AnnotationAdapter.slideLabelThumbsEnabled) {
             AnnotationAdapter.loadSlideLabelThumbs(scope);
-            // Hybrid OCR: catalog markers first, browser Tesseract for gaps.
-            AnnotationAdapter.applyCatalogClinicalMarkers(scope, [], {
-                allowBrowserFallback: true
-            });
+            AnnotationAdapter.applyCatalogClinicalMarkers(scope, []);
         } else {
             AnnotationAdapter.clearSlideLabelThumbs(scope);
             // Keep clinical marker text; only hide thumbs.
@@ -1463,6 +2152,72 @@ class AnnotationAdapter {
         if (channelsHeader) channelsHeader.hidden = false;
         const aiPanel = root.getElementById("ai-analytics-panel");
         if (aiPanel) aiPanel.hidden = false;
+        const aiLabs = root.getElementById("ai-labs-panel");
+        if (aiLabs) aiLabs.hidden = false;
+        AnnotationAdapter.enforceDefaultClosedPanelState(root);
+    }
+
+    static collapseAiLabsPanel(doc = null) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        if (!root || typeof root.getElementById !== "function") return false;
+        const aiAnalytics = root.getElementById("ai-analytics-panel");
+        const aiLabs = root.getElementById("ai-labs-panel");
+        if (!aiAnalytics && !aiLabs) return false;
+        if (aiAnalytics) {
+            aiAnalytics.open = false;
+            if (typeof aiAnalytics.removeAttribute === "function") {
+                aiAnalytics.removeAttribute("open");
+            }
+            aiAnalytics.classList?.remove?.("show");
+        }
+        if (aiLabs) aiLabs.classList.remove("show");
+        return true;
+    }
+
+    static enforceDefaultClosedPanelState(doc = null) {
+        return AnnotationAdapter.collapseAiLabsPanel(doc);
+    }
+
+    static onSlideClicked(image, doc = null) {
+        const root = doc || (typeof document !== "undefined" ? document : null);
+        if (!root || typeof root.getElementById !== "function") return false;
+        AnnotationAdapter.enforceDefaultClosedPanelState(root);
+        const multilayer = AnnotationAdapter.isMultiLayerSlide(image);
+        const card = root.getElementById("z-controls-card");
+        const zDepth = root.getElementById("z-depth-controls");
+        const aiAnalytics = root.getElementById("ai-analytics-panel");
+        const aiLabs = root.getElementById("ai-labs-panel");
+        const stack = root.querySelector?.(".right-stack-controls");
+        if (!multilayer) {
+            if (card) {
+                card.hidden = true;
+                if (card.style) card.style.display = "none";
+            }
+            return false;
+        }
+        if (card) {
+            card.hidden = false;
+            if (card.style) card.style.display = "block";
+        }
+        if (zDepth) zDepth.hidden = false;
+        if (aiAnalytics) {
+            aiAnalytics.hidden = false;
+            aiAnalytics.open = false;
+        }
+        if (aiLabs) {
+            aiLabs.hidden = false;
+            aiLabs.classList.remove("show");
+        }
+        if (stack) stack.hidden = false;
+        return true;
+    }
+
+    static selectSlideCase(image, doc = null) {
+        return AnnotationAdapter.onSlideClicked(image, doc);
+    }
+
+    static loadSlide(image, doc = null) {
+        return AnnotationAdapter.onSlideClicked(image, doc);
     }
 
     /**
@@ -1732,6 +2487,7 @@ class AnnotationAdapter {
         container.replaceChildren();
         const mode = AnnotationAdapter.resolveCaseFilterMode(selectedCase);
         const list = AnnotationAdapter.sortImagesNaturally(images);
+        AnnotationAdapter.cacheCatalogSidecarMetadata(list);
         const onSelect = typeof options.onSelect === "function" ? options.onSelect : () => {};
         const storagePrefix = String(options.storagePrefix || "wsi.viewer");
         const doc = options.document
@@ -1751,29 +2507,19 @@ class AnnotationAdapter {
             );
             const titled = AnnotationAdapter.assignSidebarDisplayTitles(matched, { useSlideLabel: true });
             for (const { image, title } of titled) {
-                const button = doc.createElement("button");
-                button.type = "button";
-                button.className = "image-button image-button-flat";
-                button.dataset.imageId = image.id;
-                button.dataset.imageName = image.name || "";
-                button.dataset.imagePath = image.relativePath || "";
-                button.dataset.slideLabel = title;
-                const label = doc.createElement("span");
-                label.className = "image-button-label";
-                label.textContent = title;
-                button.append(label);
-                AnnotationAdapter.ensureSidebarOcrResultNode(button, doc);
-                button.title = image.relativePath || image.name || "";
-                button.addEventListener("click", () => onSelect(image));
-                container.append(button);
+                const { row } = AnnotationAdapter.createSlideRow(
+                    doc,
+                    image,
+                    title,
+                    "image-button-flat",
+                    onSelect
+                );
+                container.append(row);
             }
-            // Thumbs optional; catalog markers always; browser OCR fills gaps.
             if (AnnotationAdapter.slideLabelThumbsEnabled) {
                 AnnotationAdapter.loadSlideLabelThumbs(container);
             }
-            AnnotationAdapter.applyCatalogClinicalMarkers(container, matched, {
-                allowBrowserFallback: true
-            });
+            AnnotationAdapter.scheduleSidebarClinicalOcrBatch(container, matched);
             return;
         }
 
@@ -1808,20 +2554,8 @@ class AnnotationAdapter {
             contents.style.display = "none";
             const titled = AnnotationAdapter.assignSidebarDisplayTitles(folderImages);
             for (const { image, title } of titled) {
-                const button = doc.createElement("button");
-                button.type = "button";
-                button.className = "image-button";
-                button.dataset.imageId = image.id;
-                button.dataset.imageName = image.name || "";
-                button.dataset.imagePath = image.relativePath || "";
-                const label = doc.createElement("span");
-                label.className = "image-button-label";
-                label.textContent = title;
-                button.title = image.relativePath || image.name || "";
-                button.append(label);
-                AnnotationAdapter.ensureSidebarOcrResultNode(button, doc);
-                button.addEventListener("click", () => onSelect(image));
-                contents.append(button);
+                const { row } = AnnotationAdapter.createSlideRow(doc, image, title, "", onSelect);
+                contents.append(row);
             }
             details.append(contents);
             details.addEventListener("toggle", () => {
@@ -1843,10 +2577,7 @@ class AnnotationAdapter {
         if (AnnotationAdapter.slideLabelThumbsEnabled) {
             AnnotationAdapter.loadSlideLabelThumbs(container);
         }
-        // Catalog markers for the full inventory; skip browser OCR spam on All Slides.
-        AnnotationAdapter.applyCatalogClinicalMarkers(container, list, {
-            allowBrowserFallback: false
-        });
+        AnnotationAdapter.scheduleSidebarClinicalOcrBatch(container, list);
     }
 
     /** Active Z-movie playback timer handle (null when stopped). */
@@ -2293,10 +3024,27 @@ class AnnotationAdapter {
     }
 
     /** Remember the active OpenSeadragon viewer for mouse-nav + tracker binding. */
+    /**
+     * Rectangle fallback used to leave mouse-nav off. Nuclei overlays must not
+     * keep pan/scroll disabled after segmentation.
+     */
+    static restoreViewerMouseNavUnlessModal(viewer) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const drawing = Boolean(AnnotationAdapter.annotationSpike?.drawingEnabled);
+        const measuring = Boolean(AnnotationAdapter.isMeasurementModeActive);
+        if (drawing || measuring) return false;
+        if (host && typeof host.setMouseNavEnabled === "function") {
+            host.setMouseNavEnabled(true);
+        }
+        if (host?.gestureSettingsMouse) host.gestureSettingsMouse.scrollToZoom = true;
+        return true;
+    }
+
     static setViewer(viewer) {
         AnnotationAdapter.ensureMeasurementDefaults();
         AnnotationAdapter.viewer = viewer || null;
         if (AnnotationAdapter.viewer) {
+            AnnotationAdapter.bindViewportHomeOnOpen(AnnotationAdapter.viewer);
             AnnotationAdapter.bindAiVectorOverlayHandlers(AnnotationAdapter.viewer);
         }
         return AnnotationAdapter.viewer;
@@ -2322,7 +3070,21 @@ class AnnotationAdapter {
         } else {
             AnnotationAdapter.clearMeasureVector({ remove: false });
         }
+        AnnotationAdapter.setMeasureTracking(enabled);
         return AnnotationAdapter.isMeasurementModeActive;
+    }
+
+    /** OSD MouseTracker must stay off unless measure mode is active. */
+    static setMeasureTracking(enabled) {
+        const tracker = AnnotationAdapter.measureMouseTracker;
+        if (!tracker) return false;
+        try {
+            if (typeof tracker.setTracking === "function") tracker.setTracking(!!enabled);
+            else if (typeof tracker.setEnabled === "function") tracker.setEnabled(!!enabled);
+        } catch (_error) {
+            return false;
+        }
+        return !!enabled;
     }
 
     /**
@@ -2351,12 +3113,14 @@ class AnnotationAdapter {
 
         AnnotationAdapter.measureMouseTracker = new OSD.MouseTracker({
             element,
+            startDisabled: true,
             pressHandler: (event) => AnnotationAdapter._measurePressHandler(event),
             dragHandler: (event) => AnnotationAdapter._measureDragHandler(event),
             releaseHandler: (event) => AnnotationAdapter._measureReleaseHandler(event),
             // Some OSD builds only fire dragEnd — treat it like release.
             dragEndHandler: (event) => AnnotationAdapter._measureReleaseHandler(event)
         });
+        AnnotationAdapter.setMeasureTracking(AnnotationAdapter.isMeasurementModeActive);
         return AnnotationAdapter.measureMouseTracker;
     }
 
@@ -3204,6 +3968,13 @@ class AnnotationAdapter {
     static aiBaselineProbability = 0.5;
     static aiBaselineNms = 0.4;
     static AI_VECTOR_OVERLAY_ID = "ai-vector-overlay-layer";
+    static NUCLEUS_TILE_SIZE = 1024;
+    static NUCLEUS_TILE_OVERLAP = 96;
+    static NUCLEUS_TILE_MAX = 1024;
+    static NUCLEUS_MAX_TILES = 80;
+    static NUCLEUS_MAX_COUNT = 2500;
+    static NUCLEUS_FETCH_CONCURRENCY = 3;
+    static lastNucleiCircles = [];
 
     static get ocrAutoBaseline() { return ocrAutoBaseline; }
     static get localizedCellObjects() { return localizedCellObjects; }
@@ -3268,7 +4039,9 @@ class AnnotationAdapter {
         const probEl = get("ai-prob-threshold");
         const nmsEl = get("ai-nms-threshold");
         const overlayEl = get("ai-overlay-visible");
+        const targetEl = get("ai-seg-target");
         const channel = options.channel ?? channelEl?.value ?? "default";
+        const segTarget = options.segTarget ?? targetEl?.value ?? "viewport";
         const probability = AnnotationAdapter.clampAiParam(
             options.probability ?? options.probabilityThreshold ?? probEl?.value,
             AnnotationAdapter.AI_DEFAULT_PROBABILITY
@@ -3278,7 +4051,7 @@ class AnnotationAdapter {
             AnnotationAdapter.AI_DEFAULT_NMS
         );
         const overlayVisible = options.overlayVisible ?? (overlayEl ? overlayEl.checked !== false : AnnotationAdapter.aiOverlayVisible);
-        return { channel, probability, nms, overlayVisible, channelEl, probEl, nmsEl, overlayEl };
+        return { channel, probability, nms, overlayVisible, segTarget, channelEl, probEl, nmsEl, overlayEl, targetEl };
     }
 
     static writeAiLabSlider(inputEl, value, outputId, root) {
@@ -3353,10 +4126,19 @@ class AnnotationAdapter {
         const toggle = host.getElementById("ai-overlay-visible");
         if (toggle && typeof toggle.addEventListener === "function" && toggle.dataset?.aiBound !== "1") {
             toggle.addEventListener("change", () => {
-                AnnotationAdapter.setAiOverlayVisible(!!toggle.checked);
+                AnnotationAdapter.setNucleiOverlaysVisible(!!toggle.checked);
             });
             if (toggle.dataset) toggle.dataset.aiBound = "1";
             AnnotationAdapter.aiOverlayVisible = toggle.checked !== false;
+        }
+        const nucleiButton = host.getElementById("ai-nuclei-visible");
+        if (nucleiButton && typeof nucleiButton.addEventListener === "function"
+            && nucleiButton.dataset?.aiBound !== "1") {
+            nucleiButton.addEventListener("click", () => {
+                AnnotationAdapter.setNucleiOverlaysVisible(!AnnotationAdapter.aiOverlayVisible);
+            });
+            if (nucleiButton.dataset) nucleiButton.dataset.aiBound = "1";
+            AnnotationAdapter.setNucleiOverlaysVisible(AnnotationAdapter.aiOverlayVisible !== false);
         }
         const resetBtn = host.getElementById("ai-reset-baseline-btn");
         if (resetBtn && typeof resetBtn.addEventListener === "function" && resetBtn.dataset?.aiBound !== "1") {
@@ -3423,10 +4205,43 @@ class AnnotationAdapter {
     }
 
     static setAiOverlayVisible(visible) {
+        return AnnotationAdapter.setNucleiOverlaysVisible(visible);
+    }
+
+    static setNucleiOverlaysVisible(visible) {
         AnnotationAdapter.aiOverlayVisible = !!visible;
         const overlay = AnnotationAdapter.aiNucleiOverlayEl;
         if (overlay && overlay.style) overlay.style.display = visible ? "block" : "none";
-        if (visible) AnnotationAdapter.renderSynchronizedCellObjects();
+        for (const element of AnnotationAdapter.aiNucleusOverlayElements || []) {
+            if (element?.style) element.style.display = visible ? "" : "none";
+        }
+        const host = typeof document !== "undefined" ? document : null;
+        const button = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-nuclei-visible")
+            : null;
+        if (button) {
+            button.setAttribute("aria-pressed", String(!!visible));
+            button.textContent = "Nuclei";
+            const action = visible ? "Hide segmented nuclei" : "Show segmented nuclei";
+            button.title = action;
+            button.setAttribute("aria-label", "Nuclei");
+        }
+        const toggle = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-overlay-visible")
+            : null;
+        if (toggle && toggle.checked !== !!visible) toggle.checked = !!visible;
+        if (visible) {
+            if (typeof AnnotationAdapter.renderSynchronizedCellObjects === "function") {
+                AnnotationAdapter.renderSynchronizedCellObjects();
+            }
+            if ((AnnotationAdapter.aiNucleusOverlayElements || []).length === 0
+                && (AnnotationAdapter.lastNucleiCircles || []).length) {
+                AnnotationAdapter.paintNucleiCircleOverlays(
+                    AnnotationAdapter.viewer,
+                    AnnotationAdapter.lastNucleiCircles
+                );
+            }
+        }
         return AnnotationAdapter.aiOverlayVisible;
     }
 
@@ -3623,6 +4438,7 @@ class AnnotationAdapter {
         const pixels = imageData?.data;
         const gray = new Float32Array(Math.max(0, width * height));
         const channel = AnnotationAdapter.normalizeSegChannel(options.channel);
+        const preferBrightField = options.nuclear !== false && channel === 0;
         if (pixels && gray.length) {
             for (let i = 0, p = 0; i < pixels.length && p < gray.length; i += 4, p += 1) {
                 if (channel === 1) {
@@ -3631,6 +4447,8 @@ class AnnotationAdapter {
                     gray[p] = pixels[i + 1] / 255;
                 } else if (channel === 3) {
                     gray[p] = pixels[i] / 255;
+                } else if (preferBrightField) {
+                    gray[p] = Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) / 255;
                 } else {
                     gray[p] = (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]) / 255;
                 }
@@ -3760,6 +4578,188 @@ class AnnotationAdapter {
             });
         }
         return nuclei;
+    }
+
+    static downsampleGray(gray, width, height, maxSide = 960) {
+        const w = Math.max(1, Number(width) || 1);
+        const h = Math.max(1, Number(height) || 1);
+        const scale = Math.max(w, h) / Math.max(1, maxSide);
+        if (!(scale > 1.15) || !gray) return { gray, width: w, height: h, scale: 1 };
+        const tw = Math.max(1, Math.round(w / scale));
+        const th = Math.max(1, Math.round(h / scale));
+        const out = new Float32Array(tw * th);
+        for (let y = 0; y < th; y += 1) {
+            const sy = Math.min(h - 1, Math.round(y * scale));
+            for (let x = 0; x < tw; x += 1) {
+                const sx = Math.min(w - 1, Math.round(x * scale));
+                out[y * tw + x] = gray[sy * w + sx];
+            }
+        }
+        return { gray: out, width: tw, height: th, scale };
+    }
+
+    static localizeNucleiFromIntensity(gray, width, height, options = {}) {
+        const maxSide = Number(options.maxSide) > 0
+            ? Number(options.maxSide)
+            : AnnotationAdapter.NUCLEUS_TILE_SIZE;
+        const sampled = AnnotationAdapter.downsampleGray(gray, width, height, maxSide);
+        const src = sampled.gray;
+        const w = sampled.width;
+        const h = sampled.height;
+        const scale = sampled.scale || 1;
+        const probability = Number(options.probability);
+        const minArea = Number(options.minArea) > 0 ? Number(options.minArea) : 8;
+        const maxArea = Number(options.maxArea) > 0 ? Number(options.maxArea) : 1600;
+        let sum = 0;
+        let count = 0;
+        let max = 0;
+        for (let i = 0; i < src.length; i += 1) {
+            const v = src[i];
+            if (v > 0.05) {
+                sum += v;
+                count += 1;
+            }
+            if (v > max) max = v;
+        }
+        if (max < 0.08 || count < minArea) return [];
+        const mean = count ? sum / count : 0;
+        const strict = Number.isFinite(probability) ? probability : AnnotationAdapter.AI_DEFAULT_PROBABILITY;
+        const cut = Math.max(0.12, mean + (0.14 + strict * 0.42) * Math.max(0.04, max - mean));
+        const blurred = AnnotationAdapter.blurGray3(src, w, h);
+        const peaks = AnnotationAdapter.findStarDistPeaks(blurred, w, h, cut);
+        const nuclei = [];
+        for (const peak of peaks) {
+            const polygon = AnnotationAdapter.traceStarConvexPolygon(
+                blurred,
+                w,
+                h,
+                peak.x,
+                peak.y,
+                cut,
+                Math.max(10, peak.radius * 2.6)
+            );
+            let minX = peak.x;
+            let minY = peak.y;
+            let maxX = peak.x;
+            let maxY = peak.y;
+            for (const [px, py] of polygon) {
+                if (px < minX) minX = px;
+                if (py < minY) minY = py;
+                if (px > maxX) maxX = px;
+                if (py > maxY) maxY = py;
+            }
+            const bw = Math.max(1, maxX - minX);
+            const bh = Math.max(1, maxY - minY);
+            const area = Math.max(minArea, bw * bh * 0.6);
+            if (area > maxArea * 4) continue;
+            const radius = Math.max(3, Math.min(bw, bh) * 0.5, peak.radius);
+            nuclei.push({
+                x: peak.x * scale,
+                y: peak.y * scale,
+                minX: minX * scale,
+                minY: minY * scale,
+                maxX: maxX * scale,
+                maxY: maxY * scale,
+                area: area * scale * scale,
+                radius: radius * scale,
+                score: peak.score,
+                polygon: polygon.map(([px, py]) => [px * scale, py * scale])
+            });
+        }
+        return nuclei;
+    }
+
+    static blurGray3(src, width, height) {
+        const out = new Float32Array(src.length);
+        for (let y = 0; y < height; y += 1) {
+            for (let x = 0; x < width; x += 1) {
+                let sum = 0;
+                let n = 0;
+                for (let dy = -1; dy <= 1; dy += 1) {
+                    const yy = y + dy;
+                    if (yy < 0 || yy >= height) continue;
+                    for (let dx = -1; dx <= 1; dx += 1) {
+                        const xx = x + dx;
+                        if (xx < 0 || xx >= width) continue;
+                        sum += src[yy * width + xx];
+                        n += 1;
+                    }
+                }
+                out[y * width + x] = n ? sum / n : src[y * width + x];
+            }
+        }
+        return out;
+    }
+
+    /**
+     * StarDist-style object centers: local maxima on the DAPI intensity
+     * field, then 32-ray star-convex outlines. Same post-process geometry
+     * as 2D_versatile_fluo, run on full-resolution tiles.
+     */
+    static findStarDistPeaks(gray, width, height, threshold) {
+        const cut = Math.max(0.08, Number(threshold) || 0.14);
+        const radius = 2;
+        const minDist = 5;
+        const peaks = [];
+        for (let y = radius; y < height - radius; y += 1) {
+            for (let x = radius; x < width - radius; x += 1) {
+                const v = gray[y * width + x];
+                if (v < cut) continue;
+                let isMax = true;
+                for (let dy = -radius; dy <= radius && isMax; dy += 1) {
+                    for (let dx = -radius; dx <= radius; dx += 1) {
+                        if (!dx && !dy) continue;
+                        if (gray[(y + dy) * width + (x + dx)] > v) {
+                            isMax = false;
+                            break;
+                        }
+                    }
+                }
+                if (!isMax) continue;
+                peaks.push({ x, y, score: v, radius: 6 });
+            }
+        }
+        peaks.sort((a, b) => b.score - a.score);
+        const kept = [];
+        const minDist2 = minDist * minDist;
+        for (const peak of peaks) {
+            const near = kept.some((item) => {
+                const dx = item.x - peak.x;
+                const dy = item.y - peak.y;
+                return (dx * dx + dy * dy) < minDist2;
+            });
+            if (!near) kept.push(peak);
+        }
+        return kept;
+    }
+
+    /**
+     * StarDist-style star-convex outline: 32 rays from the DAPI centroid
+     * stop at the local intensity falloff. This is the StarDist output
+     * geometry, not the pretrained 2D_versatile_fluo CNN.
+     */
+    static STARDIST_RAYS = 32;
+
+    static traceStarConvexPolygon(gray, width, height, cx, cy, threshold, maxRadius) {
+        const rays = AnnotationAdapter.STARDIST_RAYS;
+        const cut = Math.max(0.05, Number(threshold) * 0.82);
+        const limit = Math.max(4, Number(maxRadius) || 12);
+        const ring = [];
+        for (let i = 0; i < rays; i += 1) {
+            const angle = (i / rays) * Math.PI * 2;
+            const dx = Math.cos(angle);
+            const dy = Math.sin(angle);
+            let last = 1.5;
+            for (let r = 1; r <= limit; r += 1) {
+                const x = Math.round(cx + dx * r);
+                const y = Math.round(cy + dy * r);
+                if (x < 0 || y < 0 || x >= width || y >= height) break;
+                if (gray[y * width + x] < cut) break;
+                last = r;
+            }
+            ring.push([cx + dx * last, cy + dy * last]);
+        }
+        return ring;
     }
 
     static convexHull(points) {
@@ -4057,6 +5057,20 @@ class AnnotationAdapter {
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
         for (const obj of localizedCellObjects) {
+            if (obj?.type === "Circle" || Number.isFinite(Number(obj?.cx ?? obj?.x))) {
+                const mapped = AnnotationAdapter.imagePointToViewerElement(
+                    [obj.cx ?? obj.x, obj.cy ?? obj.y],
+                    viewer
+                );
+                if (!mapped) continue;
+                const radius = Math.max(4, Number(obj.r ?? obj.radius) || 12);
+                ctx.beginPath();
+                ctx.arc(mapped.x, mapped.y, radius, 0, Math.PI * 2);
+                ctx.fillStyle = "rgba(57,255,20,.14)";
+                ctx.fill();
+                ctx.stroke();
+                continue;
+            }
             const ring = obj?.imageCoordinates || [];
             if (ring.length < 2) continue;
             ctx.beginPath();
@@ -4091,6 +5105,7 @@ class AnnotationAdapter {
     static clearAiNucleiOverlay({ remove = false, viewer = null } = {}) {
         const host = viewer || AnnotationAdapter.viewer;
         AnnotationAdapter.detachAiNucleiOverlay(host);
+        AnnotationAdapter.clearNucleiCircleOverlays(host);
         const canvas = AnnotationAdapter.aiNucleiOverlayEl;
         if (canvas) {
             const ctx = typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
@@ -4129,96 +5144,687 @@ class AnnotationAdapter {
         return { root, captured, payload, magnitude, config };
     }
 
-    static async segmentCellNuclei(options = {}) {
-        try {
-            const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
-            const config = AnnotationAdapter.readAiLabConfig(root, options);
-            AnnotationAdapter.setAiStatus(AnnotationAdapter.AI_STATUS_EXTRACTING, root);
-            const captured = options.imageData
-                ? {
-                    imageData: options.imageData,
-                    width: options.imageData.width,
-                    height: options.imageData.height,
-                    canvas: options.canvas || null
-                }
-                : AnnotationAdapter.captureViewportPixels(options.viewer, root);
-            if (!captured?.imageData) {
-                AnnotationAdapter.setAiStatus("AI Pipeline: No viewport canvas available.", root);
-                return { count: 0, nuclei: [] };
-            }
-            const payload = AnnotationAdapter.imageDataToNormalizedFloat32(captured.imageData, {
-                channel: config.channel
-            });
-            const density = AnnotationAdapter.scanChannelDensity(
-                payload.gray,
-                payload.width,
-                payload.height
-            );
-            let probability = config.probability;
-            let nms = config.nms;
-            let autoTuned = false;
-            if (density.highDensity && !options.skipAutoTune) {
-                const tuned = AnnotationAdapter.autoTuneDenseTissue(probability, nms);
-                probability = tuned.probability;
-                nms = tuned.nms;
-                autoTuned = true;
-                ocrAutoBaseline.prob = probability;
-                ocrAutoBaseline.nms = nms;
-                AnnotationAdapter.writeAiLabSlider(config.probEl, probability, "ai-prob-threshold-value", root);
-                AnnotationAdapter.writeAiLabSlider(config.nmsEl, nms, "ai-nms-threshold-value", root);
-                AnnotationAdapter.setAiStatus(
-                    `[AI Status: High-Density Tissue Detected. Auto-tuned parameters: Prob=${probability.toFixed(2)}, NMS=${nms.toFixed(2)}]`,
-                    root
-                );
-            }
-            const magnitude = AnnotationAdapter.sobelMagnitude(payload.gray, payload.width, payload.height);
-            const localized = AnnotationAdapter.localizeNucleiFromEdges(
-                magnitude,
-                payload.width,
-                payload.height,
-                { ...options, probability, nms }
-            );
-            const nuclei = AnnotationAdapter.attachNucleiImageCoordinates(
-                AnnotationAdapter.suppressOverlappingNuclei(localized, nms),
-                captured.canvas,
-                options.viewer || AnnotationAdapter.viewer
-            );
-            AnnotationAdapter.rememberAiBaseline(probability, nms);
-            const objects = AnnotationAdapter.replaceLocalizedCellObjects(
-                AnnotationAdapter.nucleiToLocalizedCellObjects(nuclei)
-            );
-            if (options.viewer || options.overlayHost || options.overlayCanvas || AnnotationAdapter.viewer) {
-                AnnotationAdapter.registerAiVectorOverlay(options.viewer || AnnotationAdapter.viewer, {
-                    viewer: options.viewer,
-                    canvas: options.overlayCanvas,
-                    root,
-                    overlayVisible: config.overlayVisible
-                });
-                AnnotationAdapter.renderSynchronizedCellObjects(options.viewer || AnnotationAdapter.viewer);
-            }
-            if (payload.tensor && typeof payload.tensor.dispose === "function") {
-                payload.tensor.dispose();
-            }
-            const status = autoTuned
-                ? `[AI Status: High-Density Tissue Detected. Auto-tuned parameters: Prob=${probability.toFixed(2)}, NMS=${nms.toFixed(2)}]`
-                : `AI Pipeline: Successfully localized ${nuclei.length} cellular nuclei coordinates!`;
-            AnnotationAdapter.setAiStatus(status, root);
-            return {
-                count: nuclei.length,
-                nuclei,
-                objects,
-                localizedCellObjects: objects,
-                status,
-                autoTuned,
-                probability,
-                nms,
-                density
-            };
-        } catch (error) {
-            const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
-            AnnotationAdapter.setAiStatus(`AI Pipeline: ${error?.message || "analysis failed"}`, root);
-            return { count: 0, nuclei: [], error };
+    static aiNucleusOverlayElements = [];
+
+    static canvasPixelToViewerPixel(pixelX, pixelY, canvas, viewer) {
+        let elementX = Number(pixelX);
+        let elementY = Number(pixelY);
+        if (!Number.isFinite(elementX) || !Number.isFinite(elementY)) return null;
+        if (canvas && typeof canvas.getBoundingClientRect === "function") {
+            const canvasRect = canvas.getBoundingClientRect();
+            const host = viewer?.element || viewer?.container;
+            const hostRect = host && typeof host.getBoundingClientRect === "function"
+                ? host.getBoundingClientRect()
+                : canvasRect;
+            const scaleX = canvas.width ? canvasRect.width / canvas.width : 1;
+            const scaleY = canvas.height ? canvasRect.height / canvas.height : 1;
+            elementX = pixelX * scaleX + (canvasRect.left - hostRect.left);
+            elementY = pixelY * scaleY + (canvasRect.top - hostRect.top);
         }
+        return { x: elementX, y: elementY };
+    }
+
+    static screenPixelToImagePoint(viewer, pixelX, pixelY, canvas) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const viewport = host?.viewport;
+        const OpenSeadragon = AnnotationAdapter._openSeadragon();
+        if (!viewport || !OpenSeadragon?.Point) return null;
+        if (typeof viewport.pointFromPixel !== "function") return null;
+        const viewerPixel = canvas
+            ? AnnotationAdapter.canvasPixelToViewerPixel(pixelX, pixelY, canvas, host)
+            : { x: pixelX, y: pixelY };
+        if (!viewerPixel) return null;
+        // Force circle objects to bind natively to the slide's pixel matrix
+        const viewportPoint = viewport.pointFromPixel(
+            new OpenSeadragon.Point(viewerPixel.x, viewerPixel.y)
+        );
+        const item = host?.world && typeof host.world.getItemAt === "function"
+            ? host.world.getItemAt(0)
+            : null;
+        const mapper = (item && typeof item.viewportToImageCoordinates === "function")
+            ? item
+            : viewport;
+        if (typeof mapper.viewportToImageCoordinates !== "function") return null;
+        const imagePoint = mapper.viewportToImageCoordinates(viewportPoint);
+        const x = Number(imagePoint?.x);
+        const y = Number(imagePoint?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return { x, y, viewportPoint, imagePoint };
+    }
+
+    static imageToViewportWidth(viewer, imageWidth) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const viewport = host?.viewport;
+        const span = Number(imageWidth);
+        if (!viewport || !Number.isFinite(span)) return null;
+        if (typeof viewport.imageToViewportWidth === "function") {
+            const width = Number(viewport.imageToViewportWidth(span));
+            if (Number.isFinite(width) && width > 0) return width;
+        }
+        const item = host?.world && typeof host.world.getItemAt === "function"
+            ? host.world.getItemAt(0)
+            : null;
+        if (item && typeof item.imageToViewportWidth === "function") {
+            const width = Number(item.imageToViewportWidth(span));
+            if (Number.isFinite(width) && width > 0) return width;
+        }
+        const mapper = (item && typeof item.imageToViewportCoordinates === "function")
+            ? item
+            : viewport;
+        if (typeof mapper.imageToViewportCoordinates !== "function") return null;
+        const OpenSeadragon = AnnotationAdapter._openSeadragon();
+        const origin = mapper.imageToViewportCoordinates(
+            OpenSeadragon?.Point ? new OpenSeadragon.Point(0, 0) : 0,
+            OpenSeadragon?.Point ? undefined : 0
+        );
+        const edge = mapper.imageToViewportCoordinates(
+            OpenSeadragon?.Point ? new OpenSeadragon.Point(span, 0) : span,
+            OpenSeadragon?.Point ? undefined : 0
+        );
+        const width = Math.abs(Number(edge?.x) - Number(origin?.x));
+        return Number.isFinite(width) && width > 0 ? width : null;
+    }
+
+    static readViewportImageBounds(viewer, options = {}) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const meta = AnnotationAdapter.imageMetadata;
+        const item = host?.world && typeof host.world.getItemAt === "function"
+            ? host.world.getItemAt(0)
+            : null;
+        const sourceWidth = Number(item?.source?.width ?? meta?.width) || 0;
+        const sourceHeight = Number(item?.source?.height ?? meta?.height) || 0;
+        const element = host?.element || host?.canvas;
+        const pixelWidth = Math.max(1, Number(element?.clientWidth) || 1);
+        const pixelHeight = Math.max(1, Number(element?.clientHeight) || 1);
+        const target = String(options.segTarget || AnnotationAdapter.readAiLabConfig(options.root).segTarget || "viewport");
+        if (target === "annotation") {
+            const selected = AnnotationAdapter.readSelectedAnnotationImageBounds();
+            // #region agent log
+            wsiDebugLog("F", "annotation-adapter.js:readViewportImageBounds", "seg target annotation", {
+                hasBounds: Boolean(selected),
+                x: selected?.x,
+                y: selected?.y,
+                width: selected?.width,
+                height: selected?.height
+            });
+            // #endregion
+            if (selected) {
+                return {
+                    ...selected,
+                    sourceWidth,
+                    sourceHeight,
+                    pixelWidth,
+                    pixelHeight
+                };
+            }
+        }
+        const topLeft = AnnotationAdapter.screenPixelToImagePoint(host, 0, 0);
+        const bottomRight = AnnotationAdapter.screenPixelToImagePoint(host, pixelWidth, pixelHeight);
+        if (topLeft && bottomRight) {
+            return {
+                x: Math.min(topLeft.x, bottomRight.x),
+                y: Math.min(topLeft.y, bottomRight.y),
+                width: Math.abs(bottomRight.x - topLeft.x),
+                height: Math.abs(bottomRight.y - topLeft.y),
+                sourceWidth,
+                sourceHeight,
+                pixelWidth,
+                pixelHeight
+            };
+        }
+        return {
+            x: 0,
+            y: 0,
+            width: sourceWidth,
+            height: sourceHeight,
+            sourceWidth,
+            sourceHeight,
+            pixelWidth,
+            pixelHeight
+        };
+    }
+
+    static readSelectedAnnotationImageBounds() {
+        const spike = AnnotationAdapter.annotationSpike;
+        const selected = spike?.getSelectedAnnotations?.()?.[0];
+        if (!selected || typeof spike.getAnnotationBounds !== "function") return null;
+        try {
+            const bounds = spike.getAnnotationBounds(selected);
+            const x = Number(bounds?.x);
+            const y = Number(bounds?.y);
+            const width = Number(bounds?.width);
+            const height = Number(bounds?.height);
+            if (![x, y, width, height].every(Number.isFinite) || !(width > 1) || !(height > 1)) {
+                return null;
+            }
+            return { x, y, width, height };
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    static tileImageBounds(bounds, tileSize = AnnotationAdapter.NUCLEUS_TILE_SIZE, overlap = AnnotationAdapter.NUCLEUS_TILE_OVERLAP) {
+        const x0 = Math.max(0, Math.floor(Number(bounds?.x) || 0));
+        const y0 = Math.max(0, Math.floor(Number(bounds?.y) || 0));
+        const width = Math.max(1, Math.ceil(Number(bounds?.width) || 1));
+        const height = Math.max(1, Math.ceil(Number(bounds?.height) || 1));
+        const x1 = x0 + width;
+        const y1 = y0 + height;
+        const size = Math.max(64, Number(tileSize) || AnnotationAdapter.NUCLEUS_TILE_SIZE);
+        const step = Math.max(32, size - Math.max(0, Number(overlap) || 0));
+        const tiles = [];
+        for (let y = y0; y < y1; y += step) {
+            for (let x = x0; x < x1; x += step) {
+                const w = Math.min(size, x1 - x);
+                const h = Math.min(size, y1 - y);
+                tiles.push({
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    edgeLeft: x <= x0,
+                    edgeTop: y <= y0,
+                    edgeRight: x + w >= x1,
+                    edgeBottom: y + h >= y1
+                });
+            }
+        }
+        return tiles;
+    }
+
+    static planNucleusTiles(bounds) {
+        const overlap = AnnotationAdapter.NUCLEUS_TILE_OVERLAP;
+        let tileSize = AnnotationAdapter.NUCLEUS_TILE_SIZE;
+        let tiles = AnnotationAdapter.tileImageBounds(bounds, tileSize, overlap);
+        while (tiles.length > AnnotationAdapter.NUCLEUS_MAX_TILES && tileSize < 8192) {
+            tileSize *= 2;
+            tiles = AnnotationAdapter.tileImageBounds(bounds, tileSize, overlap);
+        }
+        if (tiles.length > AnnotationAdapter.NUCLEUS_MAX_TILES) {
+            tiles = tiles.slice(0, AnnotationAdapter.NUCLEUS_MAX_TILES);
+        }
+        return {
+            tiles,
+            tileSize,
+            fullRes: tileSize <= AnnotationAdapter.NUCLEUS_TILE_SIZE
+        };
+    }
+
+    static nucleusInTileInterior(nucleus, tile, margin) {
+        const x = Number(nucleus?.x);
+        const y = Number(nucleus?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+        const pad = Math.max(0, Number(margin) || 0);
+        const minX = tile.x + (tile.edgeLeft ? 0 : pad);
+        const minY = tile.y + (tile.edgeTop ? 0 : pad);
+        const maxX = tile.x + tile.width - (tile.edgeRight ? 0 : pad);
+        const maxY = tile.y + tile.height - (tile.edgeBottom ? 0 : pad);
+        return x >= minX && x < maxX && y >= minY && y < maxY;
+    }
+
+    static async fetchNativeRegionTile(imageId, tile, options = {}) {
+        const series = Number(options.series ?? AnnotationAdapter.currentSeries) || 0;
+        const z = Number(options.z ?? AnnotationAdapter.currentZ) || 0;
+        const max = Number(options.max) > 0 ? Number(options.max) : AnnotationAdapter.NUCLEUS_TILE_MAX;
+        const url = `/api/images/${encodeURIComponent(imageId)}/region.png`
+            + `?x=${tile.x}&y=${tile.y}&width=${tile.width}&height=${tile.height}`
+            + `&max=${max}&series=${series}&z=${z}`;
+        const response = await fetch(url, { credentials: "same-origin" });
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        if (!blob || !blob.size) return null;
+        const bitmap = (typeof createImageBitmap === "function")
+            ? await createImageBitmap(blob)
+            : await AnnotationAdapter.loadImageElementForOcrDraw(URL.createObjectURL(blob));
+        if (!bitmap) return null;
+        const rasterWidth = Number(bitmap.width || bitmap.naturalWidth) || 0;
+        const rasterHeight = Number(bitmap.height || bitmap.naturalHeight) || 0;
+        if (rasterWidth < 8 || rasterHeight < 8) return null;
+        const surface = AnnotationAdapter.createOffscreenSurface(
+            rasterWidth,
+            rasterHeight,
+            options.root || options.document
+        );
+        const ctx = surface && typeof surface.getContext === "function"
+            ? surface.getContext("2d", { willReadFrequently: true })
+            : null;
+        if (!ctx) return null;
+        ctx.drawImage(bitmap, 0, 0);
+        if (typeof bitmap.close === "function") {
+            try { bitmap.close(); } catch (_error) { /* ignore */ }
+        }
+        return {
+            imageData: ctx.getImageData(0, 0, rasterWidth, rasterHeight),
+            width: rasterWidth,
+            height: rasterHeight,
+            originX: tile.x,
+            originY: tile.y,
+            scaleX: tile.width / rasterWidth,
+            scaleY: tile.height / rasterHeight,
+            tile
+        };
+    }
+
+    static async fetchNativeViewportRegion(viewer, options = {}) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const imageId = options.imageId || AnnotationAdapter.currentImageId;
+        const bounds = AnnotationAdapter.readViewportImageBounds(host);
+        if (!imageId || !(bounds.width > 1) || !(bounds.height > 1)) return null;
+        const x = Math.max(0, Math.floor(bounds.x));
+        const y = Math.max(0, Math.floor(bounds.y));
+        const width = Math.max(1, Math.ceil(bounds.width));
+        const height = Math.max(1, Math.ceil(bounds.height));
+        return AnnotationAdapter.fetchNativeRegionTile(imageId, { x, y, width, height }, {
+            ...options,
+            max: Number(options.max) > 0 ? Number(options.max) : 2048
+        });
+    }
+
+    static async mapWithConcurrency(items, limit, worker) {
+        const list = Array.isArray(items) ? items : [];
+        const width = Math.max(1, Number(limit) || 1);
+        const out = new Array(list.length);
+        let cursor = 0;
+        const run = async () => {
+            while (cursor < list.length) {
+                const index = cursor;
+                cursor += 1;
+                out[index] = await worker(list[index], index);
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(width, list.length) }, () => run()));
+        return out;
+    }
+
+    static mapRegionNucleiToImageCircles(nuclei, region) {
+        const originX = Number(region?.originX) || 0;
+        const originY = Number(region?.originY) || 0;
+        const scaleX = Number(region?.scaleX) || 1;
+        const scaleY = Number(region?.scaleY) || 1;
+        const circles = [];
+        let id = 0;
+        for (const nucleus of nuclei || []) {
+            const centerX = originX + Number(nucleus.x) * scaleX;
+            const centerY = originY + Number(nucleus.y) * scaleY;
+            const radius = Math.max(4, Number(nucleus.radius) * Math.min(scaleX, scaleY) || 8);
+            if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) continue;
+            const imageCoordinates = [];
+            for (const point of nucleus.polygon || []) {
+                const px = originX + Number(point[0]) * scaleX;
+                const py = originY + Number(point[1]) * scaleY;
+                if (Number.isFinite(px) && Number.isFinite(py)) imageCoordinates.push([px, py]);
+            }
+            circles.push({
+                id: (id += 1),
+                type: imageCoordinates.length >= 3 ? "Polygon" : "Circle",
+                centerX,
+                centerY,
+                cx: centerX,
+                cy: centerY,
+                x: centerX,
+                y: centerY,
+                r: radius,
+                radius,
+                imageCoordinates,
+                classification: "nucleus"
+            });
+        }
+        return circles;
+    }
+
+    static mapDetectedNucleiToImageCircles(nuclei, canvas, viewer) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const bounds = AnnotationAdapter.readViewportImageBounds(host);
+        const sourceWidth = Number(bounds.sourceWidth || AnnotationAdapter.imageMetadata?.width);
+        const sourceHeight = Number(bounds.sourceHeight || AnnotationAdapter.imageMetadata?.height);
+        const circles = [];
+        let id = 0;
+        for (const nucleus of nuclei || []) {
+            const pixelX = Number(nucleus.x);
+            const pixelY = Number(nucleus.y);
+            const screenRadius = Math.max(3, Number(nucleus.radius) || 8);
+            const mapped = AnnotationAdapter.screenPixelToImagePoint(host, pixelX, pixelY, canvas);
+            const radial = AnnotationAdapter.screenPixelToImagePoint(
+                host,
+                pixelX + screenRadius,
+                pixelY,
+                canvas
+            );
+            if (!mapped) continue;
+            const centerX = mapped.x;
+            const centerY = mapped.y;
+            let radius = radial ? Math.abs(radial.x - mapped.x) : 0;
+            if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) continue;
+            if (sourceWidth > 0 && (centerX < 0 || centerX > sourceWidth)) continue;
+            if (sourceHeight > 0 && (centerY < 0 || centerY > sourceHeight)) continue;
+            if (!(radius > 0)) {
+                radius = Math.max(6, screenRadius);
+            }
+            const imageCoordinates = [];
+            for (const point of nucleus.polygon || []) {
+                const vertex = AnnotationAdapter.screenPixelToImagePoint(
+                    host,
+                    Number(point[0]),
+                    Number(point[1]),
+                    canvas
+                );
+                if (!vertex) continue;
+                imageCoordinates.push([vertex.x, vertex.y]);
+            }
+            circles.push({
+                id: (id += 1),
+                type: imageCoordinates.length >= 3 ? "Polygon" : "Circle",
+                centerX,
+                centerY,
+                cx: centerX,
+                cy: centerY,
+                x: centerX,
+                y: centerY,
+                r: radius,
+                radius,
+                imageCoordinates,
+                classification: "nucleus"
+            });
+        }
+        return circles;
+    }
+
+    static nucleiFromGrayField(gray, width, height, options = {}) {
+        const intensity = AnnotationAdapter.localizeNucleiFromIntensity(gray, width, height, {
+            probability: options.probability,
+            minArea: options.minArea || 8,
+            maxArea: options.maxArea || 1600,
+            maxSide: options.maxSide || AnnotationAdapter.NUCLEUS_TILE_SIZE
+        });
+        const cap = Number(options.maxCount) > 0
+            ? Number(options.maxCount)
+            : AnnotationAdapter.NUCLEUS_MAX_COUNT;
+        return AnnotationAdapter.suppressOverlappingNuclei(intensity, options.nms).slice(0, cap);
+    }
+
+    static async buildTissueLockedNucleiCircles(viewer, options = {}) {
+        const host = viewer || options.viewer || AnnotationAdapter.viewer;
+        const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
+        const config = AnnotationAdapter.readAiLabConfig(root, options);
+        const imageId = options.imageId || AnnotationAdapter.currentImageId;
+        const bounds = AnnotationAdapter.readViewportImageBounds(host, {
+            ...options,
+            root,
+            segTarget: config.segTarget
+        });
+        const plan = AnnotationAdapter.planNucleusTiles(bounds);
+        if (imageId && plan.tiles.length) {
+            AnnotationAdapter.setAiStatus(
+                `AI Pipeline: StarDist tiles ${plan.tiles.length} full-res subareas…`,
+                root
+            );
+            const margin = Math.floor(AnnotationAdapter.NUCLEUS_TILE_OVERLAP / 2);
+            const mapped = [];
+            try {
+                const regions = await AnnotationAdapter.mapWithConcurrency(
+                    plan.tiles,
+                    AnnotationAdapter.NUCLEUS_FETCH_CONCURRENCY,
+                    (tile) => AnnotationAdapter.fetchNativeRegionTile(imageId, tile, {
+                        ...options,
+                        root,
+                        max: AnnotationAdapter.NUCLEUS_TILE_MAX
+                    })
+                );
+                for (const region of regions) {
+                    if (!region?.imageData) continue;
+                    const payload = AnnotationAdapter.imageDataToNormalizedFloat32(region.imageData, {
+                        channel: config.channel
+                    });
+                    const nuclei = AnnotationAdapter.nucleiFromGrayField(
+                        payload.gray,
+                        payload.width,
+                        payload.height,
+                        { ...config, maxSide: Math.max(payload.width, payload.height) }
+                    );
+                    const circles = AnnotationAdapter.mapRegionNucleiToImageCircles(nuclei, region);
+                    for (const circle of circles) {
+                        if (AnnotationAdapter.nucleusInTileInterior(circle, region.tile, margin)) {
+                            mapped.push(circle);
+                        }
+                    }
+                }
+            } catch (_error) {
+                mapped.length = 0;
+            }
+            if (mapped.length) {
+                const merged = AnnotationAdapter.suppressOverlappingNuclei(
+                    mapped.map((circle) => ({
+                        ...circle,
+                        minX: circle.centerX - circle.radius,
+                        minY: circle.centerY - circle.radius,
+                        maxX: circle.centerX + circle.radius,
+                        maxY: circle.centerY + circle.radius,
+                        area: Math.PI * circle.radius * circle.radius
+                    })),
+                    config.nms
+                ).slice(0, AnnotationAdapter.NUCLEUS_MAX_COUNT);
+                const outlined = merged.filter((item) => (item.imageCoordinates || []).length >= 3).length;
+                const resNote = plan.fullRes ? "full-res" : "capped";
+                return {
+                    circles: merged,
+                    status: `AI Pipeline: Locked ${merged.length} StarDist DAPI outlines from ${plan.tiles.length} ${resNote} tiles (${outlined} polygons).`
+                };
+            }
+        }
+        const analysis = AnnotationAdapter._analyzeViewport({ ...options, viewer: host, root });
+        if (!analysis?.payload) return { circles: [], status: "AI Pipeline: No viewport canvas available." };
+        const suppressed = AnnotationAdapter.nucleiFromGrayField(
+            analysis.payload.gray,
+            analysis.payload.width,
+            analysis.payload.height,
+            analysis.config
+        );
+        const circles = AnnotationAdapter.mapDetectedNucleiToImageCircles(
+            suppressed,
+            analysis.captured?.canvas,
+            host
+        );
+        const outlined = circles.filter((item) => (item.imageCoordinates || []).length >= 3).length;
+        const status = circles.length
+            ? `AI Pipeline: Locked ${circles.length} star-convex DAPI outlines (${outlined} polygons).`
+            : "AI Pipeline: No nuclei detected in the visible field.";
+        return { circles, status };
+    }
+
+    static isNucleusVectorOverlayElement(element) {
+        if (!element) return false;
+        if (element.classList?.contains("nucleus-vector-ring")) return true;
+        if (element.classList?.contains("nucleus-stardist-layer")) return true;
+        if (element.classList?.contains("wsi-ai-nuclei-overlay")) return true;
+        if (element.id === AnnotationAdapter.AI_VECTOR_OVERLAY_ID) return true;
+        return element.getAttribute?.("data-ai-nucleus-overlay") === "1";
+    }
+
+    static clearNucleiCircleOverlays(viewer) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const known = Array.isArray(AnnotationAdapter.aiNucleusOverlayElements)
+            ? AnnotationAdapter.aiNucleusOverlayElements.slice()
+            : [];
+        if (host && Array.isArray(host.currentOverlays)) {
+            for (const overlay of host.currentOverlays) {
+                const element = overlay?.element;
+                if (element && AnnotationAdapter.isNucleusVectorOverlayElement(element)
+                    && !known.includes(element)) {
+                    known.push(element);
+                }
+            }
+        }
+        if (host && typeof host.removeOverlay === "function") {
+            for (const element of known) {
+                try { host.removeOverlay(element); } catch (_error) { /* already gone */ }
+                if (element && typeof element.remove === "function") element.remove();
+            }
+        }
+        AnnotationAdapter.aiNucleusOverlayElements = [];
+        AnnotationAdapter.aiNucleiOverlayEl = null;
+    }
+
+    static paintNucleiCircleOverlays(viewer, circles) {
+        const host = viewer || AnnotationAdapter.viewer;
+        AnnotationAdapter.clearNucleiCircleOverlays(host);
+        const list = Array.isArray(circles) ? circles : [];
+        if (!host || typeof host.addOverlay !== "function" || !list.length) return 0;
+        const doc = typeof document !== "undefined" ? document : null;
+        if (!doc || typeof doc.createElement !== "function") return 0;
+        const polygons = list.filter((nucleus) => (nucleus.imageCoordinates || []).length >= 3);
+        if (polygons.length) {
+            const painted = AnnotationAdapter.paintStarConvexNucleiLayer(host, polygons, doc);
+            if (painted) return painted;
+        }
+        const OpenSeadragon = AnnotationAdapter._openSeadragon();
+        const overlays = [];
+        for (const nucleus of list) {
+            const centerX = Number(nucleus.centerX ?? nucleus.cx ?? nucleus.x);
+            const centerY = Number(nucleus.centerY ?? nucleus.cy ?? nucleus.y);
+            const radius = Math.max(4, Number(nucleus.radius ?? nucleus.r) || 12);
+            if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) continue;
+            const overlayElement = doc.createElement("div");
+            overlayElement.className = "nucleus-vector-ring";
+            overlayElement.style.border = "2px solid #00FF00";
+            overlayElement.style.borderRadius = "50%";
+            overlayElement.style.pointerEvents = "none";
+            overlayElement.style.boxSizing = "border-box";
+            overlayElement.style.width = "100%";
+            overlayElement.style.height = "100%";
+            overlayElement.style.background = "rgba(0,255,0,.12)";
+            const item = host.world && typeof host.world.getItemAt === "function"
+                ? host.world.getItemAt(0)
+                : null;
+            const mapper = (item && typeof item.imageToViewportCoordinates === "function")
+                ? item
+                : host.viewport;
+            let location = { x: centerX, y: centerY };
+            let width;
+            try {
+                if (OpenSeadragon?.Point && mapper && typeof mapper.imageToViewportCoordinates === "function") {
+                    location = mapper.imageToViewportCoordinates(
+                        new OpenSeadragon.Point(centerX, centerY)
+                    );
+                }
+                width = AnnotationAdapter.imageToViewportWidth(host, radius * 2);
+            } catch (_error) {
+                width = undefined;
+            }
+            const spec = {
+                element: overlayElement,
+                location,
+                placement: OpenSeadragon?.Placement?.CENTER || "CENTER",
+                checkResize: false
+            };
+            if (Number.isFinite(width) && width > 0) {
+                spec.width = width;
+                spec.height = width;
+            }
+            host.addOverlay(spec);
+            if (overlayElement.parentElement?.style) {
+                overlayElement.parentElement.style.pointerEvents = "none";
+            }
+            overlays.push(overlayElement);
+        }
+        AnnotationAdapter.aiNucleusOverlayElements = overlays;
+        return overlays.length;
+    }
+
+    static paintStarConvexNucleiLayer(viewer, nuclei, doc) {
+        const host = viewer || AnnotationAdapter.viewer;
+        const item = host?.world && typeof host.world.getItemAt === "function"
+            ? host.world.getItemAt(0)
+            : null;
+        const mapper = (item && typeof item.imageToViewportRectangle === "function")
+            ? item
+            : host?.viewport;
+        if (!mapper || typeof mapper.imageToViewportRectangle !== "function") return 0;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const nucleus of nuclei) {
+            for (const point of nucleus.imageCoordinates || []) {
+                const x = Number(point[0]);
+                const y = Number(point[1]);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
+            }
+        }
+        if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return 0;
+        const pad = Math.max(4, (maxX - minX) * 0.01);
+        minX -= pad;
+        minY -= pad;
+        maxX += pad;
+        maxY += pad;
+        const width = maxX - minX;
+        const height = maxY - minY;
+        const svgNs = "http://www.w3.org/2000/svg";
+        const svg = doc.createElementNS(svgNs, "svg");
+        svg.setAttribute("class", "nucleus-vector-ring nucleus-stardist-layer");
+        svg.setAttribute("viewBox", `${minX} ${minY} ${width} ${height}`);
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.style.width = "100%";
+        svg.style.height = "100%";
+        svg.style.overflow = "visible";
+        svg.style.pointerEvents = "none";
+        for (const nucleus of nuclei) {
+            const ring = nucleus.imageCoordinates || [];
+            if (ring.length < 3) continue;
+            const polygon = doc.createElementNS(svgNs, "polygon");
+            polygon.setAttribute("points", ring.map((point) => `${point[0]},${point[1]}`).join(" "));
+            polygon.setAttribute("fill", "rgba(0,255,0,.12)");
+            polygon.setAttribute("stroke", "#00FF00");
+            polygon.setAttribute("stroke-width", "1.75");
+            polygon.setAttribute("vector-effect", "non-scaling-stroke");
+            svg.appendChild(polygon);
+        }
+        let location;
+        try {
+            location = mapper.imageToViewportRectangle(minX, minY, width, height);
+        } catch (_error) {
+            return 0;
+        }
+        if (AnnotationAdapter.aiOverlayVisible === false) svg.style.display = "none";
+        host.addOverlay({
+            element: svg,
+            location,
+            checkResize: false
+        });
+        if (svg.style) svg.style.pointerEvents = "none";
+        if (svg.parentElement?.style) svg.parentElement.style.pointerEvents = "none";
+        AnnotationAdapter.aiNucleusOverlayElements = [svg];
+        return 1;
+    }
+
+    static async paintViewportNucleiCircles(options = {}) {
+        const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
+        const viewer = options.viewer || AnnotationAdapter.viewer;
+        AnnotationAdapter.setAiStatus("AI Pipeline: Fetching native-resolution field…", root);
+        const detected = await AnnotationAdapter.buildTissueLockedNucleiCircles(viewer, { ...options, root });
+        const circles = detected.circles || [];
+        AnnotationAdapter.replaceLocalizedCellObjects(circles);
+        AnnotationAdapter.lastNucleiCircles = circles;
+        if (AnnotationAdapter.aiOverlayVisible !== false) {
+            AnnotationAdapter.paintNucleiCircleOverlays(viewer, circles);
+        } else {
+            AnnotationAdapter.clearNucleiCircleOverlays(viewer);
+        }
+        AnnotationAdapter.restoreViewerMouseNavUnlessModal(viewer);
+        AnnotationAdapter.setAiStatus(detected.status, root);
+        return {
+            count: circles.length,
+            nuclei: circles,
+            objects: circles,
+            localizedCellObjects: circles
+        };
+    }
+
+    static segmentCellNuclei(options = {}) {
+        return AnnotationAdapter.paintViewportNucleiCircles(options);
     }
 
     static async extractBreastTissueFeatures(options = {}) {

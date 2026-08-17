@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin and Ops Guide</title>
+<style>
+:root{--navy:#0b1724;--blue:#2374b9;--green:#16764a;--amber:#9a6500;--red:#a42d2d;--line:#cbd7e2}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f8;color:#17212b;font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+main{max-width:1080px;margin:24px auto;background:#fff;padding:30px 38px;box-shadow:0 2px 16px #0002}
+h1{margin:0;color:var(--navy);font-size:30px}.flow{margin:4px 0 18px;color:#526270;font-weight:650}
+h2{margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--blue);color:var(--navy);font-size:19px}
+h3{margin:14px 0 5px;color:var(--blue);font-size:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+table{border-collapse:collapse;width:100%;font-size:13px}th{background:var(--navy);color:#fff;text-align:left}th,td{padding:6px 8px;border:1px solid var(--line);vertical-align:top}
+pre{margin:6px 0 8px;padding:9px 12px;background:#101a25;color:#eef6fd;border-radius:5px;white-space:pre-wrap;font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace}
+.gate{border-left:5px solid var(--green);background:#eef8f3;padding:8px 11px;margin:7px 0}.warn{border-left-color:var(--amber);background:#fff7e4}.stop{border-left-color:var(--red);background:#fff0f0}
+ul{margin:6px 0 9px;padding-left:21px}li{margin:3px 0}code{background:#edf1f4;padding:1px 4px;border-radius:3px}.page2,.page3{break-before:page}
+footer{margin-top:20px;border-top:1px solid var(--line);padding-top:8px;color:#667581;font-size:12px}
+.guide-actions{display:flex;justify-content:center;gap:10px;margin:0 0 16px}
+.guide-actions a,.guide-actions button{display:inline-flex;align-items:center;min-height:40px;padding:8px 12px;border:1px solid #2f80c8;border-radius:7px;color:#155f9d;background:#fff;text-decoration:none;font:700 14px Arial,Helvetica,sans-serif;cursor:pointer}
+@media(max-width:760px){main{margin:0;padding:20px}.grid{grid-template-columns:1fr}}
+@media print{@page{size:letter;margin:.4in}body{background:#fff;font-size:9pt}main{max-width:none;margin:0;padding:0;box-shadow:none}h1{font-size:21pt}h2{font-size:13pt;margin-top:10px}h3{font-size:10.5pt;margin-top:8px}pre{font-size:7pt;padding:5px 7px}table{font-size:7.4pt}.page2{break-before:page}}
+</style>
+</head>
+<body><main>
+<nav class="guide-actions" aria-label="Guide actions"><button id="close-guide" type="button" aria-label="Close guide and return to the viewer">Close guide</button><a href="/help/viewer-guide.html">Viewer Quick Guide</a><a href="/local-operations/">Local Operations</a></nav>
+<h1>Admin and Ops Guide</h1>
+<div class="flow">Development &rarr; Staging &rarr; Production rehearsal &rarr; Production &rarr; Tag</div>
+<h2>Environments</h2>
+<table><thead><tr><th>Environment</th><th>Port</th><th>Runtime / identity</th><th>Data boundary</th></tr></thead><tbody>
+<tr><td>Development</td><td>8081</td><td>Live source; red banner</td><td>Deidentified development images and annotations</td></tr>
+<tr><td>Staging</td><td>8082</td><td>Candidate JAR; yellow banner</td><td>Deidentified staging images and annotations</td></tr>
+<tr><td>Rehearsal</td><td>8083</td><td>Exact staging JAR; production mode; loopback only</td><td>Deidentified production-marked images; rehearsal annotations</td></tr>
+<tr><td>Production</td><td>8080</td><td>Frozen validated JAR; no banner</td><td>Authorized clinical images and production annotations</td></tr>
+</tbody></table>
+<h2>Normal monitored release</h2>
+<div class="grid"><section><pre>./ops/wsi-release cycle --tag NAME
+./ops/wsi-release cycle --dry-run
+./ops/wsi-release cycle --resume</pre>
+<div class="gate"><b>Normal:</b> <code>cycle --tag NAME</code> runs safe phases in order. Diagnostic <code>--step</code> commands are listed under Troubleshooting modes.</div>
+<p>Cycle performs repository/environment preflight, all development tests, candidate publication, staging, exact-artifact rehearsal, final preflight, verified production backup/promotion, production QC and optional tagging.</p></section>
+<section><h2>Exact human gates</h2><pre>Development browser QC: y/n
+Staging browser QC: y/n
+Rehearsal browser QC: y/n
+Promotion: y/n
+Production browser QC: y/n
+Publish saved tag: y/n</pre>
+<div class="gate warn">Browser success is never inferred. Promotion cannot begin until the complete backup is verified. A failed production start prints rollback guidance and never rolls back silently.</div></section></div>
+<div class="gate"><b>Browser checklist at every environment:</b> banner/title, login, image discovery/open/switch, tiles/pan/zoom, channels/display, full annotation naming/edit/delete/persistence and global Show/Hide, exports, isolated annotation directory, clean console/network, and no sustained unexpected delay.</div>
+
+<section class="page2"><h1>Troubleshooting and Recovery</h1>
+<div class="grid"><div><h2>Status and verification</h2><pre>wsi production status
+wsi staging status
+wsi rehearsal status
+wsi development status
+./ops/wsi-release status
+./ops/wsi-release verify staging
+./ops/wsi-release verify rehearsal
+./ops/wsi-release verify production</pre>
+<h2>Logs</h2><pre>wsi production logs
+wsi staging logs
+wsi rehearsal logs
+wsi development logs</pre><p>Press <code>Control-C</code> to stop following a log; the server continues running.</p>
+<h2>Rollback</h2><pre>./ops/wsi-release history
+./ops/wsi-release rollback --step
+./ops/wsi-release verify production</pre><div class="gate warn">Rollback restores code/configuration but never restores, replaces or overwrites annotations.</div></div>
+<div><h2>Troubleshooting modes</h2><pre>./ops/wsi-release cycle --step
+./ops/wsi-release cycle --resume --step
+./ops/wsi-release cycle --resume --verbose
+./ops/wsi-release stage --dry-run
+./ops/wsi-release stage --step --verbose
+./ops/wsi-release rehearse --dry-run
+./ops/wsi-release promote --dry-run
+./ops/wsi-release history</pre><ul><li>State: <code>.runtime/run/release-cycle.state</code>.</li><li>Logs: <code>.runtime/log/cycle-*.log</code>.</li><li><code>--dry-run</code>: plan only.</li><li><code>--step</code>: Enter runs; <code>p</code> repeats; <code>q</code> exits safely.</li><li>Individual commands are retained for diagnosis and partial reruns.</li></ul>
+<h2>Environment markers</h2><table><thead><tr><th>Identity</th><th>Required marker</th></tr></thead><tbody><tr><td>development</td><td><code>.wsi-environment-development</code></td></tr><tr><td>staging</td><td><code>.wsi-environment-staging</code></td></tr><tr><td>production / rehearsal</td><td><code>.wsi-environment-production</code></td></tr></tbody></table></div></div>
+<h2>Stop conditions</h2><div class="grid"><ul><li>Dirty Git tree or failed required test</li><li>Git HEAD differs from staging commit</li><li>Recorded/calculated SHA-256 differ</li><li>Staging and rehearsal differ</li><li>Production backup validation fails</li></ul><ul><li>Environment identity, marker, root or port mismatch</li><li>Expected port does not bind</li><li>New 403, 500 or unhandled JavaScript error</li><li>Lost annotation or browser regression</li><li>New/routine delay, blank image or timeout</li></ul></div>
+<div class="gate warn"><b>Timing:</b> the image-switch total ends at OpenSeadragon open and may not include completion of all visible tiles. Use browser Network timing and server logs for repeatable delays.</div>
+<div class="gate stop"><b>Privacy:</b> Never copy production slides into development, staging or rehearsal. Verify filenames, metadata, embedded labels, thumbnails, macro images and associated files are deidentified. Never synthesize a missing embedded label/thumbnail from diagnostic pixels.</div>
+<footer>Canonical source: ops/RELEASE-CHEATSHEET.md &bull; Production changes only through explicit verified promotion.</footer></section>
+
+<section class="page3"><h1>Manual WSI ingestion</h1>
+<div class="gate warn"><b>Manual readiness gate:</b> The command is scanner-independent. Confirm the scanner or copy process appears finished before sealing; filesystem stability cannot prove acquisition completeness.</div>
+<h2>1. Start and prepare one indivisible batch</h2>
+<pre>cd /Users/dm026/Downloads/wsi-server_works
+source ops/wsi-ingest.conf
+./ops/wsi-ingest status</pre>
+<p>Place one complete top-level dataset directory beneath <code>/Users/dm026/wsi-ingest-staging</code>. It must contain every <code>.vsi</code>, companion data directory and associated file intended for the batch. Never move a single <code>.vsi</code> without its companion data.</p>
+<p>Never reuse a promoted directory name. Use unique names such as <code>2026-08-05_batch-01</code> and <code>2026-08-05_batch-02</code>.</p>
+<div class="grid"><div><h2>2. Seal and observe</h2><pre>./ops/wsi-ingest inspect DATASET
+./ops/wsi-ingest seal DATASET
+# Type exactly SEAL</pre>
+<p>Do not modify the directory after sealing. The seal is observation 1. With validated defaults:</p>
+<ol><li>Wait at least 60 seconds.</li><li>Run <code>./ops/wsi-ingest observe DATASET</code>.</li><li>Wait at least another 60 seconds.</li><li>Run <code>./ops/wsi-ingest observe DATASET</code>.</li><li>Use history to confirm three observations.</li></ol></div>
+<div><h2>3. Preflight, promote and verify</h2><pre>./ops/wsi-ingest promote --dry-run DATASET
+./ops/wsi-ingest promote --step DATASET
+# Type exactly PROMOTE
+./ops/wsi-ingest history
+./ops/wsi-ingest status</pre>
+<p>Before promotion, confirm transaction ID, file count, byte count and absent production destination.</p>
+<div class="gate"><b>Expected:</b> <code>verified observations 3</code><br><code>sealed_pending_transactions: 0</code></div>
+<p>Allow live discovery to complete or use <b>Refresh images</b>. Confirm every expected image and channel appears.</p></div></div>
+<h2>Stop conditions</h2><div class="grid"><ul><li>Scanner or copy activity may continue</li><li>Companion directory or associated file may be missing</li><li>Dataset changed after seal</li><li>Production destination exists</li><li>File/byte count differs from seal or dry-run</li></ul><ul><li>Roots missing, nested or on different filesystems</li><li>Environment markers are wrong</li><li>Lock held or transaction ambiguous</li><li>Any command reports <code>FAIL</code></li><li>Never use <code>--force</code> or bypass stability</li></ul></div>
+<div class="gate stop">Never manually copy or merge the sealed batch into production. Full design: <code>docs/WSI-INGESTION.md</code>.</div>
+<footer>Canonical source: ops/RELEASE-CHEATSHEET.md &bull; Atomic ingestion moves the complete validated directory once.</footer></section>
+</main>
+<script>
+document.getElementById("close-guide").addEventListener("click", () => {
+    window.close();
+    window.setTimeout(() => {
+        if (!window.closed) window.location.assign("/");
+    }, 100);
+});
+</script>
+</body></html>

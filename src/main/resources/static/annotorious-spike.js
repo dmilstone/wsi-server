@@ -28,14 +28,37 @@ class AnnotoriousSpike {
     initialize() {
         if (!window.AnnotoriousOSD?.createOSDAnnotator) {
             console.error("Annotorious failed to load; annotation mode is unavailable.");
-            this.toggleButton.title = "Annotorious failed to load";
+            // #region agent log
+            if (typeof wsiDebugLog === "function") {
+                wsiDebugLog("A", "annotorious-spike.js:initialize", "Annotorious missing", {
+                    hasOSD: Boolean(window.AnnotoriousOSD),
+                    hasCreate: Boolean(window.AnnotoriousOSD?.createOSDAnnotator)
+                });
+            }
+            // #endregion
+            if (this.toggleButton) {
+                this.toggleButton.disabled = false;
+                this.toggleButton.title = "Annotorious failed to load";
+            }
             return;
         }
 
         // Annotorious must subscribe to OpenSeadragon before its first `open`.
         // Creating it from inside `open` makes it miss the lifecycle event that
         // initializes and invalidates its SVG overlay.
-        this.createAnnotator();
+        try {
+            this.createAnnotator();
+        } catch (error) {
+            // #region agent log
+            if (typeof wsiDebugLog === "function") {
+                wsiDebugLog("A", "annotorious-spike.js:initialize", "createAnnotator threw", {
+                    error: String(error?.message || error),
+                    name: error?.name || ""
+                }, "post-fix");
+            }
+            // #endregion
+            throw error;
+        }
         this.viewer.addHandler("open", () => {
             void this.handleViewerOpen().catch(error =>
                 console.error("Annotorious: unable to initialize annotations", error)
@@ -79,6 +102,15 @@ class AnnotoriousSpike {
         });
 
         this.annotator.setDrawingTool("rectangle");
+        // #region agent log
+        if (typeof wsiDebugLog === "function") {
+            wsiDebugLog("A", "annotorious-spike.js:createAnnotator", "annotator created", {
+                hasAnnotator: Boolean(this.annotator),
+                hasSetDrawing: typeof this.annotator?.setDrawingEnabled === "function",
+                hasSetTool: typeof this.annotator?.setDrawingTool === "function"
+            });
+        }
+        // #endregion
         this.adapter = new AnnotationAdapter(this.annotator, {
             annotationsLoaded: imageId => this.timingCallbacks.annotationsLoaded?.(imageId),
             annotationsRendered: imageId => {
@@ -95,6 +127,14 @@ class AnnotoriousSpike {
         });
 
         this.annotator.on("createAnnotation", annotation => {
+            // #region agent log
+            if (typeof wsiDebugLog === "function") {
+                wsiDebugLog("C", "annotorious-spike.js:createAnnotation", "annotation created", {
+                    id: annotation?.id,
+                    type: annotation?.target?.selector?.type || annotation?.type
+                });
+            }
+            // #endregion
             this.adapter.annotationCreated(annotation);
             this.labelLayer.syncAnnotation(annotation);
             this.notifySelectionChanged();
@@ -150,6 +190,14 @@ class AnnotoriousSpike {
 
         this.installKeyboardShortcuts();
         this.installAnnotationLabelMovement();
+        // #region agent log
+        if (typeof wsiDebugLog === "function") {
+            wsiDebugLog("A", "annotorious-spike.js:createAnnotator", "annotator ready", {
+                hasAnnotator: Boolean(this.annotator),
+                hasToggleHandler: true
+            }, "post-fix");
+        }
+        // #endregion
 
     }
 
@@ -360,8 +408,69 @@ class AnnotoriousSpike {
         if (this.drawingEnabled) {
             this.annotationPointerEdit = null;
             this.labelLayer?.clearTemporaryDisplacements();
+            if (typeof AnnotationAdapter !== "undefined"
+                && typeof AnnotationAdapter.setMeasureTracking === "function") {
+                AnnotationAdapter.setMeasureTracking(false);
+            }
+            if (typeof AnnotationAdapter !== "undefined"
+                && typeof AnnotationAdapter.setMeasurementModeActive === "function"
+                && AnnotationAdapter.isMeasurementModeActive) {
+                AnnotationAdapter.setMeasurementModeActive(false);
+            }
+            try { this.annotator.setDrawingTool("rectangle"); } catch (_error) { /* optional */ }
+            if (typeof this.annotator.setDrawingMode === "function") {
+                try { this.annotator.setDrawingMode("drag"); } catch (_error) { /* optional */ }
+            }
         }
         this.annotator.setDrawingEnabled(this.drawingEnabled);
+        if (this.viewer && typeof this.viewer.setMouseNavEnabled === "function") {
+            this.viewer.setMouseNavEnabled(!this.drawingEnabled);
+        }
+        // #region agent log
+        const layer = (typeof document !== "undefined")
+            ? document.querySelector("#viewer .a9s-annotationlayer, #viewer .a9s-layer, #viewer [class*='a9s-']")
+            : null;
+        const rect = layer && typeof layer.getBoundingClientRect === "function"
+            ? layer.getBoundingClientRect()
+            : null;
+        const style = layer && typeof window !== "undefined" && typeof window.getComputedStyle === "function"
+            ? window.getComputedStyle(layer)
+            : null;
+        const tracker = typeof AnnotationAdapter !== "undefined"
+            ? AnnotationAdapter.measureMouseTracker
+            : null;
+        if (typeof wsiDebugLog === "function") {
+            wsiDebugLog("B", "annotorious-spike.js:setDrawingEnabled", "drawing state", {
+                requested: Boolean(enabled),
+                drawingEnabled: this.drawingEnabled,
+                annotationsVisible: this.annotationsVisible,
+                mouseNav: this.drawingEnabled ? false : true,
+                measureTracking: Boolean(tracker?.isTracking?.() ?? tracker?.tracking),
+                viewerHidden: Boolean(this.viewer?.element?.classList?.contains("annotations-hidden")),
+                a9sPresent: Boolean(layer),
+                a9sClass: layer?.className || layer?.getAttribute?.("class") || "",
+                a9sW: rect?.width,
+                a9sH: rect?.height,
+                a9sPointer: style?.pointerEvents,
+                a9sVis: style?.visibility,
+                a9sZ: style?.zIndex
+            });
+        }
+        if (this.drawingEnabled && this.viewer?.element && !this._debugDrawPointerBound) {
+            this._debugDrawPointerBound = true;
+            this.viewer.element.addEventListener("pointerdown", (event) => {
+                if (typeof wsiDebugLog === "function") {
+                    wsiDebugLog("B", "annotorious-spike.js:pointerdown", "pointer while drawing possible", {
+                        drawingEnabled: this.drawingEnabled,
+                        button: event.button,
+                        tag: event.target?.tagName,
+                        cls: String(event.target?.className || event.target?.getAttribute?.("class") || "").slice(0, 120)
+                    });
+                }
+            }, true);
+        }
+        // #endregion
+        if (this.toggleButton) this.toggleButton.disabled = !this.annotationsVisible;
 
         this.toggleButton.setAttribute(
             "aria-pressed",

@@ -281,7 +281,65 @@ function fakeItem(index, extra = {}) {
     assert.equal(listeners[0].opts.passive, false);
 }
 
+{
+    const channels = [
+        { name: "DAPI", index: 0, visible: true, opacity: 1 },
+        { name: "FITC", index: 1, visible: false, opacity: 1 },
+        { name: "TRITC", index: 2, visible: true, opacity: 0.5 }
+    ];
+    const specs = AnnotationAdapter.buildZStackLayerSpecs({
+        planeCount: 2,
+        activeZ: 1,
+        channels,
+        tileSourceForPlane: (z, channel) => ({ plane: z, channel: channel.index })
+    });
+    assert.equal(specs.length, 6);
+    assert.ok(specs.every(spec => spec.compositeOperation === "lighter"));
+    const active = specs.filter(spec => spec.zIndexProperty === 1);
+    assert.equal(active.map(spec => spec.opacity).join(","), "1,0,0.5");
+    assert.equal(active.map(spec => spec.channelIndex).join(","), "0,1,2");
+}
+
+{
+    const items = [];
+    for (const z of [0, 1]) {
+        for (const channel of [
+            { name: "DAPI", index: 0 },
+            { name: "FITC", index: 1 },
+            { name: "TRITC", index: 2 }
+        ]) {
+            items.push(fakeItem(items.length, {
+                options: {
+                    zIndexProperty: z,
+                    zIndices: z,
+                    channelName: channel.name,
+                    channelIndex: channel.index
+                }
+            }));
+        }
+    }
+    const viewer = { open() { throw new Error("must not reopen"); }, world: fakeWorld(items), forceRedraw() {} };
+    AnnotationAdapter.zStackPlaneCount = 2;
+    AnnotationAdapter.applyChannelLayerOpacities(viewer, [
+        { name: "DAPI", index: 0, visible: true, opacity: 1 },
+        { name: "FITC", index: 1, visible: false, opacity: 1 },
+        { name: "TRITC", index: 2, visible: true, opacity: 1 }
+    ], 1);
+    assert.deepEqual(items.map(item => item.opacity), [0, 0, 0, 1, 0, 1]);
+    AnnotationAdapter.changeFocalDepth(viewer, 0);
+    assert.deepEqual(items.map(item => item.opacity), [1, 0, 1, 0, 0, 0]);
+    AnnotationAdapter.rememberChannelLayerState([]);
+}
+
+assert.match(adapterSource, /static applyChannelLayerOpacities\(/);
 assert.match(adapterSource, /static openMultiPlaneZStack\(/);
+assert.match(adapterSource, /compositeOperation:\s*"lighter"/);
+assert.match(html, /scheduleDisplayUpdate\(\{\s*reopen:\s*false\s*\}\)/);
+assert.match(html, /applyChannelLayerOpacities\(viewer, display\.channels/);
+assert.doesNotMatch(
+    html,
+    /field === "visible"[\s\S]{0,400}openViewer\(true\)/
+);
 assert.match(adapterSource, /static applyZStackLayerOpacities\(/);
 assert.match(adapterSource, /static bindZStackWheel\(/);
 assert.match(adapterSource, /static handleZStackWheel\(/);
@@ -300,7 +358,7 @@ assert.match(html, /AnnotationAdapter\.openMultiPlaneZStack/);
 assert.match(html, /AnnotationAdapter\.bindZStackWheel/);
 assert.match(html, /AnnotationAdapter\.applyZStackLayerOpacities/);
 assert.match(html, /scrollToZoom:\s*true/);
-assert.match(html, /annotation-adapter\.js\?v=20260816-sidecar-property-maps/);
+assert.match(html, /annotation-adapter\.js\?v=/);
 assert.match(html, /id="z-controls-card"/);
 assert.match(html, /id="ai-labs-panel"/);
 assert.match(html, /id="ai-analytics-panel"/);

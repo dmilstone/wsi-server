@@ -83,7 +83,42 @@ public class ImageRegistry {
     }
 
     public Path getRootDirectory() { return rootDirectory; }
-    public List<ImageEntry> getImages() { return snapshot.get().ordered(); }
+    public List<ImageEntry> getImages() {
+        restampPublishedSidecars();
+        return snapshot.get().ordered();
+    }
+
+    /**
+     * Re-read {@code <stem>.metadata.json} for already-published slides so
+     * later OCR / ingest tokens appear without a process restart.
+     */
+    void restampPublishedSidecars() {
+        Snapshot previous = snapshot.get();
+        if (previous == null || previous.ordered().isEmpty()) return;
+        Map<String, ImageEntry> relative = new LinkedHashMap<>(previous.byRelative());
+        boolean changed = false;
+        for (ImageEntry entry : previous.ordered()) {
+            WsiCatalogScanner.SidecarMetadata sidecar = WsiCatalogScanner.read(entry.path());
+            if (sidecar.clinicalMarker().equals(entry.clinicalMarker())
+                    && sidecar.zPlanes() == entry.zPlanes()
+                    && sidecar.depth() == entry.depth()
+                    && sidecar.zLayers() == entry.zLayers()) {
+                continue;
+            }
+            relative.put(entry.relativePath(), new ImageEntry(
+                    entry.id(),
+                    entry.name(),
+                    entry.relativePath(),
+                    entry.folder(),
+                    entry.path(),
+                    sidecar.clinicalMarker(),
+                    sidecar.zPlanes(),
+                    sidecar.depth(),
+                    sidecar.zLayers()));
+            changed = true;
+        }
+        if (changed) snapshot.set(makeSnapshotEntries(relative.values()));
+    }
     public ImageEntry getFirst() { return snapshot.get().ordered().getFirst(); }
     public ImageEntry getRequired(String imageId) {
         ImageEntry entry = snapshot.get().byId().get(imageId);

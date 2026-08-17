@@ -218,8 +218,24 @@ export WSI_OPS_DASHBOARD_PASSWORD='enter a local password interactively'
 ```
 
 Then open `http://127.0.0.1:8084/` in a browser running on the image-server
-host. Stop it with Ctrl-C. Do not put the password in the repository, shell
-history, process arguments, or logs. `WSI_OPS_AUDIT_FILE` may select an ignored
+host. Stop it with Ctrl-C.
+
+## Ingest-time `if.epitope` sidecar update
+
+The listing paints `clinicalMarker` from `<stem>.metadata.json` under each
+filename. After OCR or a later label correction, restamp those sidecars:
+
+```bash
+python3 ops/retro_build_metadata.py --slides-dir /Users/dm026/wsi-slides
+```
+
+Existing real `if.<epitope>` tokens are kept. `if.Pending` is treated as empty.
+Pass `--force` to re-OCR. The script form-logs into the running viewer
+(`http://127.0.0.1:8080` by default) and OCRs `/api/images/{id}/label.png` with
+the `tesseract` CLI (90° first). Browser Scan remains only for rows still empty
+after this sweep. Refresh the catalog after the sweep. Do not put the password
+in the repository, shell history, process arguments, or logs. Use `WSI_PASSWORD`
+if the local annotator password is not the default. `WSI_OPS_AUDIT_FILE` may select an ignored
 local audit file, but cannot change image roots or the listener.
 
 The session cookie is HttpOnly and SameSite=Strict. It intentionally lacks the

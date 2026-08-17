@@ -38,6 +38,7 @@ import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,6 +59,7 @@ public class BioFormatsTileService {
     private final DiagnosticTiming timing;
     private final Map<String, ImageContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, AssociatedImages> associatedImageCache = new ConcurrentHashMap<>();
+    private final Map<String, Object> associatedLocks = new ConcurrentHashMap<>();
 
     public BioFormatsTileService(ImageRegistry registry,
                                  FluorescenceTileRenderer fluorescenceRenderer,
@@ -207,10 +209,17 @@ public class BioFormatsTileService {
     }
 
     public byte[] getSlideLabel(String imageId) throws Exception {
+        return getSlideLabel(imageId, 0);
+    }
+
+    public byte[] getSlideLabel(String imageId, int maxEdge) throws Exception {
         AssociatedImages images = timing.measure("embedded_label", "request_total", imageId,
-                () -> associatedImages(imageId));
+                () -> associatedImages(imageId, true, false));
         if (images.label() == null) {
             throw new IllegalStateException(AssociatedImageSelection.MISSING_LABEL_MESSAGE);
+        }
+        if (maxEdge > 0 && maxEdge < 1000) {
+            return scalePngToFit(images.label(), maxEdge, maxEdge);
         }
         return images.label();
     }
@@ -225,19 +234,32 @@ public class BioFormatsTileService {
     }
 
     private AssociatedImages associatedImages(String imageId) throws Exception {
+        return associatedImages(imageId, true, true);
+    }
+
+    private boolean associatedSatisfies(AssociatedImages images, boolean needLabel, boolean needMacro) {
+        if (images == null) return false;
+        if (needLabel && images.label() == null) return false;
+        if (needMacro && images.macro() == null) return false;
+        return true;
+    }
+
+    private AssociatedImages associatedImages(String imageId, boolean needLabel, boolean needMacro)
+            throws Exception {
         AssociatedImages cached = associatedImageCache.get(imageId);
-        if (cached != null) return cached;
-        synchronized (associatedImageCache) {
+        if (associatedSatisfies(cached, needLabel, needMacro)) return cached;
+        Object lock = associatedLocks.computeIfAbsent(imageId, id -> new Object());
+        synchronized (lock) {
             cached = associatedImageCache.get(imageId);
-            if (cached != null) return cached;
+            if (associatedSatisfies(cached, needLabel, needMacro)) return cached;
             ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
             BufferedImageReader reader = timing.measure("embedded_bundle", "reader_create", imageId,
                     this::createAssociatedImageReader);
             try {
                 timing.measureVoid("embedded_bundle", "set_id_metadata_parse", imageId,
                         () -> reader.setId(entry.path().toString()));
-                byte[] label = null;
-                byte[] macro = null;
+                byte[] label = cached != null ? cached.label() : null;
+                byte[] macro = cached != null ? cached.macro() : null;
                 AssociatedImageSelection selection = AssociatedImageSelection.select(List.of());
                 try {
                     MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
@@ -245,36 +267,50 @@ public class BioFormatsTileService {
                     selection = timing.measure("embedded_bundle", "series_search", imageId,
                             () -> selectAssociatedImages(reader, metadata));
                 } catch (Exception ignored) { }
-                try {
-                    int labelSeries = selection.labelSeries();
-                    if (labelSeries >= 0) {
-                        reader.setSeries(labelSeries);
-                        BufferedImage source = timing.measure("embedded_label", "open_bytes_decode", imageId,
-                                () -> reader.openImage(0));
-                        BufferedImage rendered = timing.measure("embedded_label", "render_scale", imageId,
-                                () -> scaleToFit(source, 1000, 420));
-                        label = timing.measure("embedded_label", "png_encode", imageId,
-                                () -> encodePng(rendered));
-                    }
-                } catch (Exception ignored) { }
-                try {
-                    int macroSeries = selection.overviewSeries();
-                    if (macroSeries >= 0) {
-                        reader.setSeries(macroSeries);
-                        BufferedImage source = timing.measure("embedded_macro", "open_bytes_decode", imageId,
-                                () -> reader.openImage(0));
-                        BufferedImage rendered = timing.measure("embedded_macro", "render_scale", imageId,
-                                () -> scaleToFit(source, 1200, 900));
-                        macro = timing.measure("embedded_macro", "png_encode", imageId,
-                                () -> encodePng(rendered));
-                    }
-                } catch (Exception ignored) { }
+                if (needLabel && label == null) {
+                    try {
+                        int labelSeries = selection.labelSeries();
+                        if (labelSeries >= 0) {
+                            reader.setSeries(labelSeries);
+                            BufferedImage source = timing.measure("embedded_label", "open_bytes_decode", imageId,
+                                    () -> reader.openImage(0));
+                            BufferedImage rendered = timing.measure("embedded_label", "render_scale", imageId,
+                                    () -> scaleToFit(source, 1000, 420));
+                            label = timing.measure("embedded_label", "png_encode", imageId,
+                                    () -> encodePng(rendered));
+                        }
+                    } catch (Exception ignored) { }
+                }
+                if (needMacro && macro == null) {
+                    try {
+                        int macroSeries = selection.overviewSeries();
+                        if (macroSeries >= 0) {
+                            reader.setSeries(macroSeries);
+                            BufferedImage source = timing.measure("embedded_macro", "open_bytes_decode", imageId,
+                                    () -> reader.openImage(0));
+                            BufferedImage rendered = timing.measure("embedded_macro", "render_scale", imageId,
+                                    () -> scaleToFit(source, 1200, 900));
+                            macro = timing.measure("embedded_macro", "png_encode", imageId,
+                                    () -> encodePng(rendered));
+                        }
+                    } catch (Exception ignored) { }
+                }
                 cached = new AssociatedImages(label, macro);
                 associatedImageCache.put(imageId, cached);
                 return cached;
             } finally {
                 reader.close();
             }
+        }
+    }
+
+    private byte[] scalePngToFit(byte[] png, int maxWidth, int maxHeight) {
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(png));
+            if (source == null) return png;
+            return encodePng(scaleToFit(source, maxWidth, maxHeight));
+        } catch (Exception ignored) {
+            return png;
         }
     }
 
@@ -491,6 +527,61 @@ public class BioFormatsTileService {
             if (region.empty()) return new byte[0];
             return encodePng(renderCompositeRegion(context, reader, settingsSnapshot,
                     region.x(), region.y(), region.width(), region.height(), z));
+        }
+    }
+
+    /**
+     * Native-resolution crop of a slide region for analysis. Picks a pyramid
+     * level so the raster stays within {@code maxEdge} and the export pixel cap,
+     * instead of using the viewer's already-downsampled canvas.
+     */
+    public byte[] renderAnalysisRegion(String imageId, int series, int z,
+                                       int x, int y, int width, int height,
+                                       int maxEdge, HttpSession session) throws Exception {
+        ImageContext context = context(imageId, series);
+        SessionDisplayState state = sessionState(session, imageId, series, context);
+        List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
+        synchronized (state) {
+            for (int channel = 0; channel < state.model().getChannelCount(); channel++) {
+                settingsSnapshot.add(copySettings(state.model().getChannel(channel)));
+            }
+        }
+        int cap = maxEdge > 0 ? Math.min(maxEdge, 4096) : 2048;
+        synchronized (context) {
+            IFormatReader reader = context.reader();
+            validateZ(z, reader.getSizeZ());
+            reader.setResolution(0);
+            int fullW = reader.getSizeX();
+            int fullH = reader.getSizeY();
+            int rx = Math.max(0, Math.min(x, fullW - 1));
+            int ry = Math.max(0, Math.min(y, fullH - 1));
+            int rw = Math.max(1, Math.min(width, fullW - rx));
+            int rh = Math.max(1, Math.min(height, fullH - ry));
+            int level = 0;
+            int count = Math.max(1, reader.getResolutionCount());
+            while (level < count - 1) {
+                reader.setResolution(level);
+                double sx = fullW / (double) Math.max(1, reader.getSizeX());
+                int outW = Math.max(1, (int) Math.round(rw / sx));
+                int outH = Math.max(1, (int) Math.round(rh / sx));
+                if (outW <= cap && outH <= cap && (long) outW * outH <= 16_000_000L) break;
+                level += 1;
+            }
+            reader.setResolution(level);
+            double scale = fullW / (double) Math.max(1, reader.getSizeX());
+            int lx = Math.max(0, (int) Math.floor(rx / scale));
+            int ly = Math.max(0, (int) Math.floor(ry / scale));
+            int lw = Math.max(1, Math.min(reader.getSizeX() - lx, (int) Math.ceil(rw / scale)));
+            int lh = Math.max(1, Math.min(reader.getSizeY() - ly, (int) Math.ceil(rh / scale)));
+            try {
+                BufferedImage image = renderCompositeRegion(context, reader, settingsSnapshot, lx, ly, lw, lh, z);
+                if (Math.max(image.getWidth(), image.getHeight()) > cap) {
+                    image = scaleToFit(image, cap, cap);
+                }
+                return encodePng(image);
+            } finally {
+                reader.setResolution(0);
+            }
         }
     }
 

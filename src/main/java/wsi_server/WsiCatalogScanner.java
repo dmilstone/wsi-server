@@ -70,16 +70,34 @@ public final class WsiCatalogScanner {
         if (text.isEmpty()) return "";
         text = text.replaceFirst("(?i)if[\\s.]+", "if.");
         Matcher matcher = IF_MARKER.matcher(text);
-        if (matcher.find()) return matcher.group();
+        if (matcher.find()) {
+            String token = matcher.group();
+            if (token.matches("(?i)if\\.(pending|none|unknown|n/?a)")) return "";
+            return token;
+        }
         return text.toLowerCase(Locale.ROOT).startsWith("if.") ? text : "";
     }
 
     private static String readClinicalMarkerNode(JsonNode root) {
-        JsonNode marker = root.get("clinicalMarker");
-        if (marker == null || marker.isNull()) marker = root.get("clinical_marker");
-        if (marker == null || marker.isNull()) marker = root.get("epitope");
-        if (marker == null || marker.isNull()) return "";
-        return normalizeClinicalMarker(marker.asText(""));
+        if (root == null || !root.isObject()) return "";
+        for (String name : new String[] {
+                "clinicalMarker", "clinical_marker", "epitope", "if_epitope", "ifEpitope", "stain"
+        }) {
+            JsonNode marker = root.get(name);
+            if (marker == null || marker.isNull()) continue;
+            String normalized = normalizeClinicalMarker(marker.asText(""));
+            if (!normalized.isEmpty()) return normalized;
+        }
+        JsonNode ocr = root.get("ocr");
+        if (ocr != null && ocr.isObject()) {
+            JsonNode nested = ocr.get("clinicalMarker");
+            if (nested == null || nested.isNull()) nested = ocr.get("clinical_marker");
+            if (nested == null || nested.isNull()) nested = ocr.get("epitope");
+            if (nested != null && !nested.isNull()) {
+                return normalizeClinicalMarker(nested.asText(""));
+            }
+        }
+        return "";
     }
 
     private static int readPositiveInt(JsonNode root, String... names) {

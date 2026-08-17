@@ -1,0 +1,36 @@
+6215dba milestone: complete high-density dark cockpit layout and verified bio-formats z-plane parsing fully secure
+2581920 feat(z-scroll): secure working baseline with ultra-fast multi-layer opacity navigation and restored mouse zoom
+299550b Document negative Bio-Formats thumbnail evaluation
+c3ad1cf Evaluate Bio-Formats associated thumbnail decoding
+8b879e9 Document bounded deidentified VSI timings
+=== FILES ===
+ M ops/README.md
+ M ops/retro_build_metadata.py
+ M ops/tests/run.sh
+ M src/main/java/wsi_server/BioFormatsTileService.java
+ M src/main/java/wsi_server/ImageApiController.java
+ M src/main/java/wsi_server/ImageContext.java
+ M src/main/java/wsi_server/ImageRegistry.java
+ M src/main/java/wsi_server/TileController.java
+ M src/main/java/wsi_server/WsiCatalogScanner.java
+ M src/main/resources/static/annotation-adapter.js
+ M src/main/resources/static/annotation-store.js
+ M src/main/resources/static/annotorious-spike.js
+ M src/main/resources/static/index.html
+ M src/test/java/wsi_server/AssociatedImageSelectionTests.java
+ M src/test/java/wsi_server/ImageRegistryTests.java
+ M src/test/java/wsi_server/WsiCatalogScannerTests.java
+ D src/test/java/wsi_server/ZStackTileBackendTests.java
+ M src/test/js/z-stack-opacity.test.js
+?? .cursor/
+?? git_snapshot.txt
+?? ops/tests/test_retro_metadata.py
+?? src/main/java/wsi_server/WorkstationDocsController.java
+?? src/main/java/wsi_server/WorkstationWebConfiguration.java
+?? src/main/resources/static/help/admin-ops-guide.html
+?? src/main/resources/static/local-operations/
+?? src/main/resources/static/pilot-feedback.css
+?? src/main/resources/static/pilot-feedback.js
+?? src/main/resources/static/pilot-feedback/
+?? src/test/js/epitope-ingest-list.test.js
+?? src/test/js/nuclei-stardist-tiles.test.js

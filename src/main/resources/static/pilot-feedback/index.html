@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pilot Feedback</title>
+    <link rel="stylesheet" href="/pilot-feedback.css">
+</head>
+<body class="wsi-pilot-page">
+<main>
+    <nav class="wsi-doc-nav" aria-label="Document links">
+        <a href="/">Return to viewer</a>
+        <a href="/help/admin-ops-guide.html">Admin and Ops Guide</a>
+        <a href="/local-operations/">Local Operations</a>
+    </nav>
+    <h1>Pilot Feedback</h1>
+    <p class="wsi-pilot-note">Use this form for workstation notes during the pilot. Entries stay in this browser.</p>
+    <div id="pilot-feedback-page-body"></div>
+</main>
+<script src="/pilot-feedback.js"></script>
+<script>
+    WsiPilotFeedback.mountForm(document.getElementById("pilot-feedback-page-body"), {
+        compact: false,
+        showReturnLinks: false
+    });
+</script>
+</body>
+</html>

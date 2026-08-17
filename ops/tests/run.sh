@@ -31,7 +31,9 @@ if command -v zsh >/dev/null 2>&1; then zsh -n "$CONTROL"; else bash -n "$CONTRO
 pass "shell syntax"
 
 PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache" \
-    python3 -m py_compile "$OPS_DIR/render_cheatsheet.py" "$OPS_DIR/tests/test_renderer.py"
+    python3 -m py_compile "$OPS_DIR/render_cheatsheet.py" "$OPS_DIR/retro_build_metadata.py" "$OPS_DIR/tests/test_renderer.py" "$OPS_DIR/tests/test_retro_metadata.py"
+python3 "$OPS_DIR/tests/test_retro_metadata.py"
+pass "epitope sidecar update script"
 if python3 -c 'import reportlab' >/dev/null 2>&1; then
     python3 "$OPS_DIR/tests/test_renderer.py"
     pass "portable renderer preflight"

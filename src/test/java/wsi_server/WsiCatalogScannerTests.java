@@ -51,6 +51,28 @@ class WsiCatalogScannerTests {
     }
 
     @Test
+    void placeholderPendingMarkersAreNotPublished() throws Exception {
+        Path slide = dir.resolve("pending.vsi");
+        Files.writeString(slide, "x");
+        Files.writeString(dir.resolve("pending.metadata.json"), """
+                {"clinicalMarker":"if.Pending","zPlanes":1}
+                """);
+        assertEquals("", WsiCatalogScanner.readClinicalMarker(slide));
+        assertEquals("", WsiCatalogScanner.normalizeClinicalMarker("if.Pending"));
+        assertEquals("if.IgG", WsiCatalogScanner.normalizeClinicalMarker("if IgG"));
+    }
+
+    @Test
+    void readsNestedAndAliasEpitopeFields() throws Exception {
+        Path slide = dir.resolve("alias.vsi");
+        Files.writeString(slide, "x");
+        Files.writeString(dir.resolve("alias.metadata.json"), """
+                {"if_epitope":"if.CD3","ocr":{"clinicalMarker":"if.IgA"}}
+                """);
+        assertEquals("if.CD3", WsiCatalogScanner.readClinicalMarker(slide));
+    }
+
+    @Test
     void publishedZPlanesUseReaderSizeZNotSidecarInflation() {
         assertEquals(1, BioFormatsTileService.zPlaneCount(0));
         assertEquals(1, BioFormatsTileService.zPlaneCount(1));

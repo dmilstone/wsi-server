@@ -70,6 +70,10 @@ final class ImageContext implements AutoCloseable {
         }
     }
 
+    int series() {
+        return series;
+    }
+
     synchronized IFormatReader reader() {
         reader.setSeries(series);
         return reader;
@@ -91,8 +95,6 @@ final class ImageContext implements AutoCloseable {
     }
 
     ImageRegistry.ImageEntry entry() { return entry; }
-
-    int series() { return series; }
 
     boolean isRgb() { return rgb; }
 

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Operations</title>
+    <link rel="stylesheet" href="/pilot-feedback.css">
+</head>
+<body class="wsi-ops-page">
+<main>
+    <nav class="wsi-doc-nav" aria-label="Document links">
+        <button id="close-guide" type="button">Close</button>
+        <a href="/">Return to viewer</a>
+        <a href="/help/admin-ops-guide.html">Admin and Ops Guide</a>
+        <a href="/help/viewer-guide.html">Viewer Quick Guide</a>
+        <a href="/pilot-feedback/">Pilot Feedback</a>
+    </nav>
+    <h1>Local Operations</h1>
+    <p class="muted">Image-server browser view for this workstation. The loopback operations dashboard remains on 127.0.0.1:8084 when that process is running.</p>
+    <section class="wsi-ops-card">
+        <h2>Operations dashboard</h2>
+        <p>Open the local dashboard in a separate loopback browser when the ops process is listening. This page does not proxy that service.</p>
+        <p><a href="http://127.0.0.1:8084/" target="_blank" rel="noopener">http://127.0.0.1:8084/</a></p>
+    </section>
+    <section class="wsi-ops-card">
+        <h2>Guides on this server</h2>
+        <ul>
+            <li><a href="/help/admin-ops-guide.html">Admin and Ops Guide</a></li>
+            <li><a href="/help/viewer-guide.html">Viewer Quick Guide</a></li>
+            <li><a href="/pilot-feedback/">Pilot Feedback</a></li>
+        </ul>
+    </section>
+</main>
+<script>
+document.getElementById("close-guide").addEventListener("click", () => {
+    window.close();
+    window.setTimeout(() => {
+        if (!window.closed) window.location.assign("/");
+    }, 100);
+});
+</script>
+</body>
+</html>

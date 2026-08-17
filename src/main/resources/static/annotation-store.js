@@ -7,6 +7,102 @@
 class AnnotationStore {
 
     static collectionCache = new Map();
+    static WORKSTATION_STORAGE_KEY = "wsi.workstation.id";
+    static USER_HEADER = "X-WSI-User";
+    static USER_COOKIE = "WSI-WORKSTATION-ID";
+    static workstationUserIdCache = null;
+
+    /**
+     * Stable per-browser workstation id for annotation ownership.
+     * Restored from the previous store: Annotorious construction calls this
+     * during {@code new AnnotationAdapter(...)}.
+     */
+    static resolveWorkstationUserId() {
+        if (this.workstationUserIdCache) return this.workstationUserIdCache;
+
+        const storage = this.localStorageOrNull();
+        if (storage) {
+            try {
+                const existing = storage.getItem(this.WORKSTATION_STORAGE_KEY);
+                const normalized = this.sanitizeUserToken(existing);
+                if (normalized) {
+                    this.persistWorkstationIdentity(normalized, storage);
+                    this.workstationUserIdCache = normalized;
+                    return this.workstationUserIdCache;
+                }
+            } catch (error) {
+                console.warn("AnnotationStore: unable to read workstation id", error);
+            }
+        }
+
+        const newId = this.createWorkstationUserId();
+        this.persistWorkstationIdentity(newId, storage);
+        this.workstationUserIdCache = newId;
+        return this.workstationUserIdCache;
+    }
+
+    static persistWorkstationIdentity(workstationId, storage) {
+        if (storage) {
+            try {
+                storage.setItem(this.WORKSTATION_STORAGE_KEY, workstationId);
+            } catch (error) {
+                console.warn("AnnotationStore: unable to persist workstation id to localStorage", error);
+            }
+        }
+        this.persistWorkstationCookie(workstationId);
+    }
+
+    static persistWorkstationCookie(workstationId) {
+        try {
+            if (typeof document === "undefined") return;
+            const maxAge = 365 * 24 * 60 * 60;
+            document.cookie =
+                `${this.USER_COOKIE}=${encodeURIComponent(workstationId)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
+        } catch (error) {
+            console.warn("AnnotationStore: unable to persist workstation cookie", error);
+        }
+    }
+
+    static createWorkstationUserId() {
+        const hostname = this.sanitizeUserToken(
+            (typeof window !== "undefined" && window.location && window.location.hostname)
+                || "workstation"
+        ) || "workstation";
+        const uuid = this.sanitizeUserToken(this.createMachineId()) || this.fallbackRandomToken();
+        const combined = `ws${hostname}${uuid}`;
+        return combined.length <= 128 ? combined : combined.slice(0, 128);
+    }
+
+    static createMachineId() {
+        const cryptoApi = (typeof crypto !== "undefined" && crypto)
+            || (typeof window !== "undefined" && window.crypto)
+            || null;
+        if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+            return cryptoApi.randomUUID();
+        }
+        return this.fallbackRandomToken();
+    }
+
+    static fallbackRandomToken() {
+        return `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+    }
+
+    /** Keep only characters the Java AnnotationUserResolver is guaranteed to accept. */
+    static sanitizeUserToken(value) {
+        if (value == null) return "";
+        return String(value).trim().replace(/[^A-Za-z0-9]/g, "").slice(0, 128);
+    }
+
+    static localStorageOrNull() {
+        try {
+            const storage = typeof window !== "undefined" ? window.localStorage : null;
+            if (!storage) return null;
+            return storage;
+        } catch (error) {
+            console.warn("AnnotationStore: localStorage unavailable", error);
+            return null;
+        }
+    }
 
     static prefetchImage(imageId) {
         const normalizedImageId = imageId || null;
