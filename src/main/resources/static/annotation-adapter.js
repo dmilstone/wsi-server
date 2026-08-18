@@ -47,6 +47,16 @@ class AnnotationAdapter {
      * Cleared immediately on case-filter changes to prevent patient mismatch.
      */
     static currentImageId = null;
+    static currentModality = "";
+    static currentEngine = "";
+    static FLUORESCENCE_PLUGIN_OPTIONS = [
+        { value: "quantify-nuclei-pixel", label: "Run Pixel Intensity Plugin" },
+        { value: "per-object-pixel-quantifier", label: "Quantify Individual Objects (Color Code)" }
+    ];
+    static IHC_PLUGIN_OPTION = {
+        value: "ihc-pixel-quantifier",
+        label: "Run IHC Color Deconvolution Plugin"
+    };
 
     /**
      * Specimen / diagnostic scan profiles only. Label, Macro, Overview, Thumbnail,
@@ -60,6 +70,48 @@ class AnnotationAdapter {
     /** Show the series dropdown only when more than one diagnostic specimen scan exists. */
     static shouldShowSeriesSelector(profiles) {
         return AnnotationAdapter.diagnosticSpecimenProfiles(profiles).length > 1;
+    }
+
+    static largestSeriesIndex(profiles) {
+        let best = null;
+        for (const profile of Array.isArray(profiles) ? profiles : []) {
+            const area = Number(profile?.width) * Number(profile?.height);
+            const bestArea = best ? Number(best.width) * Number(best.height) : -1;
+            if (!best || area > bestArea) best = profile;
+        }
+        return best ? Number(best.index) || 0 : 0;
+    }
+
+    /**
+     * Default specimen series. RGB / H&E wins when the container has no
+     * fluorescence series-2 stack; otherwise keep the IF convention (index 2).
+     */
+    static chooseDefaultSeries(profiles) {
+        const specimens = AnnotationAdapter.diagnosticSpecimenProfiles(profiles);
+        const pool = specimens.length > 0 ? specimens : (Array.isArray(profiles) ? profiles : []);
+        if (pool.length === 0) return 0;
+        if (pool.length === 1) return Number(pool[0].index) || 0;
+        const rgbSpecimens = pool.filter(profile => profile && profile.rgb === true);
+        const fluorescence = pool.find(profile =>
+            Number(profile.index) === 2 && Number(profile.width) >= 512 && profile.rgb !== true);
+        if (rgbSpecimens.length > 0 && !fluorescence) {
+            return AnnotationAdapter.largestSeriesIndex(rgbSpecimens);
+        }
+        if (fluorescence) return 2;
+        const seriesTwo = pool.find(profile =>
+            Number(profile.index) === 2 && Number(profile.width) >= 512);
+        if (seriesTwo) return Number(seriesTwo.index) || 2;
+        return AnnotationAdapter.largestSeriesIndex(pool);
+    }
+
+    /** RGB H&E / IHC series must use composite tiles, not per-channel lighter stacks. */
+    static isRgbSeriesView(metadata, series) {
+        if (metadata && metadata.rgb === true) return true;
+        if (AnnotationAdapter.isBrightfieldSlide(metadata)) return true;
+        const profiles = Array.isArray(metadata?.seriesProfiles) ? metadata.seriesProfiles : [];
+        const index = Number.isFinite(Number(series)) ? Number(series) : Number(metadata?.series);
+        const current = profiles.find(profile => Number(profile.index) === index);
+        return Boolean(current && current.rgb === true);
     }
 
     /**
@@ -1551,6 +1603,8 @@ class AnnotationAdapter {
             ))
             : null;
         const specs = [];
+        const blend = options.compositeOperation
+            ?? (channels ? "lighter" : null);
         const pushSpec = (z, channel, tileSource) => {
             const channelIndex = Number(channel?.index);
             const visible = channel?.visible !== false;
@@ -1562,21 +1616,21 @@ class AnnotationAdapter {
                 if (Number.isFinite(channelIndex)) tileSource.channelIndex = channelIndex;
                 tileSource.channelName = channel?.name || "composite";
             }
-            specs.push({
+            const spec = {
                 tileSource,
                 opacity: z === activeZ && visible ? layerOpacity : 0,
                 preload: visible,
-                compositeOperation: "lighter",
                 x: 0,
                 y: 0,
                 width: 1,
                 showInNavigator: specs.length === 0,
-                index: specs.length,
                 zIndexProperty: z,
                 zIndices: z,
                 channelIndex: Number.isFinite(channelIndex) ? channelIndex : undefined,
                 channelName: channel?.name || "composite"
-            });
+            };
+            if (blend) spec.compositeOperation = blend;
+            specs.push(spec);
         };
         if (typeof build !== "function") return specs;
         if (channels) {
@@ -1612,6 +1666,20 @@ class AnnotationAdapter {
             return false;
         }
         return Boolean(viewer?.viewport && typeof viewer.viewport.goHome === "function");
+    }
+
+    /** Primary active tile-stack layer. OSD multi-image worlds must not use Viewport converters. */
+    static primaryTiledImage(viewer) {
+        const host = viewer || AnnotationAdapter.viewer;
+        if (!host?.world || typeof host.world.getItemAt !== "function") return null;
+        try {
+            if (typeof host.world.getItemCount === "function" && host.world.getItemCount() < 1) {
+                return null;
+            }
+            return host.world.getItemAt(0) || null;
+        } catch (_error) {
+            return null;
+        }
     }
 
     static centerHomeAfterTileSourceReady(viewer, options = {}) {
@@ -1679,7 +1747,8 @@ class AnnotationAdapter {
             planeCount,
             activeZ,
             tileSourceForPlane: build,
-            channels: options.channels
+            channels: options.channels,
+            compositeOperation: options.compositeOperation
         });
         AnnotationAdapter.pendingOpenViewport = {
             preserveViewport: Boolean(options.preserveViewport),
@@ -2874,7 +2943,54 @@ class AnnotationAdapter {
     static setImageMetadata(metadata) {
         AnnotationAdapter.ensureMeasurementDefaults();
         AnnotationAdapter.imageMetadata = metadata || null;
+        if (metadata && (metadata.modality || metadata.engine)) {
+            AnnotationAdapter.setActiveSlideContext(metadata);
+        } else if (!metadata) {
+            AnnotationAdapter.setActiveSlideContext(null);
+        } else {
+            AnnotationAdapter.syncPluginSelector();
+        }
         return AnnotationAdapter.imageMetadata;
+    }
+
+    static setActiveSlideContext(image) {
+        AnnotationAdapter.currentModality = String(image?.modality || "").toUpperCase();
+        AnnotationAdapter.currentEngine = String(image?.engine || "").toUpperCase();
+        AnnotationAdapter.syncPluginSelector();
+        return AnnotationAdapter.isBrightfieldSlide();
+    }
+
+    static isBrightfieldSlide(source) {
+        const modality = String(source?.modality || AnnotationAdapter.currentModality || "").toUpperCase();
+        const engine = String(source?.engine || AnnotationAdapter.currentEngine || "").toUpperCase();
+        return modality === "BRIGHTFIELD" || engine === "OPENSLIDE";
+    }
+
+    static syncPluginSelector(root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const select = host && typeof host.getElementById === "function"
+            ? host.getElementById("plugin-selector")
+            : null;
+        if (!select) return false;
+        const brightfield = AnnotationAdapter.isBrightfieldSlide();
+        const options = brightfield
+            ? [AnnotationAdapter.IHC_PLUGIN_OPTION].concat(AnnotationAdapter.FLUORESCENCE_PLUGIN_OPTIONS)
+            : AnnotationAdapter.FLUORESCENCE_PLUGIN_OPTIONS.slice();
+        const previous = String(select.value || "");
+        select.textContent = "";
+        for (const item of options) {
+            const option = (typeof document !== "undefined" && document.createElement)
+                ? document.createElement("option")
+                : { value: "", textContent: "" };
+            option.value = item.value;
+            option.textContent = item.label;
+            if (typeof select.appendChild === "function") select.appendChild(option);
+        }
+        const preferred = brightfield
+            ? "ihc-pixel-quantifier"
+            : (options.some((item) => item.value === previous) ? previous : options[0].value);
+        select.value = preferred;
+        return brightfield;
     }
 
     /**
@@ -3059,10 +3175,9 @@ class AnnotationAdapter {
 
         let imagePoint = null;
         try {
-            if (viewer.world?.getItemCount?.() > 0) {
-                imagePoint = viewer.world.getItemAt(0).viewportToImageCoordinates(viewportPoint);
-            } else if (typeof viewer.viewport.viewportToImageCoordinates === "function") {
-                imagePoint = viewer.viewport.viewportToImageCoordinates(viewportPoint);
+            const primaryTiledImage = AnnotationAdapter.primaryTiledImage(viewer);
+            if (primaryTiledImage && typeof primaryTiledImage.viewportToImageCoordinates === "function") {
+                imagePoint = primaryTiledImage.viewportToImageCoordinates(viewportPoint);
             }
         } catch (_) {
             return null;
@@ -4092,6 +4207,13 @@ class AnnotationAdapter {
                 });
                 return;
             }
+            if (pluginId === "ihc-pixel-quantifier") {
+                void AnnotationAdapter.runIhcColorDeconvolution({
+                    root: host,
+                    viewer: AnnotationAdapter.viewer
+                });
+                return;
+            }
             if (pluginId === "quantify-nuclei-pixel") {
                 void AnnotationAdapter.runPixelIntensityPlugin({
                     root: host,
@@ -4828,11 +4950,9 @@ class AnnotationAdapter {
                 viewportPoint = vp.pointFromPixel({ x: elementX, y: elementY }, true);
             }
             if (!viewportPoint) return null;
-            if (viewer.world?.getItemCount?.() > 0) {
-                return viewer.world.getItemAt(0).viewportToImageCoordinates(viewportPoint);
-            }
-            if (typeof vp.viewportToImageCoordinates === "function") {
-                return vp.viewportToImageCoordinates(viewportPoint);
+            const primaryTiledImage = AnnotationAdapter.primaryTiledImage(viewer);
+            if (primaryTiledImage && typeof primaryTiledImage.viewportToImageCoordinates === "function") {
+                return primaryTiledImage.viewportToImageCoordinates(viewportPoint);
             }
         } catch (_error) {
             return null;
@@ -4983,9 +5103,10 @@ class AnnotationAdapter {
         const vp = viewer?.viewport;
         if (!vp) return { x, y };
         let viewportPoint = { x, y };
-        if (typeof vp.imageToViewportCoordinates === "function") {
+        const primaryTiledImage = AnnotationAdapter.primaryTiledImage(viewer);
+        if (primaryTiledImage && typeof primaryTiledImage.imageToViewportCoordinates === "function") {
             try {
-                viewportPoint = vp.imageToViewportCoordinates(x, y) || viewportPoint;
+                viewportPoint = primaryTiledImage.imageToViewportCoordinates(x, y) || viewportPoint;
             } catch (_error) { /* keep image point */ }
         }
         if (typeof vp.viewportToViewerElementCoordinates === "function") {
@@ -5153,14 +5274,11 @@ class AnnotationAdapter {
         const viewportPoint = viewport.pointFromPixel(
             new OpenSeadragon.Point(viewerPixel.x, viewerPixel.y)
         );
-        const item = host?.world && typeof host.world.getItemAt === "function"
-            ? host.world.getItemAt(0)
-            : null;
-        const mapper = (item && typeof item.viewportToImageCoordinates === "function")
-            ? item
-            : viewport;
-        if (typeof mapper.viewportToImageCoordinates !== "function") return null;
-        const imagePoint = mapper.viewportToImageCoordinates(viewportPoint);
+        const primaryTiledImage = AnnotationAdapter.primaryTiledImage(host);
+        if (!primaryTiledImage || typeof primaryTiledImage.viewportToImageCoordinates !== "function") {
+            return null;
+        }
+        const imagePoint = primaryTiledImage.viewportToImageCoordinates(viewportPoint);
         const x = Number(imagePoint?.x);
         const y = Number(imagePoint?.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -5169,30 +5287,22 @@ class AnnotationAdapter {
 
     static imageToViewportWidth(viewer, imageWidth) {
         const host = viewer || AnnotationAdapter.viewer;
-        const viewport = host?.viewport;
         const span = Number(imageWidth);
-        if (!viewport || !Number.isFinite(span)) return null;
-        if (typeof viewport.imageToViewportWidth === "function") {
-            const width = Number(viewport.imageToViewportWidth(span));
+        if (!Number.isFinite(span)) return null;
+        const primaryTiledImage = AnnotationAdapter.primaryTiledImage(host);
+        if (primaryTiledImage && typeof primaryTiledImage.imageToViewportWidth === "function") {
+            const width = Number(primaryTiledImage.imageToViewportWidth(span));
             if (Number.isFinite(width) && width > 0) return width;
         }
-        const item = host?.world && typeof host.world.getItemAt === "function"
-            ? host.world.getItemAt(0)
-            : null;
-        if (item && typeof item.imageToViewportWidth === "function") {
-            const width = Number(item.imageToViewportWidth(span));
-            if (Number.isFinite(width) && width > 0) return width;
+        if (!primaryTiledImage || typeof primaryTiledImage.imageToViewportCoordinates !== "function") {
+            return null;
         }
-        const mapper = (item && typeof item.imageToViewportCoordinates === "function")
-            ? item
-            : viewport;
-        if (typeof mapper.imageToViewportCoordinates !== "function") return null;
         const OpenSeadragon = AnnotationAdapter._openSeadragon();
-        const origin = mapper.imageToViewportCoordinates(
+        const origin = primaryTiledImage.imageToViewportCoordinates(
             OpenSeadragon?.Point ? new OpenSeadragon.Point(0, 0) : 0,
             OpenSeadragon?.Point ? undefined : 0
         );
-        const edge = mapper.imageToViewportCoordinates(
+        const edge = primaryTiledImage.imageToViewportCoordinates(
             OpenSeadragon?.Point ? new OpenSeadragon.Point(span, 0) : span,
             OpenSeadragon?.Point ? undefined : 0
         );
@@ -5661,17 +5771,13 @@ class AnnotationAdapter {
             overlayElement.style.width = "100%";
             overlayElement.style.height = "100%";
             overlayElement.style.background = "rgba(0,255,0,.12)";
-            const item = host.world && typeof host.world.getItemAt === "function"
-                ? host.world.getItemAt(0)
-                : null;
-            const mapper = (item && typeof item.imageToViewportCoordinates === "function")
-                ? item
-                : host.viewport;
+            const primaryTiledImage = AnnotationAdapter.primaryTiledImage(host);
             let location = { x: centerX, y: centerY };
             let width;
             try {
-                if (OpenSeadragon?.Point && mapper && typeof mapper.imageToViewportCoordinates === "function") {
-                    location = mapper.imageToViewportCoordinates(
+                if (OpenSeadragon?.Point && primaryTiledImage
+                    && typeof primaryTiledImage.imageToViewportCoordinates === "function") {
+                    location = primaryTiledImage.imageToViewportCoordinates(
                         new OpenSeadragon.Point(centerX, centerY)
                     );
                 }
@@ -5703,12 +5809,10 @@ class AnnotationAdapter {
 
     static paintStarConvexNucleiLayer(viewer, nuclei, doc) {
         const host = viewer || AnnotationAdapter.viewer;
-        const item = host?.world && typeof host.world.getItemAt === "function"
-            ? host.world.getItemAt(0)
+        const primaryTiledImage = AnnotationAdapter.primaryTiledImage(host);
+        const mapper = (primaryTiledImage && typeof primaryTiledImage.imageToViewportRectangle === "function")
+            ? primaryTiledImage
             : null;
-        const mapper = (item && typeof item.imageToViewportRectangle === "function")
-            ? item
-            : host?.viewport;
         if (!mapper || typeof mapper.imageToViewportRectangle !== "function") return 0;
         let minX = Infinity;
         let minY = Infinity;
@@ -5876,12 +5980,10 @@ class AnnotationAdapter {
         panel.setAttribute("data-ai-plugin-stats", "1");
         panel.innerHTML = AnnotationAdapter.pluginStatsTableHtml(result);
         const OpenSeadragon = AnnotationAdapter._openSeadragon();
-        const item = host.world && typeof host.world.getItemAt === "function"
-            ? host.world.getItemAt(0)
+        const primaryTiledImage = AnnotationAdapter.primaryTiledImage(host);
+        const mapper = (primaryTiledImage && typeof primaryTiledImage.imageToViewportCoordinates === "function")
+            ? primaryTiledImage
             : null;
-        const mapper = (item && typeof item.imageToViewportCoordinates === "function")
-            ? item
-            : host.viewport;
         const x = Number(result.x) || 0;
         const y = Number(result.y) || 0;
         const width = Math.max(1, Number(result.width) || 1);
@@ -6006,6 +6108,41 @@ class AnnotationAdapter {
         return true;
     }
 
+    static ihcRgbFromNormalized(t) {
+        const x = Math.max(0, Math.min(1, Number(t) || 0));
+        const r = Math.round(255 + (128 - 255) * x);
+        const g = Math.round(255 * (1 - x));
+        return `rgb(${r}, ${g}, 0)`;
+    }
+
+    static ihcColorFromKeys(value, min, max) {
+        if (!Number.isFinite(value)) return AnnotationAdapter.ihcRgbFromNormalized(0.5);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) {
+            return AnnotationAdapter.ihcRgbFromNormalized(0.5);
+        }
+        return AnnotationAdapter.ihcRgbFromNormalized((value - min) / (max - min));
+    }
+
+    static applyObjectIhcColors(objects) {
+        const list = Array.isArray(objects) ? objects : [];
+        let min = Infinity;
+        let max = -Infinity;
+        for (const item of list) {
+            const value = Number(item?.key);
+            if (!Number.isFinite(value)) continue;
+            if (value < min) min = value;
+            if (value > max) max = value;
+        }
+        const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
+        for (const item of list) {
+            const index = Number(item?.index);
+            if (!Number.isInteger(index) || index < 0 || index >= parts.length) continue;
+            const computedObjectColor = AnnotationAdapter.ihcColorFromKeys(Number(item.key), min, max);
+            AnnotationAdapter.applyNucleusRainbowStyle(parts[index], computedObjectColor);
+        }
+        return list.length;
+    }
+
     static applyObjectRainbowColors(objects) {
         const list = Array.isArray(objects) ? objects : [];
         let min = Infinity;
@@ -6075,6 +6212,59 @@ class AnnotationAdapter {
             return result;
         } catch (_error) {
             AnnotationAdapter.setAiStatus("AI Pipeline: Object color coding failed.", root);
+            return null;
+        }
+    }
+
+    static async runIhcColorDeconvolution(options = {}) {
+        const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
+        const viewer = options.viewer || AnnotationAdapter.viewer;
+        const imageId = options.imageId || AnnotationAdapter.currentImageId;
+        const nuclei = AnnotationAdapter.nucleiFootprintsForPlugin(options.nuclei);
+        if (!imageId) {
+            AnnotationAdapter.setAiStatus("AI Pipeline: Open a slide before IHC deconvolution.", root);
+            return null;
+        }
+        if (!nuclei.length) {
+            AnnotationAdapter.setAiStatus("AI Pipeline: Segment nuclei before IHC deconvolution.", root);
+            return null;
+        }
+        const bounds = AnnotationAdapter.readViewportImageBounds(viewer, { root, ...options });
+        const payload = {
+            imageId,
+            x: Math.max(0, Math.floor(Number(bounds?.x) || 0)),
+            y: Math.max(0, Math.floor(Number(bounds?.y) || 0)),
+            width: Math.max(1, Math.floor(Number(bounds?.width) || 1)),
+            height: Math.max(1, Math.floor(Number(bounds?.height) || 1)),
+            channels: ["R", "G", "B"],
+            pluginId: "ihc-pixel-quantifier",
+            series: Number(AnnotationAdapter.currentSeries) || 0,
+            z: Number(AnnotationAdapter.currentZ) || 0,
+            nuclei
+        };
+        AnnotationAdapter.setAiStatus("AI Pipeline: Color coding IHC expression…", root);
+        try {
+            const csrf = (typeof window !== "undefined" && window.WsiCsrf)
+                || (typeof globalThis !== "undefined" && globalThis.WsiCsrf)
+                || null;
+            const fetchFn = csrf && typeof csrf.csrfFetch === "function"
+                ? csrf.csrfFetch.bind(csrf)
+                : (typeof fetch === "function" ? fetch : null);
+            if (!fetchFn) throw new Error("fetch is unavailable");
+            const response = await fetchFn("/api/plugins/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (!response || !response.ok) {
+                throw new Error("plugin request failed");
+            }
+            const result = await response.json();
+            AnnotationAdapter.applyObjectIhcColors(result?.objects);
+            AnnotationAdapter.setAiStatus("AI Pipeline: IHC color coding complete.", root);
+            return result;
+        } catch (_error) {
+            AnnotationAdapter.setAiStatus("AI Pipeline: IHC color coding failed.", root);
             return null;
         }
     }

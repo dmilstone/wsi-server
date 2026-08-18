@@ -64,7 +64,9 @@ function fakeItem(index, extra = {}) {
     assert.equal(specs[0].showInNavigator, true);
     assert.equal(specs[1].showInNavigator, false);
     assert.equal(specs[2].tileSource.plane, 2);
-    assert.equal(specs[4].index, 4);
+    assert.equal(specs[4].index, undefined);
+    assert.ok(specs.every(spec => !Object.prototype.hasOwnProperty.call(spec, "index")));
+    assert.ok(specs.every(spec => spec.compositeOperation == null));
     assert.ok(specs.every((spec, z) => spec.zIndexProperty === z && spec.zIndices === z));
     assert.equal(specs[0].channelName, "composite");
 }
@@ -351,7 +353,8 @@ function fakeItem(index, extra = {}) {
 
 assert.match(adapterSource, /static applyChannelLayerOpacities\(/);
 assert.match(adapterSource, /static openMultiPlaneZStack\(/);
-assert.match(adapterSource, /compositeOperation:\s*"lighter"/);
+assert.match(adapterSource, /channels \? "lighter" : null/);
+assert.match(adapterSource, /spec\.compositeOperation = blend/);
 assert.match(html, /scheduleDisplayUpdate\(\{\s*reopen:\s*false\s*\}\)/);
 assert.match(html, /applyChannelLayerOpacities\(viewer, display\.channels/);
 assert.doesNotMatch(
@@ -374,6 +377,11 @@ assert.match(adapterSource, /static enforceDefaultClosedPanelState\(/);
 assert.match(adapterSource, /zIndexProperty === targetZIndex|tagged === targetZIndex/);
 assert.doesNotMatch(adapterSource, /addHandler\("canvas-scroll"/);
 assert.match(html, /AnnotationAdapter\.openMultiPlaneZStack/);
+assert.match(html, /AnnotationAdapter\.isRgbSeriesView/);
+assert.match(html, /AnnotationAdapter\.chooseDefaultSeries/);
+assert.match(adapterSource, /static isRgbSeriesView\(/);
+assert.match(adapterSource, /static chooseDefaultSeries\(/);
+assert.doesNotMatch(adapterSource, /index:\s*specs\.length/);
 assert.match(html, /AnnotationAdapter\.bindZStackWheel/);
 assert.match(html, /AnnotationAdapter\.applyZStackLayerOpacities/);
 assert.match(html, /scrollToZoom:\s*true/);

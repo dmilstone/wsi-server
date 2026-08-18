@@ -18,5 +18,9 @@ public record ImageMetadataResponse(
         /** Active Bio-Formats series index used for the top-level dimension fields. */
         int series,
         /** Ordered catalog of every series/sub-image in the container. */
-        List<ImageSeriesProfile> seriesProfiles
+        List<ImageSeriesProfile> seriesProfiles,
+        String modality,
+        String engine,
+        /** True when the selected series is 8-bit RGB (H&E / IHC), not planar fluorescence. */
+        boolean rgb
 ) {}

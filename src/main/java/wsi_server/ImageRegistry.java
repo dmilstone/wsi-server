@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ImageRegistry {
     private static final Logger LOGGER = LoggerFactory.getLogger(ImageRegistry.class);
     private static final List<String> SUPPORTED_SUFFIXES = List.of(
-            ".ome.tif", ".ome.tiff", ".tif", ".tiff", ".czi", ".nd2", ".lif", ".vsi", ".svs");
+            ".ome.tif", ".ome.tiff", ".tif", ".tiff", ".czi", ".nd2", ".lif", ".vsi", ".svs", ".ndpi");
 
     private final Path rootDirectory;
     private final boolean recursive;
@@ -99,10 +99,14 @@ public class ImageRegistry {
         boolean changed = false;
         for (ImageEntry entry : previous.ordered()) {
             WsiCatalogScanner.SidecarMetadata sidecar = WsiCatalogScanner.read(entry.path());
+            WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(
+                    entry.path(), sidecar, true);
             if (sidecar.clinicalMarker().equals(entry.clinicalMarker())
                     && sidecar.zPlanes() == entry.zPlanes()
                     && sidecar.depth() == entry.depth()
-                    && sidecar.zLayers() == entry.zLayers()) {
+                    && sidecar.zLayers() == entry.zLayers()
+                    && inspection.modality().equals(entry.modality())
+                    && inspection.engine().equals(entry.engine())) {
                 continue;
             }
             relative.put(entry.relativePath(), new ImageEntry(
@@ -114,7 +118,9 @@ public class ImageRegistry {
                     sidecar.clinicalMarker(),
                     sidecar.zPlanes(),
                     sidecar.depth(),
-                    sidecar.zLayers()));
+                    sidecar.zLayers(),
+                    inspection.modality(),
+                    inspection.engine()));
             changed = true;
         }
         if (changed) snapshot.set(makeSnapshotEntries(relative.values()));
@@ -238,6 +244,9 @@ public class ImageRegistry {
                 .encodeToString(relativePath.getBytes(StandardCharsets.UTF_8));
         int slash = relativePath.lastIndexOf('/');
         WsiCatalogScanner.SidecarMetadata sidecar = WsiCatalogScanner.read(path);
+        Path sidecarPath = WsiCatalogScanner.metadataPathForSlide(path);
+        WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(
+                path, sidecar, sidecarPath != null && Files.isRegularFile(sidecarPath));
         return new ImageEntry(
                 id,
                 slash < 0 ? relativePath : relativePath.substring(slash + 1),
@@ -247,7 +256,9 @@ public class ImageRegistry {
                 sidecar.clinicalMarker(),
                 sidecar.zPlanes(),
                 sidecar.depth(),
-                sidecar.zLayers()
+                sidecar.zLayers(),
+                inspection.modality(),
+                inspection.engine()
         );
     }
 
@@ -283,9 +294,14 @@ public class ImageRegistry {
     @PreDestroy void close() { scanner.shutdownNow(); }
 
     public record ImageEntry(String id, String name, String relativePath, String folder, Path path,
-                             String clinicalMarker, int zPlanes, int depth, int zLayers) {
+                             String clinicalMarker, int zPlanes, int depth, int zLayers,
+                             String modality, String engine) {
         public ImageEntry {
             clinicalMarker = clinicalMarker == null ? "" : clinicalMarker;
+            modality = modality == null || modality.isBlank()
+                    ? WsiCatalogScanner.MODALITY_FLUORESCENCE : modality;
+            engine = engine == null || engine.isBlank()
+                    ? WsiCatalogScanner.ENGINE_BIOFORMATS : engine;
         }
     }
     public record RefreshStatus(boolean running, int added, int unavailableOrPending, String failureCategory) {}

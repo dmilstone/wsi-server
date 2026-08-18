@@ -9,9 +9,13 @@ public record ImageSummary(
         String clinicalMarker,
         int zPlanes,
         int depth,
-        int zLayers
+        int zLayers,
+        String modality,
+        String engine
 ) {
     public ImageSummary {
         clinicalMarker = clinicalMarker == null ? "" : clinicalMarker;
+        modality = modality == null || modality.isBlank() ? "FLUORESCENCE" : modality;
+        engine = engine == null || engine.isBlank() ? "BIOFORMATS" : engine;
     }
 }

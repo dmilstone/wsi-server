@@ -204,8 +204,16 @@ class AnnotoriousSpike {
 
     clientToImagePoint(event) {
         const rect = this.viewer.element.getBoundingClientRect();
-        return this.viewer.viewport.viewerElementToImageCoordinates(
-            new OpenSeadragon.Point(event.clientX - rect.left, event.clientY - rect.top));
+        const elementPoint = new OpenSeadragon.Point(
+            event.clientX - rect.left,
+            event.clientY - rect.top
+        );
+        const viewportPoint = this.viewer.viewport.pointFromPixel(elementPoint, true);
+        const primaryTiledImage = this.viewer.world.getItemAt(0);
+        if (!primaryTiledImage || typeof primaryTiledImage.viewportToImageCoordinates !== "function") {
+            return { x: Number.NaN, y: Number.NaN };
+        }
+        return primaryTiledImage.viewportToImageCoordinates(viewportPoint);
     }
 
     annotationContainsClientPoint(annotation, event) {

@@ -60,6 +60,7 @@ public class BioFormatsTileService {
     private final DiagnosticTiming timing;
     private final BioFormatsReaderPool readerPool;
     private final PngTileCache tileCache;
+    private final WsiReaderEngineFactory engineFactory;
     private final Map<String, ImageContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, AssociatedImages> associatedImageCache = new ConcurrentHashMap<>();
     private final Map<String, Object> associatedLocks = new ConcurrentHashMap<>();
@@ -71,6 +72,7 @@ public class BioFormatsTileService {
                                  ExportValidator exportValidator,
                                  BioFormatsReaderPool readerPool,
                                  PngTileCache tileCache,
+                                 WsiReaderEngineFactory engineFactory,
                                  @Value("${wsi.diagnostic-timing.enabled:false}") boolean diagnosticTimingEnabled) {
         this.registry = registry;
         this.fluorescenceRenderer = fluorescenceRenderer;
@@ -79,13 +81,16 @@ public class BioFormatsTileService {
         this.exportValidator = exportValidator;
         this.readerPool = readerPool;
         this.tileCache = tileCache;
+        this.engineFactory = engineFactory;
         this.timing = new DiagnosticTiming(diagnosticTimingEnabled);
+        if (this.engineFactory != null) this.engineFactory.ensureNativeLibraries();
     }
 
     public ImageListResponse listImages() {
         try {
             return timing.measure("image_list", "snapshot_read", "registry", this::listImagesMeasured);
         } catch (Exception impossible) {
+            impossible.printStackTrace();
             throw new IllegalStateException(impossible);
         }
     }
@@ -100,7 +105,9 @@ public class BioFormatsTileService {
                         entry.clinicalMarker(),
                         entry.zPlanes(),
                         entry.depth(),
-                        entry.zLayers()))
+                        entry.zLayers(),
+                        entry.modality(),
+                        entry.engine()))
                 .toList();
         return new ImageListResponse(registry.getRootDirectory().toString(), images);
     }
@@ -124,13 +131,21 @@ public class BioFormatsTileService {
                     reader.getSizeX(), reader.getSizeY(), reader.getSizeC(),
                     reader.getResolutionCount(), ImageContext.TILE_SIZE, state.revision(),
                     micronsPerPixelX, micronsPerPixelY, zPlaneCount(reader.getSizeZ()),
-                    series, List.copyOf(profiles));
+                    series, List.copyOf(profiles),
+                    context.entry().modality(), context.entry().engine(), context.isRgb());
         });
     }
 
     /** Bio-Formats sizeZ for 2D slides is often 0/1; always expose at least one focal plane. */
     static int zPlaneCount(int sizeZ) {
         return Math.max(1, sizeZ);
+    }
+
+    /** RGB / H&E planes are often a single Z; keep leftover channel-stack Z requests on-screen. */
+    static int clampRgbZ(int z, int sizeZ) {
+        int planes = zPlaneCount(sizeZ);
+        if (z < 0) return 0;
+        return Math.min(z, planes - 1);
     }
 
     private List<ImageSeriesProfile> catalogSeriesProfiles(IFormatReader reader) {
@@ -487,6 +502,10 @@ public class BioFormatsTileService {
     public byte[] getTile(String imageId, int viewerLevel, int channel,
                           int tileX, int tileY, int z, int series, HttpSession session) throws Exception {
         ImageContext context = context(imageId, series);
+        if (context.isRgb()) {
+            return getCompositeTile(imageId, viewerLevel, tileX, tileY,
+                    clampRgbZ(z, context.sizeZ()), series, session);
+        }
         SessionDisplayState state = sessionState(session, imageId, series, context);
         validateZ(z, context.sizeZ());
         long revision;
@@ -788,11 +807,26 @@ public class BioFormatsTileService {
         synchronized (contexts) {
             existing = contexts.get(key);
             if (existing == null) {
-                existing = new ImageContext(entry, timing, series, readerPool);
-                contexts.put(key, existing);
+                try {
+                    if (engineFactory != null && isBrightfieldEntry(entry)) {
+                        engineFactory.open(entry);
+                    }
+                    existing = new ImageContext(entry, timing, series, readerPool);
+                    contexts.put(key, existing);
+                } catch (Exception exception) {
+                    exception.printStackTrace();
+                    throw exception;
+                }
             }
             return existing;
         }
+    }
+
+    private static boolean isBrightfieldEntry(ImageRegistry.ImageEntry entry) {
+        if (entry == null) return false;
+        return WsiCatalogScanner.ENGINE_OPENSLIDE.equals(entry.engine())
+                || WsiCatalogScanner.MODALITY_BRIGHTFIELD.equals(entry.modality())
+                || WsiCatalogScanner.isOpenSlideExtension(entry.path());
     }
 
     private DisplayResponse toDisplayResponse(SessionDisplayState state, ImageContext context) {

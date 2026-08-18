@@ -76,9 +76,18 @@ spike.viewer = {
         classList: { toggle() {} }
     },
     viewport: {
-        viewerElementToImageCoordinates(point) {
-            return { x: point.x / viewportScale, y: point.y / viewportScale };
+        pointFromPixel(point) { return point; },
+        viewerElementToImageCoordinates() {
+            throw new Error("viewport.viewerElementToImageCoordinates must not run");
         }
+    },
+    world: {
+        getItemCount: () => 2,
+        getItemAt: () => ({
+            viewportToImageCoordinates(point) {
+                return { x: point.x / viewportScale, y: point.y / viewportScale };
+            }
+        })
     }
 };
 spike.toggleButton = button();
@@ -181,6 +190,7 @@ spike.setAnnotationsVisible(false);
 assert.equal(spike.labelLayer.displacements.size, 0);
 assert.equal(setSelectedCalls, 0);
 
+assert(!source.includes("viewerElementToImageCoordinates"));
 assert(!source.includes("finalizeAnnotationPointerEdit"));
 assert(!/setSelected\s*\(/.test(source), "movement integration contains no setSelected call");
 console.log("annotation presentation-only movement checks passed");

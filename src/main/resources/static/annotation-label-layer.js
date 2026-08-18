@@ -109,8 +109,14 @@ class AnnotationLabelLayer {
             return;
         }
         const displacement = this.temporaryDisplacements.get(entry.annotation.id) || { x: 0, y: 0 };
-        const point = this.viewer.viewport.imageToViewerElementCoordinates(
+        const primaryTiledImage = this.viewer.world.getItemAt(0);
+        if (!primaryTiledImage || typeof primaryTiledImage.imageToViewportCoordinates !== "function") {
+            entry.element.hidden = true;
+            return;
+        }
+        const viewportPoint = primaryTiledImage.imageToViewportCoordinates(
             new OpenSeadragon.Point(x + displacement.x, y + displacement.y));
+        const point = this.viewer.viewport.viewportToViewerElementCoordinates(viewportPoint);
         entry.element.hidden = false;
         entry.element.style.transform = `translate(${Math.round(point.x + 6)}px, ${Math.round(point.y + 6)}px)`;
     }

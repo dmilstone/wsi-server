@@ -28,9 +28,20 @@ const handlers = new Map();
 let scale = 1;
 const viewer = {
     element: root,
-    viewport: { imageToViewerElementCoordinates(point) {
-        return { x: point.x * scale, y: point.y * scale };
-    } },
+    world: {
+        getItemCount: () => 2,
+        getItemAt: () => ({
+            imageToViewportCoordinates(point) { return { x: point.x, y: point.y }; }
+        })
+    },
+    viewport: {
+        viewportToViewerElementCoordinates(point) {
+            return { x: point.x * scale, y: point.y * scale };
+        },
+        imageToViewerElementCoordinates() {
+            throw new Error("viewport.imageToViewerElementCoordinates must not run");
+        }
+    },
     addHandler(event, callback) { handlers.set(event, callback); },
     removeHandler(event, callback) { if (handlers.get(event) === callback) handlers.delete(event); }
 };
@@ -132,6 +143,7 @@ assert.equal(layer.labels.size, 0);
 
 // Labels are non-interactive viewer children, not canvas/export inputs, and clean up fully.
 assert.equal(layer.layer.style.pointerEvents, "none");
+assert(!source.includes("imageToViewerElementCoordinates"));
 assert(!source.includes("innerHTML"));
 assert(!source.includes(".setAnnotations("));
 assert(!source.includes("export"));

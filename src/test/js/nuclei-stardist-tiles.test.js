@@ -87,6 +87,30 @@ const { AnnotationAdapter } = context;
     assert.equal(AnnotationAdapter.aiNucleusOverlayElements.length, 0);
 }
 
+assert.match(adapterSource, /static primaryTiledImage\(/);
+assert.doesNotMatch(adapterSource, /viewport\.viewportToImageCoordinates/);
+assert.doesNotMatch(adapterSource, /viewport\.imageToViewportWidth\(/);
+
+{
+    const viewer = {
+        world: {
+            getItemCount: () => 2,
+            getItemAt: () => ({
+                imageToViewportWidth: (span) => span / 1000,
+                viewportToImageCoordinates: (point) => ({ x: point.x * 10, y: point.y * 10 })
+            })
+        },
+        viewport: {
+            imageToViewportWidth() { throw new Error("viewport.imageToViewportWidth must not run"); },
+            viewportToImageCoordinates() { throw new Error("viewport.viewportToImageCoordinates must not run"); }
+        }
+    };
+    assert.equal(AnnotationAdapter.imageToViewportWidth(viewer, 200), 0.2);
+    const mapped = AnnotationAdapter.primaryTiledImage(viewer).viewportToImageCoordinates({ x: 2, y: 3 });
+    assert.equal(mapped.x, 20);
+    assert.equal(mapped.y, 30);
+}
+
 assert.match(adapterSource, /static planNucleusTiles\(/);
 assert.match(adapterSource, /static setNucleiOverlaysVisible\(/);
 assert.match(adapterSource, /static findStarDistPeaks\(/);
@@ -99,6 +123,33 @@ assert.doesNotMatch(html, /Segment Cell Nuclei/);
 assert.match(html, /id="plugin-selector"/);
 assert.match(html, /<option value="quantify-nuclei-pixel">Run Pixel Intensity Plugin</);
 assert.match(html, /<option value="per-object-pixel-quantifier">Quantify Individual Objects \(Color Code\)</);
+assert.match(html, /<option value="ihc-pixel-quantifier">Run IHC Color Deconvolution Plugin</);
+assert.match(adapterSource, /static async runIhcColorDeconvolution\(/);
+assert.match(adapterSource, /ihc-pixel-quantifier/);
+assert.doesNotMatch(adapterSource, /runIhcColorDeconvolution[\s\S]{0,1200}renderPluginStatsTable/);
+assert.equal(AnnotationAdapter.ihcRgbFromNormalized(0), "rgb(255, 255, 0)");
+assert.equal(AnnotationAdapter.ihcRgbFromNormalized(1), "rgb(128, 0, 0)");
+assert.equal(AnnotationAdapter.isBrightfieldSlide({ modality: "BRIGHTFIELD" }), true);
+assert.equal(AnnotationAdapter.isBrightfieldSlide({ engine: "OPENSLIDE" }), true);
+assert.equal(AnnotationAdapter.isBrightfieldSlide({ modality: "FLUORESCENCE" }), false);
+assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 2), true);
+assert.equal(AnnotationAdapter.isRgbSeriesView({
+    modality: "FLUORESCENCE",
+    series: 2,
+    seriesProfiles: [{ index: 2, rgb: true, isDiagnosticSpecimen: true }]
+}, 2), true);
+assert.equal(AnnotationAdapter.isRgbSeriesView({
+    modality: "FLUORESCENCE",
+    seriesProfiles: [{ index: 2, rgb: false, isDiagnosticSpecimen: true }]
+}, 2), false);
+assert.equal(AnnotationAdapter.chooseDefaultSeries([
+    { index: 0, width: 1024, height: 1024, rgb: false, isDiagnosticSpecimen: true },
+    { index: 2, width: 8000, height: 6000, rgb: true, isDiagnosticSpecimen: true }
+]), 2);
+assert.equal(AnnotationAdapter.chooseDefaultSeries([
+    { index: 0, width: 9000, height: 7000, rgb: true, isDiagnosticSpecimen: true },
+    { index: 2, width: 8000, height: 6000, rgb: false, isDiagnosticSpecimen: true }
+]), 2);
 assert.match(html, /<summary>System Diagnostic Disclaimer<\/summary>/);
 assert.match(html, /Experimental viewport simulation on this browser only/);
 assert.match(adapterSource, /static async runPerObjectPixelQuantifier\(/);
