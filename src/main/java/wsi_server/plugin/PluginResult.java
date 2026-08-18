@@ -14,6 +14,24 @@ public record PluginResult(
         int nucleusCount,
         long sampleCount,
         List<ChannelIntensityStats> channels,
-        List<ObjectColorKey> objects
+        List<ObjectColorKey> objects,
+        List<NucleusPolygon> nuclei
 ) {
+    public PluginResult(
+            String pluginId,
+            String title,
+            int x,
+            int y,
+            int width,
+            int height,
+            int sampledWidth,
+            int sampledHeight,
+            int nucleusCount,
+            long sampleCount,
+            List<ChannelIntensityStats> channels,
+            List<ObjectColorKey> objects
+    ) {
+        this(pluginId, title, x, y, width, height, sampledWidth, sampledHeight,
+                nucleusCount, sampleCount, channels, objects, List.of());
+    }
 }

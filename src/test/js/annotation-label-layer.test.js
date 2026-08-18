@@ -8,7 +8,7 @@ const vm = require("node:vm");
 class Element {
     constructor(tag = "div") {
         this.tag = tag; this.children = []; this.attributes = {}; this.style = {};
-        this.hidden = false; this.textContent = ""; this.title = ""; this.parent = null;
+        this.dataset = {}; this.hidden = false; this.textContent = ""; this.title = ""; this.parent = null;
     }
     appendChild(child) { child.parent = this; this.children.push(child); return child; }
     remove() {
@@ -82,7 +82,12 @@ assert.equal(layer.labels.size, 2);
 assert.equal(layer.labels.get("one").element.textContent, "Région 🧬, #2! <b>plain</b>");
 assert.equal(layer.labels.get("one").element.children.length, 0, "name is never parsed as markup");
 assert.equal(layer.labels.get("two").element.title, "界".repeat(200), "full bounded name remains available");
-assert.equal(layer.labels.get("one").element.style.transform, "translate(16px, 26px)");
+assert.equal(layer.labels.get("one").element.style.transform, "translate(-50%, -130%)");
+assert.equal(layer.labels.get("one").element.style.left, "20px");
+assert.equal(layer.labels.get("one").element.style.top, "20px");
+assert.equal(layer.labels.get("one").element.style.transformOrigin, "bottom center");
+assert.equal(layer.labels.get("one").element.style.zIndex, "100");
+assert.equal(layer.labels.get("one").element.style.whiteSpace, "nowrap");
 
 // Annotorious' committed movement payload updates canonical x/y before its
 // derived bounds. The label must use that live geometry immediately rather
@@ -90,18 +95,26 @@ assert.equal(layer.labels.get("one").element.style.transform, "translate(16px, 2
 first.target.selector.geometry.x = 12;
 first.target.selector.geometry.y = 24;
 layer.syncAnnotation(first);
-assert.equal(layer.labels.get("one").element.style.transform, "translate(18px, 30px)");
+assert.equal(layer.labels.get("one").element.style.left, "22px");
+assert.equal(layer.labels.get("one").element.style.top, "24px");
+assert.equal(layer.labels.get("one").element.style.transform, "translate(-50%, -130%)");
 layer.setTemporaryDisplacement("one", 3, 4);
-assert.equal(layer.labels.get("one").element.style.transform, "translate(21px, 34px)",
+assert.equal(layer.labels.get("one").element.style.left, "25px");
+assert.equal(layer.labels.get("one").element.style.top, "28px");
+assert.equal(layer.labels.get("one").element.style.transform, "translate(-50%, -130%)",
     "temporary movement is applied without changing annotation geometry");
 scale = 2;
 handlers.get("animation")();
-assert.equal(layer.labels.get("one").element.style.transform, "translate(36px, 62px)",
+assert.equal(layer.labels.get("one").element.style.left, "50px");
+assert.equal(layer.labels.get("one").element.style.top, "56px");
+assert.equal(layer.labels.get("one").element.style.transform, "translate(-50%, -130%)",
     "image-coordinate displacement remains anchored during zoom");
 handlers.get("viewport-change")();
 layer.clearTemporaryDisplacement("one");
 layer.updatePositions();
-assert.equal(layer.labels.get("one").element.style.transform, "translate(30px, 54px)");
+assert.equal(layer.labels.get("one").element.style.left, "44px");
+assert.equal(layer.labels.get("one").element.style.top, "48px");
+assert.equal(layer.labels.get("one").element.style.transform, "translate(-50%, -130%)");
 
 // Rename and clearing update in place; deletion removes without replacing annotations.
 const originalElement = layer.labels.get("one").element;
@@ -145,6 +158,12 @@ assert.equal(layer.labels.size, 0);
 assert.equal(layer.layer.style.pointerEvents, "none");
 assert(!source.includes("imageToViewerElementCoordinates"));
 assert(!source.includes("innerHTML"));
+assert.match(source, /BOTTOM_CENTER/);
+assert.match(source, /translate\(-50%, -130%\)/);
+assert.match(source, /transformOrigin = "bottom center"/);
+assert.match(source, /zIndex = "100"/);
+assert.match(source, /whiteSpace = "nowrap"/);
+assert.equal(layer.labels.get("one")?.element?.dataset?.osdPlacement || context.AnnotationLabelLayer.LABEL_PLACEMENT, "BOTTOM_CENTER");
 assert(!source.includes(".setAnnotations("));
 assert(!source.includes("export"));
 layer.destroy();

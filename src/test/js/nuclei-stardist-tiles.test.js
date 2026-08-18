@@ -70,6 +70,21 @@ const { AnnotationAdapter } = context;
 }
 
 {
+    const mapped = AnnotationAdapter.mapPluginNucleiToOverlays({
+        nuclei: [{
+            index: 0,
+            cx: 10,
+            cy: 12,
+            vertices: [{ x: 8, y: 10 }, { x: 12, y: 10 }, { x: 11, y: 14 }]
+        }]
+    });
+    assert.equal(mapped.length, 1);
+    assert.equal(mapped[0].type, "Polygon");
+    assert.equal(mapped[0].vertices.length, 3);
+    assert.equal(AnnotationAdapter.verticesToPointsString(mapped[0].vertices), "8,10 12,10 11,14");
+}
+
+{
     const viewer = {
         overlays: [],
         currentOverlays: [],
@@ -114,6 +129,13 @@ assert.doesNotMatch(adapterSource, /viewport\.imageToViewportWidth\(/);
 assert.match(adapterSource, /static planNucleusTiles\(/);
 assert.match(adapterSource, /static setNucleiOverlaysVisible\(/);
 assert.match(adapterSource, /static findStarDistPeaks\(/);
+assert.match(adapterSource, /static async runStarDistSegmentation\(/);
+assert.match(adapterSource, /stardist-segmentation/);
+assert.match(adapterSource, /static nucleusVertexList\(/);
+assert.match(adapterSource, /static verticesToPointsString\(/);
+assert.match(adapterSource, /static mapPluginNucleiToOverlays\(/);
+assert.match(adapterSource, /fill", "rgba\(0,255,0,\.15\)"/);
+assert.doesNotMatch(adapterSource, /style\.borderRadius = "50%"/);
 assert.doesNotMatch(adapterSource, /host\.clearOverlays\(\)/);
 assert.match(adapterSource, /startDisabled:\s*true/);
 assert.match(adapterSource, /static setMeasureTracking\(/);

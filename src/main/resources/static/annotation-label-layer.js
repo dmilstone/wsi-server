@@ -1,6 +1,42 @@
 /** Presentation-only annotation names anchored in OpenSeadragon image coordinates. */
 class AnnotationLabelLayer {
     static PREFERENCE_KEY = "wsi.annotationNames.visible";
+    /** OSD-style anchor: label bottom-center sits on the top-center of the ROI. */
+    static LABEL_PLACEMENT = "BOTTOM_CENTER";
+
+    static annotationLabelAnchor(geometry, displacement = { x: 0, y: 0 }) {
+        const x = Number(geometry?.x ?? geometry?.bounds?.minX);
+        const y = Number(geometry?.y ?? geometry?.bounds?.minY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const width = Number(
+            geometry?.w
+            ?? (Number.isFinite(geometry?.bounds?.maxX) && Number.isFinite(geometry?.bounds?.minX)
+                ? geometry.bounds.maxX - geometry.bounds.minX
+                : 0)
+        );
+        const dx = Number(displacement?.x) || 0;
+        const dy = Number(displacement?.y) || 0;
+        const centerX = x + (Number.isFinite(width) && width > 0 ? width / 2 : 0);
+        return { x: centerX + dx, y: y + dy };
+    }
+
+    static applyLabelScreenPosition(element, point) {
+        if (typeof AnnotationAdapter !== "undefined"
+            && typeof AnnotationAdapter.applyAnnotationOverlayOffset === "function") {
+            return AnnotationAdapter.applyAnnotationOverlayOffset(element, point);
+        }
+        if (!element?.style) return element;
+        const x = Math.round(Number(point?.x) || 0);
+        const y = Math.round(Number(point?.y) || 0);
+        element.style.left = `${x}px`;
+        element.style.top = `${y}px`;
+        // Force tooltip labels to clear the boundary box lines entirely
+        element.style.transform = "translate(-50%, -130%)";
+        element.style.transformOrigin = "bottom center";
+        element.style.zIndex = "100";
+        element.style.whiteSpace = "nowrap";
+        return element;
+    }
 
     constructor(viewer, annotator, getName, storage = window.localStorage) {
         this.viewer = viewer;
@@ -87,6 +123,11 @@ class AnnotationLabelLayer {
             const element = document.createElement("span");
             element.className = "annotation-name-label";
             element.style.pointerEvents = "none";
+            element.style.background = "rgba(0,0,0,0.85)";
+            element.style.zIndex = "100";
+            element.style.whiteSpace = "nowrap";
+            element.style.transform = "translate(-50%, -130%)";
+            element.style.transformOrigin = "bottom center";
             this.layer.appendChild(element);
             entry = { annotation, element };
             this.labels.set(annotation.id, entry);
@@ -102,23 +143,29 @@ class AnnotationLabelLayer {
         // Annotorious updates x/y as the live shape moves. In the committed
         // updateAnnotation payload, bounds can briefly retain the pre-drag
         // values, so prefer the same canonical x/y fields used for persistence.
-        const x = Number(geometry?.x ?? geometry?.bounds?.minX);
-        const y = Number(geometry?.y ?? geometry?.bounds?.minY);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        const displacement = this.temporaryDisplacements.get(entry.annotation.id) || { x: 0, y: 0 };
+        const anchor = AnnotationLabelLayer.annotationLabelAnchor(geometry, displacement);
+        if (!anchor) {
             entry.element.hidden = true;
             return;
         }
-        const displacement = this.temporaryDisplacements.get(entry.annotation.id) || { x: 0, y: 0 };
         const primaryTiledImage = this.viewer.world.getItemAt(0);
         if (!primaryTiledImage || typeof primaryTiledImage.imageToViewportCoordinates !== "function") {
             entry.element.hidden = true;
             return;
         }
         const viewportPoint = primaryTiledImage.imageToViewportCoordinates(
-            new OpenSeadragon.Point(x + displacement.x, y + displacement.y));
+            new OpenSeadragon.Point(anchor.x, anchor.y));
         const point = this.viewer.viewport.viewportToViewerElementCoordinates(viewportPoint);
+        const placement = (typeof OpenSeadragon !== "undefined" && OpenSeadragon.Placement?.BOTTOM_CENTER)
+            ? OpenSeadragon.Placement.BOTTOM_CENTER
+            : AnnotationLabelLayer.LABEL_PLACEMENT;
         entry.element.hidden = false;
-        entry.element.style.transform = `translate(${Math.round(point.x + 6)}px, ${Math.round(point.y + 6)}px)`;
+        entry.element.dataset.osdPlacement = String(placement);
+        entry.element.style.background = "rgba(0,0,0,0.85)";
+        entry.element.style.zIndex = "100";
+        entry.element.style.whiteSpace = "nowrap";
+        AnnotationLabelLayer.applyLabelScreenPosition(entry.element, point);
     }
 
     updatePositions() {

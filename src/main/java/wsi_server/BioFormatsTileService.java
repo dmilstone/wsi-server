@@ -907,6 +907,10 @@ public class BioFormatsTileService {
      * Raw intensity planes for plugin analysis. Large footprints are read at a
      * pyramid level that stays at or under {@code 512×512} samples.
      */
+    public boolean isRgbSeries(String imageId, int series) throws Exception {
+        return context(imageId, series).isRgb();
+    }
+
     public PluginSampleGrid readPluginSampleGrid(
             String imageId,
             int series,

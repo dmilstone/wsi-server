@@ -15,10 +15,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260817"></script>
-    <script src="/annotation-adapter.js?v=20260817-he-rgb"></script>
+    <script src="/annotation-adapter.js?v=20260818-home-view"></script>
     <script src="/annotation-name-editor.js"></script>
-    <script src="/annotation-label-layer.js?v=20260817-he-rgb"></script>
-    <script src="/annotorious-spike.js?v=20260817-he-rgb"></script>
+    <script src="/annotation-label-layer.js?v=20260818-home-view"></script>
+    <script src="/annotorious-spike.js?v=20260818-home-view"></script>
     <style>
         :root {
             color-scheme: dark;
@@ -309,10 +309,10 @@
         .sidebar-label-slot {
             position: relative;
             display: block;
-            width: 160px;
+            width: 80px;
             height: 80px;
-            margin-top: 8px;
-            flex: 0 0 auto;
+            margin: 0;
+            flex: 0 0 80px;
         }
         .sidebar-label-slot[hidden] { display: none !important; }
         .sidebar-label-wrapper,
@@ -374,8 +374,7 @@
             cursor: pointer;
             transform: none !important;
         }
-        .sidebar-label-slot > .ocr-test-btn,
-        .sidebar-label-slot > .ocr-row-scan-btn {
+        .sidebar-label-slot > .ocr-test-btn {
             position: absolute;
             top: 28px;
             left: 84px;
@@ -398,14 +397,9 @@
             cursor: pointer;
             transform: none !important;
         }
-        .sidebar-label-slot > .ocr-test-btn:hover,
-        .sidebar-label-slot > .ocr-row-scan-btn:hover {
+        .sidebar-label-slot > .ocr-test-btn:hover {
             background: rgba(52, 127, 194, .55);
             border-color: rgba(101, 166, 223, .7);
-        }
-        .sidebar-label-slot > .ocr-row-scan-btn:disabled {
-            opacity: 0.55;
-            cursor: wait;
         }
         .ocr-result-text {
             display: block;
@@ -419,13 +413,10 @@
             white-space: normal;
             word-break: break-word;
             overflow: visible;
-            user-select: text !important;
-            -webkit-user-select: text !important;
-            -moz-user-select: text !important;
-            cursor: text !important;
-            pointer-events: auto !important;
+            user-select: text;
+            cursor: text;
+            pointer-events: auto;
             position: relative;
-            z-index: 1000;
         }
         .slide-row {
             display: flex;
@@ -464,7 +455,6 @@
             min-width: 0;
             min-height: 36px;
             margin: 0;
-            padding: 8px 10px 8px 8px;
         }
         .slide-row-body {
             padding: 2px 10px 10px 26px;
@@ -483,10 +473,100 @@
         .ocr-result-text.ocr-result-raw {
             color: #ff4d4d;
         }
-        .ocr-result-text[hidden] { display: none !important; }
-        .image-button .ocr-result-text {
-            /* Keep drag-select from activating the parent slide row. */
+        .slide-info-block {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            padding-left: 12px;
+            min-height: 56px;
+            box-sizing: border-box;
+            min-width: 0;
+            visibility: visible !important;
+        }
+        .slide-top-row {
+            width: 100%;
+            font-size: 1.15rem;
+            font-weight: bold;
+            text-align: left;
+            padding-bottom: 4px;
+        }
+        .slide-second-row {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            gap: 8px;
+        }
+        .slide-epitope-col {
+            text-align: left;
+            font-size: 0.95rem;
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+        .slide-actions-col {
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            justify-content: flex-end;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .slide-actions-col > .slide-label-rotate,
+        .slide-actions-col > .ocr-row-scan-btn,
+        .slide-actions-col > .ocr-test-btn {
+            position: static;
+            top: auto;
+            left: auto;
+            right: auto;
+            transform: none !important;
+        }
+        .ocr-row-scan-btn,
+        .slide-actions-col > .ocr-row-scan-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 700;
+            line-height: 1;
+            padding: 4px 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.25);
+            background: rgba(255,255,255,0.1);
+            color: #dff0ff;
+            cursor: pointer;
+            max-height: 24px;
+            box-sizing: border-box;
+            white-space: nowrap;
+        }
+        .ocr-row-scan-btn:hover,
+        .slide-actions-col > .ocr-row-scan-btn:hover {
+            background: rgba(52, 127, 194, .55);
+            border-color: rgba(101, 166, 223, .7);
+        }
+        .ocr-row-scan-btn:disabled {
+            opacity: 0.55;
+            cursor: wait;
+        }
+        .image-button .ocr-result-text,
+        .image-button-stack .ocr-result-text,
+        .slide-list-row .ocr-result-text,
+        .slide-epitope-col .ocr-result-text,
+        .slide-info-block .ocr-result-text {
+            display: block !important;
+            visibility: visible !important;
             max-width: 100%;
+            margin: 0;
+            min-height: 0;
+            font-size: 0.95rem;
+            font-weight: 800;
+            line-height: 1.2;
+            letter-spacing: .01em;
+            pointer-events: none !important;
+            user-select: none !important;
+            cursor: pointer !important;
+            z-index: auto;
+            overflow: visible;
         }
         .overview-ocr-scan {
             position: absolute;
@@ -551,7 +631,55 @@
             /* Keep row geometry stable while thumbs are visible. */
             transform: none;
         }
-        .image-button-label { display: block; font-weight: bold; }
+        .image-button-label {
+            display: block !important;
+            visibility: visible !important;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            font-size: 1.15rem;
+            font-weight: bold;
+            line-height: 1.2;
+            letter-spacing: .01em;
+            pointer-events: none;
+            overflow: visible;
+        }
+        .slide-list-row,
+        .image-button.slide-list-row,
+        .image-button-stack.slide-list-row,
+        .image-button-stack,
+        .image-button {
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            justify-content: flex-start;
+            width: 100%;
+            min-height: 64px;
+            height: auto;
+            margin: 4px 0;
+            padding: 8px 12px;
+            box-sizing: border-box;
+            cursor: pointer;
+            position: relative;
+            text-align: left;
+            color: var(--text);
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            line-height: 1.2;
+            word-break: break-word;
+            overflow: visible;
+            transition: background .15s ease, border-color .15s ease, transform .15s ease;
+        }
+        .image-button.has-slide-label-thumb,
+        .image-button-flat.has-slide-label-thumb,
+        .slide-list-row.has-slide-label-thumb {
+            flex-direction: row !important;
+            align-items: center !important;
+            min-height: 80px !important;
+            height: auto !important;
+            overflow: visible !important;
+        }
         .folder-group { margin: 4px 0 10px; border: 1px solid transparent; border-radius: var(--radius); }
         .folder-group[open] { background: rgba(255,255,255,.018); border-color: rgba(255,255,255,.045); }
         .folder-group:not([open]) > .folder-contents {
@@ -577,35 +705,10 @@
             gap: 4px;
         }
         .image-button-flat {
-            min-height: 40px !important;
+            min-height: 64px !important;
             height: auto !important;
-            padding: 10px 12px !important;
-            font-size: 14px;
-            font-weight: 700;
-            overflow: visible !important;
-        }
-        .image-button {
-            position: relative;
-            display: block;
-            width: 100%;
-            min-height: 58px;
-            height: auto;
-            margin: 4px 0;
-            padding: 11px 12px 10px 14px;
-            text-align: left;
-            color: var(--text);
-            background: transparent;
-            border: 1px solid transparent;
-            border-radius: 8px;
-            cursor: pointer;
-            word-break: break-word;
-            overflow: visible;
-            transition: background .15s ease, border-color .15s ease, transform .15s ease;
-        }
-        .image-button.has-slide-label-thumb,
-        .image-button-flat.has-slide-label-thumb {
-            min-height: 0 !important;
-            height: auto !important;
+            font-size: 1.25rem;
+            font-weight: bold;
             overflow: visible !important;
         }
         .image-button::before {
@@ -1214,6 +1317,30 @@
             border-color: transparent;
             color: rgba(255,255,255,.84);
         }
+        #reset-viewport-home-btn.toolbar-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: auto;
+            min-width: 0;
+            height: auto;
+            min-height: 28px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #222;
+            color: #fff;
+            font-weight: bold;
+            font-size: 12px;
+            line-height: 1.2;
+            white-space: nowrap;
+            cursor: pointer;
+            margin-right: 5px;
+        }
+        #reset-viewport-home-btn.toolbar-btn:hover {
+            background: #2c2c2c;
+            color: #fff;
+        }
         .toolbar-icon { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
         .toolbar-icon.filled { fill: currentColor; stroke: none; }
         .viewer-toolbar .help-link-symbol {
@@ -1273,14 +1400,15 @@
             border: 1px solid rgba(148, 163, 184, .35);
             background: rgba(255, 255, 255, .04);
         }
-        .annotation-name-layer { position: absolute; inset: 0; z-index: 11; overflow: hidden; pointer-events: none; }
+        .annotation-name-layer { position: absolute; inset: 0; z-index: 100; overflow: hidden; pointer-events: none; }
         .annotation-name-layer[hidden] { display: none; }
         .annotation-name-label {
             position: absolute; left: 0; top: 0; max-width: min(240px, calc(100% - 12px));
-            padding: 2px 5px; overflow: hidden; color: #fff; background: rgba(0,0,0,.78);
+            padding: 3px 7px; overflow: hidden; color: #fff; background: rgba(0,0,0,.85);
             border: 1px solid rgba(255,255,255,.72); border-radius: 4px;
-            box-shadow: 0 1px 3px rgba(0,0,0,.9); font: 700 11px/1.25 system-ui, sans-serif;
-            overflow-wrap: anywhere; pointer-events: none; user-select: none;
+            box-shadow: 0 1px 3px rgba(0,0,0,.9); font: 700 12px/1.25 system-ui, sans-serif;
+            white-space: nowrap; pointer-events: none; user-select: none;
+            z-index: 100; transform: translate(-50%, -130%); transform-origin: bottom center;
         }
         .annotation-name-label.is-editable {
             pointer-events: auto;
@@ -1819,10 +1947,15 @@
             box-sizing: border-box;
             width: 100%;
             height: 100%;
-            border: 2px solid #00FF00;
-            border-radius: 50%;
-            background: rgba(0, 255, 0, .12);
+            border: 0;
+            border-radius: 0;
+            background: transparent;
             pointer-events: none;
+        }
+        .nucleus-stardist-layer polygon {
+            fill: rgba(0, 255, 0, .15);
+            stroke: #00FF00;
+            stroke-width: 2;
         }
         svg.nucleus-stardist-layer {
             border: 0;
@@ -2046,6 +2179,11 @@
     <div class="app-header-toolbar-row">
         <div id="tools-tray" class="tools-tray" aria-label="Viewer tools">
             <div class="viewer-toolbar" role="toolbar" aria-label="Viewer tools">
+                <button id="reset-viewport-home-btn" class="toolbar-btn" type="button"
+                    style="border-radius: 6px; padding: 6px 12px; cursor: pointer; font-weight: bold; background: #222; color: #fff; border: 1px solid #444;"
+                    data-tooltip="Home View&#10;Reset pan and zoom to the initial home snapshot"
+                    title="Home View — Reset pan and zoom to the initial home snapshot"
+                    aria-label="Home View">🏠</button>
                 <div class="toolbar-group nav-group" role="group" aria-label="Home and images">
                     <button id="home-view" class="toolbar-button" type="button" data-tooltip="Home&#10;Reset to the initial home zoom" title="Home — Reset to the initial home zoom" aria-label="Home">
                         <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 2.5l5.5 5V14H9.5V9.5h-3V14H2.5z"/></svg>
