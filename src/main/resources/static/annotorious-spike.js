@@ -55,6 +55,9 @@ class AnnotoriousSpike {
         // image switch. Loading will publish the new image's actual selection.
         this.nameEditor?.setSelection([], this.annotationsVisible);
         this.timingCallbacks.selectionChanged?.([]);
+        if (typeof AnnotationAdapter.hideAnnotationEditorPopup === "function") {
+            AnnotationAdapter.hideAnnotationEditorPopup();
+        }
         // Annotorious' own OSD open handler runs before this handler, but its
         // overlay/store commit completes during the next paint. Do not let a
         // cached annotation response overtake that commit on the first image.
@@ -92,10 +95,20 @@ class AnnotoriousSpike {
         });
         this.labelLayer = new AnnotationLabelLayer(
             this.viewer, this.annotator, id => this.adapter.getAnnotationName(id));
-        this.nameEditor = new AnnotationNameEditor(this.nameInput, this.adapter, id => {
-            const annotation = this.annotator.getAnnotations().find(item => item.id === id);
-            if (annotation) this.labelLayer.syncAnnotation(annotation);
-        });
+        if (!this.nameInput && typeof document !== "undefined") {
+            AnnotationAdapter.ensureAnnotationEditorPopup();
+            this.nameInput = document.getElementById("annotation-name-input")
+                || document.getElementById("annotation-name");
+        }
+        if (this.nameInput) {
+            this.nameEditor = new AnnotationNameEditor(this.nameInput, this.adapter, id => {
+                const annotation = this.annotator.getAnnotations().find(item => item.id === id);
+                if (annotation) this.labelLayer.syncAnnotation(annotation);
+            });
+        }
+        if (typeof AnnotationAdapter.bindAnnotationShapeEditorLoop === "function") {
+            AnnotationAdapter.bindAnnotationShapeEditorLoop(this.viewer);
+        }
 
         this.annotator.on("createAnnotation", annotation => {
             this.adapter.annotationCreated(annotation);
@@ -282,6 +295,11 @@ class AnnotoriousSpike {
     notifySelectionChanged() {
         const selected = this.getSelectedAnnotations();
         this.nameEditor?.setSelection(selected, this.annotationsVisible);
+        if (selected.length === 1 && this.annotationsVisible) {
+            AnnotationAdapter.showAnnotationEditorForShape(selected[0], this.viewer);
+        } else {
+            AnnotationAdapter.hideAnnotationEditorPopup();
+        }
         this.timingCallbacks.selectionChanged?.(selected);
     }
 

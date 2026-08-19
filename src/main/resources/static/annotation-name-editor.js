@@ -40,7 +40,7 @@ class AnnotationNameEditor {
         this.storedValue = nextId ? this.adapter.getAnnotationName(nextId) : "";
         this.input.value = this.storedValue;
         this.input.disabled = !nextId;
-        this.input.placeholder = nextId ? "Unnamed annotation" : "Select one annotation";
+        this.input.placeholder = nextId ? "Enter annotation name..." : "Select one annotation";
         this.input.setCustomValidity("");
         this.input.setAttribute("aria-invalid", "false");
         this.input.title = "";

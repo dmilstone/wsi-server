@@ -15,10 +15,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260817"></script>
-    <script src="/annotation-adapter.js?v=20260818-home-view"></script>
-    <script src="/annotation-name-editor.js"></script>
+    <script src="/annotation-adapter.js?v=20260819-zstack-hide"></script>
+    <script src="/annotation-name-editor.js?v=20260819-ann-measure"></script>
     <script src="/annotation-label-layer.js?v=20260818-home-view"></script>
-    <script src="/annotorious-spike.js?v=20260818-home-view"></script>
+    <script src="/annotorious-spike.js?v=20260819-ann-measure"></script>
     <style>
         :root {
             color-scheme: dark;
@@ -44,6 +44,7 @@
             --left-panel: 280px;
             --right-panel: 360px;
             --workspace-resizer: 6px;
+            --sidebar-width: calc(var(--left-panel, 320px) + var(--workspace-resizer, 6px));
         }
         * { box-sizing: border-box; }
         html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--page); color: var(--text); }
@@ -84,7 +85,7 @@
             min-height: 0;
             height: auto;
             max-height: none;
-            padding: 8px 14px 8px;
+            padding: 8px 0 8px;
             background: #0e151d;
             border-bottom: 1px solid var(--border);
             box-shadow: 0 2px 12px rgba(0, 0, 0, .18);
@@ -99,6 +100,8 @@
             width: 100%;
             min-width: 0;
             overflow: visible;
+            padding: 0 14px;
+            box-sizing: border-box;
         }
         .brand {
             display: flex;
@@ -179,26 +182,31 @@
         }
         .app-header-toolbar-row {
             display: flex;
-            align-items: center;
+            flex-direction: column;
+            width: calc(100% - var(--sidebar-width, 320px));
+            margin-left: auto;
+            justify-content: flex-start;
+            align-items: stretch;
             gap: 8px;
-            width: 100%;
-            min-width: 0;
-            /* Left-justify with the central viewport (after left panel + resizer). */
-            padding-left: calc(var(--left-panel, 280px) + var(--workspace-resizer, 6px));
             box-sizing: border-box;
+            padding: 6px 12px;
+            min-width: 0;
         }
-        body.workspace-left-collapsed .app-header-toolbar-row {
-            padding-left: 0;
+        body.workspace-left-collapsed .app-header-toolbar-row,
+        html.workspace-left-collapsed .app-header-toolbar-row {
+            width: 100%;
+            margin-left: 0;
         }
 
-        .workspace { display: grid; grid-template-columns: 280px minmax(360px, 1fr) 360px; min-height: 0; }
+        .workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 0; }
         aside { min-width: 0; background: var(--surface); overflow: auto; scrollbar-color: #405064 transparent; }
         #images-panel { border-right: 1px solid var(--border); }
-        #channels-panel {
-            border-left: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
+        #channels {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
         }
         .panel-header {
             position: sticky;
@@ -214,32 +222,33 @@
         .panel-kicker { margin-bottom: 5px; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
         .muted { margin-top: 7px; color: var(--text-muted); font-size: 12px; line-height: 1.45; word-break: break-word; }
 
-        #image-list { padding: 10px; }
-        .slide-filter-header,
-        .case-filter-bar {
+        #image-list { padding: 10px; flex: 1 1 auto; min-height: 0; overflow: auto; }
+        .slide-filter-header {
             position: sticky;
             top: 0;
             z-index: 100;
             margin: 0;
-            padding: 8px 12px;
-            border-bottom: 1px solid rgba(255,255,255,.06);
+            padding: 8px 10px 6px;
+            border-bottom: 0;
             background: rgba(17, 24, 33, .98);
             backdrop-filter: blur(10px);
             flex: 0 0 auto;
-        }
-        .slide-filter-row {
             display: flex;
-            flex-direction: row;
-            flex-wrap: nowrap;
             align-items: center;
-            gap: 8px;
-            width: 100%;
-            min-width: 0;
+            justify-content: flex-start;
         }
-        #case-filter-select {
-            flex: 0 0 50%;
-            width: 50%;
-            max-width: 50%;
+        .case-selector-row {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: stretch;
+            padding: 0 10px 8px;
+            background: rgba(17, 24, 33, .98);
+        }
+        #case-filter-select,
+        #case-selector {
+            flex: 1 1 auto;
+            width: 100%;
+            max-width: 100%;
             min-width: 0;
             min-height: 32px;
             padding: 5px 8px;
@@ -251,9 +260,44 @@
             font-weight: 600;
             cursor: pointer;
         }
-        #case-filter-select:focus-visible {
+        #case-filter-select:focus-visible,
+        #case-selector:focus-visible {
             outline: 2px solid var(--accent);
             outline-offset: 1px;
+        }
+        #images-panel > .image-info {
+            margin: 0 10px 8px;
+            flex: 0 0 auto;
+        }
+        .sidebar-browser-toggle {
+            width: auto !important;
+            min-width: 0 !important;
+            height: auto !important;
+            min-height: 28px;
+            padding: 4px 10px !important;
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: flex-start;
+            border: 1px solid rgba(255,255,255,.16);
+            border-radius: 6px;
+            background: rgba(255,255,255,.06);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .sidebar-browser-toggle:hover {
+            background: var(--surface-hover);
+        }
+        .slide-filter-row {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            min-width: 0;
         }
         #show-slide-labels {
             flex: 1 1 auto;
@@ -771,6 +815,7 @@
         }
         .tools-tray {
             flex: 0 1 auto;
+            width: 100%;
             min-width: 0;
             display: flex;
             flex-direction: row;
@@ -782,23 +827,63 @@
             scrollbar-color: #405064 transparent;
             z-index: 16;
         }
-        /* Keep Settings / Dashboard / Help out of the scrolling tray so they stay on-screen. */
+        .toolbar-docs-row,
         .header-app-nav {
             flex: 0 0 auto;
             display: flex;
+            flex-direction: row;
             align-items: center;
-            margin-left: auto;
+            justify-content: flex-start;
+            width: 100%;
+            min-width: 0;
+            margin-left: 0;
+            gap: 10px;
             z-index: 17;
         }
+        #sidebar-header-controls {
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            width: 100%;
+            padding: 8px 12px;
+            box-sizing: border-box;
+            gap: 8px;
+            flex: 0 0 auto;
+            background: #1a1a1a;
+        }
+        #sidebar-header-controls .sidebar-browser-toggle {
+            width: 32px !important;
+            min-width: 32px !important;
+            height: 32px;
+            min-height: 32px;
+            padding: 0 !important;
+            justify-content: center;
+            font-size: 16px;
+            line-height: 1;
+            flex: 0 0 auto;
+        }
+        #sidebar-header-controls #case-filter-select,
+        #sidebar-header-controls #case-selector {
+            flex: 1 1 auto;
+            width: auto;
+            max-width: none;
+            min-width: 0;
+            min-height: 32px;
+        }
+        .toolbar-docs-row .header-app-nav {
+            flex: 1 1 auto;
+            width: auto;
+        }
         .header-app-nav .app-toolbar {
-            justify-content: flex-end;
+            justify-content: flex-start;
+            width: 100%;
         }
         .header-app-nav .app-group {
             margin-left: 0;
             padding-left: 0;
             border-left: 0;
         }
-        #reveal-left, #reveal-right {
+        #reveal-left {
             grid-column: 1;
             grid-row: 1;
         }
@@ -1212,33 +1297,22 @@
         }
         .icon-button:hover, .toolbar-button:hover, .panel-toggle:hover { color: var(--text); background: var(--surface-hover); }
         .icon-button[aria-pressed="true"], .toolbar-button[aria-pressed="true"] { color: white; background: var(--accent); border-color: var(--accent); }
-        .workspace { grid-template-columns: var(--left-panel) 6px minmax(360px,1fr) 6px var(--right-panel); }
+        .workspace { grid-template-columns: var(--left-panel) 6px minmax(0, 1fr); }
         /* Explicit column placement so display:none on collapsed asides cannot
            reflow <main> into the zero-width tracks (which hid the viewport). */
         .workspace > #images-panel { grid-column: 1; grid-row: 1; }
         .workspace > #left-resizer { grid-column: 2; grid-row: 1; }
-        .workspace > main { grid-column: 3; grid-row: 1; min-width: 0; }
-        .workspace > #right-resizer { grid-column: 4; grid-row: 1; }
-        .workspace > #channels-panel { grid-column: 5; grid-row: 1; }
+        .workspace > main { grid-column: 3; grid-row: 1; min-width: 0; width: 100%; }
         .workspace.left-collapsed,
-        html.workspace-left-collapsed {
+        html.workspace-left-collapsed,
+        body.workspace-left-collapsed {
             --left-panel: 0px;
+            --sidebar-width: 0px;
         }
         .workspace.left-collapsed {
-            grid-template-columns: 0px 0px minmax(0, 1fr) 6px var(--right-panel);
+            grid-template-columns: 0px 0px minmax(0, 1fr);
         }
-        .workspace.right-collapsed,
-        html.workspace-right-collapsed {
-            --right-panel: 0px;
-        }
-        .workspace.right-collapsed {
-            grid-template-columns: var(--left-panel) 6px minmax(0, 1fr) 0px 0px;
-        }
-        .workspace.left-collapsed.right-collapsed {
-            grid-template-columns: 0px 0px minmax(0, 1fr) 0px 0px;
-        }
-        .workspace.left-collapsed #images-panel,
-        .workspace.right-collapsed #channels-panel {
+        .workspace.left-collapsed #images-panel {
             display: none;
             width: 0;
             min-width: 0;
@@ -1249,8 +1323,7 @@
             overflow: hidden;
             pointer-events: none;
         }
-        .workspace.left-collapsed #left-resizer,
-        .workspace.right-collapsed #right-resizer {
+        .workspace.left-collapsed #left-resizer {
             display: none;
             width: 0;
             min-width: 0;
@@ -1273,9 +1346,9 @@
             flex-direction: row;
             flex-wrap: nowrap;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
             gap: 0;
-            width: max-content;
+            width: 100%;
             max-width: 100%;
             min-height: 32px;
             padding: 0 4px;
@@ -1309,37 +1382,110 @@
             border-color: rgba(77, 148, 216, .62);
             color: #fff;
         }
-        .toolbar-button:disabled,
-        .toolbar-button:disabled:hover {
-            opacity: .38;
-            cursor: default;
-            background: transparent;
-            border-color: transparent;
-            color: rgba(255,255,255,.84);
-        }
-        #reset-viewport-home-btn.toolbar-btn {
-            display: inline-flex;
+        .toolbar-right-group,
+        .toolbar-ops-row {
+            display: flex;
+            flex-direction: row;
+            gap: 12px;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
+            flex: 1 1 auto;
+            width: 100%;
+            min-width: 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+        .toolbar-ops-row .viewer-toolbar {
+            width: 100%;
+            justify-content: flex-start;
+        }
+        .toolbar-ops-spacer {
+            flex: 1 1 auto;
+            min-width: 12px;
+        }
+        .toolbar-ops-row .ops-display-group {
+            margin-left: auto;
+            padding-left: 8px;
+            border-left: 0;
+        }
+        .toolbar-ops-row .toolbar-chip,
+        .toolbar-right-group .toolbar-chip,
+        #home-view.toolbar-chip,
+        #show-advanced-channel-palette.toolbar-chip,
+        #reset.toolbar-chip,
+        #recompute-auto.toolbar-chip {
             width: auto;
             min-width: 0;
+            min-height: 0;
+            max-height: 24px;
             height: auto;
-            min-height: 28px;
-            padding: 6px 12px;
-            border-radius: 6px;
-            border: 1px solid #444;
-            background: #222;
-            color: #fff;
-            font-weight: bold;
-            font-size: 12px;
-            line-height: 1.2;
+            margin: 0;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,.22);
+            background: rgba(255,255,255,.08);
+            color: #f2f5f8;
+            font-size: 0.8rem;
+            font-weight: 700;
+            line-height: 1;
+            box-shadow: none;
+            transform: none;
             white-space: nowrap;
             cursor: pointer;
-            margin-right: 5px;
+            text-decoration: none;
         }
-        #reset-viewport-home-btn.toolbar-btn:hover {
-            background: #2c2c2c;
+        .toolbar-ops-row .toolbar-chip:hover,
+        .toolbar-right-group .toolbar-chip:hover,
+        #home-view.toolbar-chip:hover,
+        #show-advanced-channel-palette.toolbar-chip:hover,
+        #reset.toolbar-chip:hover,
+        #recompute-auto.toolbar-chip:hover {
+            background: rgba(77, 148, 216, .32);
             color: #fff;
+        }
+        .toolbar-ops-row .toolbar-chip[aria-pressed="true"],
+        .toolbar-right-group .toolbar-chip[aria-pressed="true"] {
+            background: rgba(77, 148, 216, .45);
+            border-color: rgba(140, 190, 240, .9);
+        }
+        .toolbar-ops-row .panel-secondary-link,
+        .toolbar-right-group .panel-secondary-link {
+            font-size: 0.8rem;
+            white-space: nowrap;
+        }
+        .toolbar-right-group .right-stack-controls {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
+        }
+        .toolbar-right-group .series-select-control,
+        .toolbar-right-group .z-depth-controls {
+            margin: 0;
+            padding: 2px 8px;
+            min-width: 0;
+            max-width: none;
+            width: auto;
+        }
+        .toolbar-right-group .series-select-control label {
+            display: none;
+        }
+        .toolbar-right-group .series-select-control select {
+            min-height: 24px;
+            font-size: 11px;
+            max-width: 140px;
+        }
+        .toolbar-right-group .z-stack-slider-wrap input[type="range"] {
+            width: 88px;
+            height: 18px;
+        }
+        .toolbar-right-group .z-movie-icon {
+            width: 24px;
+            height: 24px;
         }
         .toolbar-icon { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
         .toolbar-icon.filled { fill: currentColor; stroke: none; }
@@ -1388,7 +1534,7 @@
             display: inline-grid;
             width: auto;
             min-width: 28px;
-            max-width: 11.5rem;
+            max-width: none;
             padding: 0 8px;
             font-size: 11px;
             font-weight: 700;
@@ -1531,7 +1677,7 @@
         }
         #reveal-left { left: 0; border-left: 0; border-radius: 0 9px 9px 0; }
         #reveal-right { right: 0; border-right: 0; border-radius: 9px 0 0 9px; }
-        .workspace.left-collapsed #reveal-left, .workspace.right-collapsed #reveal-right { display: block; }
+        .workspace.left-collapsed #reveal-left { display: block; }
         .panel-reveal:hover { background: var(--accent); }
         .image-info { margin: 10px 10px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); overflow: hidden; }
         .image-info[hidden] { display: none; }
@@ -1614,7 +1760,11 @@
             body.nonproduction-environment { grid-template-rows: 38px auto auto auto; }
             .app-header { min-height: 0; }
             .brand-copy { max-width: min(52vw, 360px); }
-            .app-header-toolbar-row { padding-left: 0; }
+            .app-header-toolbar-row {
+                width: 100%;
+                margin-left: 0;
+                padding: 6px 12px;
+            }
             .workspace { display:grid; grid-template-columns:1fr; grid-template-rows:230px minmax(480px,70vh) auto; }
             .viewer-main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
             .viewer-stage { grid-column: 1; grid-row: 1; }
@@ -2020,6 +2170,68 @@
         }
 
         /* Micron measurement overlay + result dialog. */
+        #measurement-popup-overlay {
+            position: fixed;
+            pointer-events: none;
+            z-index: 10002;
+            display: none;
+            background: rgba(0, 0, 0, 0.9);
+            color: #00FF00;
+            font-family: monospace;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #333;
+            white-space: nowrap;
+        }
+        #annotation-editor-popup {
+            position: fixed;
+            display: none;
+            background: #1e1e1e;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 10px;
+            z-index: 10001;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            min-width: 240px;
+        }
+        #annotation-editor-popup input[type="text"] {
+            display: block;
+            width: 240px;
+            max-width: 72vw;
+            box-sizing: border-box;
+            margin: 0 0 8px;
+            padding: 6px 8px;
+            color: #fff;
+            background: #111;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font: 14px/1.3 system-ui, sans-serif;
+        }
+        #annotation-editor-popup input[type="text"]:focus {
+            outline: 2px solid #4d94d8;
+            outline-offset: 1px;
+        }
+        #annotation-editor-popup .annotation-editor-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        #annotation-editor-popup .annotation-editor-actions button {
+            cursor: pointer;
+            padding: 4px 10px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            background: #2a2a2a;
+            color: #fff;
+            font-size: 12px;
+        }
+        #annotation-editor-popup .annotation-editor-actions button:hover {
+            background: #3a3a3a;
+        }
+        #annotation-editor-save {
+            border-color: #4d94d8 !important;
+            background: #1d3a54 !important;
+        }
         .viewer-stage.measure-mode-active #viewer,
         .viewer-stage.measure-mode-active #viewer .openseadragon-canvas {
             cursor: crosshair !important;
@@ -2113,12 +2325,13 @@
             min-height: 34px;
             padding: 7px 12px;
         }
-        .measure-session-panel {
-            margin: 8px 10px 10px;
-            padding: 8px 10px 10px;
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            background: rgba(0, 0, 0, .22);
+        .viewer-stage > .measure-session-panel {
+            position: absolute;
+            right: 12px;
+            top: 12px;
+            z-index: 20;
+            max-width: 280px;
+            margin: 0;
         }
         .measure-session-panel[hidden] { display: none !important; }
         .measure-session-title {
@@ -2155,6 +2368,274 @@
             font-weight: 700;
             white-space: nowrap;
         }
+
+        #show-advanced-channel-palette.fcp-launch-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            min-width: 28px;
+            height: 28px;
+            min-height: 28px;
+            margin: 0;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            background: transparent;
+            color: rgba(255,255,255,.84);
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            box-shadow: none;
+            transform: none;
+            white-space: nowrap;
+        }
+        #show-advanced-channel-palette.fcp-launch-btn:hover {
+            background: rgba(255,255,255,.10);
+            color: #fff;
+        }
+        #show-advanced-channel-palette.fcp-launch-btn[aria-pressed="true"] {
+            background: rgba(77, 148, 216, .22);
+            border-color: rgba(77, 148, 216, .48);
+            color: #fff;
+        }
+        #floating-channel-palette,
+        #floating-ai-labs-palette,
+        #floating-admin-palette,
+        #floating-zstack-palette {
+            position: fixed !important;
+            z-index: 9999 !important;
+            resize: both !important;
+            overflow: hidden !important;
+            display: flex;
+            flex-direction: column;
+            top: 72px;
+            left: 72px;
+            width: 360px;
+            min-width: 280px;
+            min-height: 400px;
+            max-width: none;
+            color: #222;
+            background: #f3f3f3;
+            border: 1px solid #8a8a8a;
+            border-radius: 4px;
+            box-shadow: 0 10px 28px rgba(0,0,0,.42);
+            font: 12px/1.3 "Segoe UI", Tahoma, sans-serif;
+            pointer-events: auto;
+            user-select: none;
+        }
+        #floating-ai-labs-palette {
+            min-width: 320px;
+            left: 120px;
+            top: 96px;
+            color: #f7f2d8;
+            background: #0b1220;
+            border: 1px solid #f0a500;
+        }
+        #floating-admin-palette {
+            min-width: 280px;
+            left: auto;
+            right: 24px;
+            top: 72px;
+            color: var(--text);
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+        }
+        #floating-zstack-palette {
+            position: fixed;
+            z-index: 9999;
+            resize: both;
+            overflow: hidden;
+            display: none;
+            top: 140px;
+            right: 24px;
+            left: auto;
+            width: 320px;
+            min-width: 280px;
+            min-height: 160px;
+            color: var(--text);
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+        }
+        #floating-channel-palette[hidden],
+        #floating-ai-labs-palette[hidden],
+        #floating-admin-palette[hidden],
+        #floating-zstack-palette[hidden] { display: none !important; }
+        .fcp-titlebar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            height: 28px;
+            padding: 0 6px 0 10px;
+            background: linear-gradient(#ececec, #d8d8d8);
+            border-bottom: 1px solid #b0b0b0;
+            cursor: move;
+        }
+        .fcp-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+        .fcp-close {
+            width: 22px;
+            height: 22px;
+            padding: 0;
+            border: 1px solid #9a9a9a;
+            border-radius: 3px;
+            background: #ececec;
+            color: #222;
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .fcp-close:hover { background: #ff6b6b; color: #fff; border-color: #c44; }
+        .fcp-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+            padding: 8px 10px 10px;
+        }
+        #floating-ai-labs-palette .fcp-titlebar,
+        #floating-admin-palette .fcp-titlebar,
+        #floating-zstack-palette .fcp-titlebar {
+            background: linear-gradient(#2a2414, #1a160c);
+            border-bottom: 1px solid #7d6a2e;
+            color: #ffe08a;
+            cursor: move;
+        }
+        #floating-ai-labs-palette .fcp-title,
+        #floating-admin-palette .fcp-title,
+        #floating-zstack-palette .fcp-title { color: #ffe08a; }
+        #floating-ai-labs-palette .fcp-body,
+        #floating-admin-palette .fcp-body,
+        #floating-zstack-palette .fcp-body { padding: 0; }
+        #floating-ai-labs-palette #ai-analytics-panel {
+            margin: 0;
+            border: 0;
+            border-radius: 0;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel > summary { display: none; }
+        #floating-admin-palette .workstation-admin-tools {
+            margin: 0;
+            border: 0;
+            background: transparent;
+        }
+        #floating-admin-palette .workstation-admin-tools > summary { display: none; }
+        #floating-admin-palette .workstation-admin-body { display: block !important; padding: 10px 12px 12px; }
+        #floating-zstack-palette .fcp-titlebar-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        #floating-zstack-palette.zstack-minimized {
+            max-height: 32px;
+            overflow: hidden;
+            min-height: 32px !important;
+            resize: none;
+        }
+        #floating-zstack-palette {
+            transition: max-height .18s ease;
+        }
+        #floating-zstack-palette .right-stack-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin: 0;
+            padding: 10px 12px 12px;
+        }
+        #floating-zstack-palette .series-select-control,
+        #floating-zstack-palette .z-depth-controls {
+            width: 100%;
+            max-width: none;
+        }
+        .fcp-table-wrap {
+            max-height: 132px;
+            overflow: auto;
+            border: 1px solid #c2c2c2;
+            background: #fff;
+        }
+        .fcp-channels {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .fcp-channels th,
+        .fcp-channels td {
+            padding: 4px 6px;
+            text-align: left;
+            border-bottom: 1px solid #e4e4e4;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .fcp-channels th {
+            background: #efefef;
+            font-weight: 700;
+            color: #444;
+        }
+        .fcp-channels tr.is-selected { background: #cfe4ff; }
+        .fcp-channels tr { cursor: pointer; }
+        .fcp-swatch {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 1px solid rgba(0,0,0,.35);
+            vertical-align: middle;
+        }
+        .fcp-histogram-wrap {
+            margin: 8px 0 6px;
+            padding: 4px;
+            background: #111;
+            border: 1px solid #444;
+        }
+        #floating-channel-histogram {
+            display: block;
+            width: 100%;
+            height: 88px;
+            background: #000;
+        }
+        .fcp-scale {
+            display: flex;
+            justify-content: space-between;
+            margin: 2px 2px 8px;
+            color: #555;
+            font-variant-numeric: tabular-nums;
+            font-size: 11px;
+        }
+        .fcp-slider {
+            display: grid;
+            grid-template-columns: 92px minmax(0, 1fr) 64px;
+            align-items: center;
+            gap: 8px;
+            margin: 6px 0;
+            color: #222;
+        }
+        .fcp-slider input[type="range"] {
+            width: 100%;
+            accent-color: #3d7ea6;
+        }
+        .fcp-slider output {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .fcp-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .fcp-actions button {
+            min-width: 72px;
+            min-height: 28px;
+            padding: 4px 12px;
+            border: 1px solid #8a8a8a;
+            border-radius: 3px;
+            background: linear-gradient(#fafafa, #e2e2e2);
+            color: #222;
+            font-weight: 650;
+            cursor: pointer;
+        }
+        .fcp-actions button:hover { background: #fff; }
+        .fcp-gamma-svg { position: absolute; width: 0; height: 0; overflow: hidden; }
     </style>
 </head>
 <body>
@@ -2177,28 +2658,31 @@
         </div>
     </div>
     <div class="app-header-toolbar-row">
-        <div id="tools-tray" class="tools-tray" aria-label="Viewer tools">
-            <div class="viewer-toolbar" role="toolbar" aria-label="Viewer tools">
-                <button id="reset-viewport-home-btn" class="toolbar-btn" type="button"
-                    style="border-radius: 6px; padding: 6px 12px; cursor: pointer; font-weight: bold; background: #222; color: #fff; border: 1px solid #444;"
-                    data-tooltip="Home View&#10;Reset pan and zoom to the initial home snapshot"
-                    title="Home View — Reset pan and zoom to the initial home snapshot"
-                    aria-label="Home View">🏠</button>
-                <div class="toolbar-group nav-group" role="group" aria-label="Home and images">
-                    <button id="home-view" class="toolbar-button" type="button" data-tooltip="Home&#10;Reset to the initial home zoom" title="Home — Reset to the initial home zoom" aria-label="Home">
-                        <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 2.5l5.5 5V14H9.5V9.5h-3V14H2.5z"/></svg>
-                    </button>
-                    <button id="toggle-left" class="toolbar-button" type="button" data-tooltip="Images&#10;Show or hide image browser" title="Images — Show or hide image browser" aria-label="Images" aria-pressed="true">
-                        <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5"/><rect x="9" y="2.5" width="4.5" height="4.5"/><rect x="2.5" y="9" width="4.5" height="4.5"/><rect x="9" y="9" width="4.5" height="4.5"/></svg>
-                    </button>
+        <div id="toolbar-docs-row" class="toolbar-docs-row">
+        <nav id="header-app-nav" class="header-app-nav" aria-label="Settings, dashboard, and manuals">
+            <div class="viewer-toolbar app-toolbar" role="toolbar" aria-label="Settings, dashboard, and manuals">
+                <div class="toolbar-group app-group" role="group" aria-label="Settings, dashboard, and manuals">
+                    <a id="dashboard-link" class="toolbar-button is-env-allowed" href="/local-operations/" target="_blank" rel="noopener noreferrer" data-tooltip="Dashboard&#10;Open local operations documentation" title="Dashboard — Open local operations documentation" aria-label="Dashboard">Dashboard</a>
+                    <a id="user-guide-link" class="toolbar-button guide-link" href="/help?v=20260817" target="_blank" rel="noopener noreferrer" data-tooltip="User Guide&#10;Open the comprehensive user and administration guide" title="User Guide — Open the comprehensive user and administration guide" aria-label="User Guide">User Guide</a>
+                    <a id="viewer-quick-guide-link" class="toolbar-button guide-link" href="/help/viewer-guide.html?v=20260817" target="_blank" rel="noopener noreferrer" data-tooltip="Viewer Quick Guide&#10;Open the WSI Viewer quick guide" title="Viewer Quick Guide — Open the WSI Viewer quick guide" aria-label="Viewer Quick Guide">Viewer Quick Guide</a>
+                    <a id="admin-ops-guide-link" class="toolbar-button guide-link" href="/help/admin-ops-guide.html?v=20260817" target="_blank" rel="noopener noreferrer" data-tooltip="Admin and Ops Guide&#10;Open the administration and operations guide" title="Admin and Ops Guide — Open the administration and operations guide" aria-label="Admin and Ops Guide">Admin and Ops Guide</a>
+                    <button id="workstation-admin-tools-btn" class="toolbar-button guide-link" type="button"
+                            title="Workstation Admin Tools" aria-label="Admin" aria-pressed="false">Admin</button>
+                    <a id="pilot-feedback-link" class="toolbar-button guide-link" href="/pilot-feedback/" title="Open full-page pilot feedback form (shortcut F in viewer)" aria-label="Feedback">Feedback</a>
+                    <a id="local-operations" class="toolbar-button guide-link" href="/local-operations/" target="_blank" rel="noopener noreferrer" title="Local operations dashboard (image-server browser only)" aria-label="Local Operations">Local Operations</a>
                 </div>
-                <div class="toolbar-group zoom-group" role="group" aria-label="Zoom">
-                    <button id="zoom-in" class="toolbar-button" type="button" data-tooltip="Zoom in" title="Zoom in" aria-label="Zoom in">
-                        <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4M7 5v4"/></svg>
-                    </button>
-                    <button id="zoom-out" class="toolbar-button" type="button" data-tooltip="Zoom out" title="Zoom out" aria-label="Zoom out">
-                        <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4"/></svg>
-                    </button>
+            </div>
+        </nav>
+        </div>
+        <div id="tools-tray" class="tools-tray toolbar-ops-row toolbar-right-group" aria-label="Viewer tools">
+            <div class="viewer-toolbar" role="toolbar" aria-label="Viewer tools">
+                <div class="toolbar-group ops-primary-group" role="group" aria-label="Canvas operations">
+                    <button id="home-view" class="toolbar-button" type="button" data-tooltip="Home View Reset&#10;Reset to the initial home zoom" title="Home View Reset" aria-label="Home View Reset">🏠</button>
+                    <button id="show-advanced-channel-palette" class="toolbar-button fcp-launch-btn" type="button"
+                            title="Show Advanced Channel Palette"
+                            aria-label="Show Advanced Channel Palette"
+                            aria-pressed="false"
+                            data-tooltip="Brightness &amp; Contrast&#10;Show Advanced Channel Palette">◐</button>
                 </div>
                 <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
                     <button id="annotation-mode" class="toolbar-button" type="button" data-tooltip="Rectangle&#10;Draw a rectangular annotation" title="Rectangle — Draw a rectangular annotation" aria-label="Rectangle" aria-pressed="false">
@@ -2231,39 +2715,29 @@
                         <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="8"/><path d="M5 13.5h6"/></svg>
                     </button>
                 </div>
-            </div>
-        </div>
-        <nav id="header-app-nav" class="header-app-nav" aria-label="Settings, dashboard, and manuals">
-            <div class="viewer-toolbar app-toolbar" role="toolbar" aria-label="Settings, dashboard, and manuals">
-                <div class="toolbar-group app-group" role="group" aria-label="Settings, dashboard, and manuals">
-                    <button id="toggle-right" class="toolbar-button" type="button" data-tooltip="Settings&#10;Show or hide display controls" title="Settings — Show or hide display controls" aria-label="Settings" aria-pressed="true">
-                        <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.5v1.4M8 12.1v1.4M2.5 8h1.4M12.1 8h1.4M4.1 4.1l1 1M10.9 10.9l1 1M11.9 4.1l-1 1M5.1 10.9l-1 1"/></svg>
-                    </button>
-                    <a id="dashboard-link" class="toolbar-button is-env-allowed" href="/local-operations/" target="_blank" rel="noopener" data-tooltip="Dashboard&#10;Open local operations documentation" title="Dashboard — Open local operations documentation" aria-label="Dashboard">Dashboard</a>
-                    <a id="user-guide-link" class="toolbar-button guide-link" href="/help?v=20260817" target="_blank" rel="noopener" data-tooltip="User Guide&#10;Open the comprehensive user and administration guide" title="User Guide — Open the comprehensive user and administration guide" aria-label="User Guide">User Guide</a>
-                    <a id="viewer-quick-guide-link" class="toolbar-button guide-link" href="/help/viewer-guide.html?v=20260817" target="_blank" rel="noopener" data-tooltip="Viewer Quick Guide&#10;Open the WSI Viewer quick guide" title="Viewer Quick Guide — Open the WSI Viewer quick guide" aria-label="Viewer Quick Guide">Viewer Quick Guide</a>
-                    <a id="admin-ops-guide-link" class="toolbar-button guide-link" href="/help/admin-ops-guide.html?v=20260817" target="_blank" rel="noopener" data-tooltip="Admin &amp; Ops Guide&#10;Open the administration and operations guide" title="Admin &amp; Ops Guide — Open the administration and operations guide" aria-label="Admin &amp; Ops Guide">Admin &amp; Ops Guide</a>
+                <div class="toolbar-ops-spacer" aria-hidden="true"></div>
+                <div class="toolbar-group ops-display-group" role="group" aria-label="Display adjustments">
+                    <button id="reset" class="toolbar-chip action" type="button" disabled>Reset</button>
+                    <button id="recompute-auto" class="toolbar-chip action" type="button" disabled>Auto</button>
+                    <button id="toggle-ai-labs-palette" class="toolbar-chip" type="button"
+                            title="Computational Pathology AI Labs" aria-label="AI Labs" aria-pressed="false">🔬 AI Labs</button>
                 </div>
             </div>
-        </nav>
+        </div>
     </div>
 </header>
 <div class="workspace">
     <aside id="images-panel" aria-label="Image browser">
-        <div class="slide-filter-header case-filter-bar" id="slide-filter-header">
-            <div class="slide-filter-row">
-                <select id="case-filter-select" aria-label="Slide Filter">
-                    <option value="" selected>-- Select Slides --</option>
-                    <option value="__all_slides__">All Slides</option>
-                </select>
-                <button id="show-slide-labels" type="button" aria-pressed="false"
-                        title="Show or hide slide label thumbnails for listed slides">
-                    Show Label
-                </button>
-                <button class="panel-toggle" data-collapse="left" title="Hide image browser" aria-label="Hide image browser">‹</button>
-            </div>
+        <div id="sidebar-header-controls" style="display: flex !important; flex-direction: row !important; align-items: center !important; width: 100%; padding: 8px 12px; box-sizing: border-box; background: #1a1a1a;">
+            <button id="toggle-left" class="toolbar-button sidebar-browser-toggle" type="button" aria-pressed="true"
+                    title="Show/Hide Image Browser" aria-label="Show/Hide Image Browser">📂</button>
+            <label class="visually-hidden" for="case-filter-select">Case/Image Selector</label>
+            <select id="case-filter-select" class="case-selector" aria-label="Case/Image Selector">
+                <option value="" selected>-- Select Slides --</option>
+                <option value="__all_slides__">All Slides</option>
+            </select>
         </div>
-        <details id="image-info" class="image-info" hidden>
+        <details id="image-info" class="image-info">
             <summary>Image information</summary>
             <div class="image-info-body">
                 <dl class="info-grid">
@@ -2282,8 +2756,65 @@
     <main class="viewer-main" aria-label="Whole-slide image viewer">
         <div class="viewer-stage">
         <div id="viewer"></div>
+        <aside id="floating-channel-palette" class="floating-channel-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-channel-palette-title">
+            <svg class="fcp-gamma-svg" aria-hidden="true" focusable="false">
+                <filter id="fcp-gamma-filter" color-interpolation-filters="sRGB">
+                    <feComponentTransfer>
+                        <feFuncR id="fcp-gamma-func-r" type="gamma" amplitude="1" exponent="1" offset="0"/>
+                        <feFuncG id="fcp-gamma-func-g" type="gamma" amplitude="1" exponent="1" offset="0"/>
+                        <feFuncB id="fcp-gamma-func-b" type="gamma" amplitude="1" exponent="1" offset="0"/>
+                    </feComponentTransfer>
+                </filter>
+            </svg>
+            <div class="fcp-titlebar" id="floating-channel-palette-handle">
+                <span class="fcp-title" id="floating-channel-palette-title">Brightness &amp; Contrast</span>
+                <button type="button" id="floating-channel-palette-close" class="fcp-close" aria-label="Close brightness and contrast">×</button>
+            </div>
+            <div class="fcp-body">
+                <div class="fcp-table-wrap">
+                    <table class="fcp-channels">
+                        <thead>
+                            <tr>
+                                <th scope="col"></th>
+                                <th scope="col"></th>
+                                <th scope="col">Channel</th>
+                                <th scope="col">Min</th>
+                                <th scope="col">Max</th>
+                            </tr>
+                        </thead>
+                        <tbody id="floating-channel-palette-rows"></tbody>
+                    </table>
+                </div>
+                <div class="fcp-histogram-wrap">
+                    <canvas id="floating-channel-histogram" width="340" height="88" aria-label="Channel histogram"></canvas>
+                </div>
+                <div class="fcp-scale">
+                    <span id="fcp-scale-min">0</span>
+                    <span id="fcp-scale-max">58,831</span>
+                </div>
+                <div class="fcp-slider">
+                    <label for="fcp-min">Channel min</label>
+                    <input id="fcp-min" type="range" min="0" max="58831" step="1" value="0" aria-label="Channel min">
+                    <output id="fcp-min-value" for="fcp-min">0</output>
+                </div>
+                <div class="fcp-slider">
+                    <label for="fcp-max">Channel max</label>
+                    <input id="fcp-max" type="range" min="0" max="58831" step="1" value="58831" aria-label="Channel max">
+                    <output id="fcp-max-value" for="fcp-max">58,831</output>
+                </div>
+                <div class="fcp-slider">
+                    <label for="fcp-gamma">Viewer gamma</label>
+                    <input id="fcp-gamma" type="range" min="0.20" max="4.00" step="0.05" value="1.00" aria-label="Viewer gamma">
+                    <output id="fcp-gamma-value" for="fcp-gamma">1.00</output>
+                </div>
+                <div class="fcp-actions">
+                    <button id="fcp-auto" type="button">Auto</button>
+                    <button id="fcp-reset" type="button">Reset</button>
+                </div>
+            </div>
+        </aside>
         <div id="empty-viewport-guidance" role="status" aria-live="polite">
-            <span>Use the dropdown menu on the left to select slides for viewing.</span>
+            <span>Use the case selector to choose slides for viewing.</span>
         </div>
         <div id="measure-dialog" class="measure-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="measure-dialog-title">
             <div class="measure-dialog-panel">
@@ -2366,55 +2897,23 @@
             </div>
         </div>
         <button id="presentation-exit" class="toolbar-button presentation-exit" aria-label="Exit presentation mode">Exit presentation</button>
-        <div id="scale-bar" class="scale-bar" hidden aria-label="Image scale"><span id="scale-bar-label" class="scale-bar-label"></span><div id="scale-bar-line" class="scale-bar-line"></div></div>
-        </div>
-        <button id="reveal-left" class="panel-reveal" type="button" aria-label="Show Filenames">Show Filenames</button>
-        <button id="reveal-right" class="panel-reveal" type="button" aria-label="Show display controls">Show channels</button>
-    </main>
-    <div id="right-resizer" class="resize-handle" role="separator" aria-label="Resize display controls"></div>
-    <aside id="channels-panel" aria-label="Display controls">
-        <div class="right-column-top">
-            <div class="panel-secondary-actions">
-                <a id="pilot-feedback-link" class="panel-secondary-link" href="/pilot-feedback/" title="Open full-page pilot feedback form (shortcut F in viewer)">Pilot Feedback (F)</a>
-                <a id="local-operations" class="panel-secondary-link" href="/local-operations/" title="Local operations dashboard (image-server browser only)">Local operations</a>
-            </div>
-            <div class="right-stack-controls">
-                <div id="series-select-control" class="series-select-control" hidden>
-                    <label for="series-select">Select Scan Section / Series</label>
-                    <select id="series-select" aria-label="Select Scan Section / Series"></select>
-                </div>
-                <div id="z-controls-card" class="z-controls-card" hidden>
-                <div id="z-depth-controls" class="z-depth-controls" hidden aria-label="Focal depth and animation">
-                    <span class="z-depth-controls-label">Z</span>
-                    <div class="z-stack-slider-wrap">
-                        <input id="z-stack-slider" type="range" min="0" max="0" value="0" step="1"
-                               aria-label="Focal Depth (Z)" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
-                        <output id="z-stack-value" class="z-stack-control-value" for="z-stack-slider">0</output>
-                    </div>
-                    <div class="z-movie-icons" role="group" aria-label="Focal animation">
-                        <button id="z-movie-mode-loop" class="z-movie-icon is-active z-movie-mode-active" type="button"
-                                data-mode="LOOP" title="Head-to-tail loop — click to play"
-                                aria-label="Play head-to-tail loop" aria-pressed="true">🔁</button>
-                        <button id="z-movie-mode-pingpong" class="z-movie-icon" type="button"
-                                data-mode="PING_PONG" title="Ping-pong — click to play"
-                                aria-label="Play ping-pong" aria-pressed="false">↔️</button>
-                    </div>
-                </div>
-                </div>
-            </div>
-        </div>
         <div id="measure-session-panel" class="measure-session-panel" hidden aria-label="Session measurements">
             <h3 class="measure-session-title">Session measurements</h3>
             <ul id="measure-session-list" class="measure-session-list"></ul>
         </div>
-        <div class="panel-header">
-            <div class="panel-title-row"><h2>Channels</h2><button class="panel-toggle" data-collapse="right" title="Hide display controls" aria-label="Hide display controls">›</button></div>
-            <div class="display-actions"><button id="reset" class="action" disabled>Reset display</button><button id="recompute-auto" class="action" disabled>Recompute auto</button></div>
+        <div id="scale-bar" class="scale-bar" hidden aria-label="Image scale"><span id="scale-bar-label" class="scale-bar-label"></span><div id="scale-bar-line" class="scale-bar-line"></div></div>
         </div>
-        <div id="channels"></div>
+        <button id="reveal-left" class="panel-reveal" type="button" aria-label="Show Image Browser">Show Image Browser</button>
+    </main>
+</div>
+<aside id="floating-ai-labs-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-ai-labs-title">
+    <div class="fcp-titlebar" id="floating-ai-labs-handle">
+        <span class="fcp-title" id="floating-ai-labs-title">🔬 AI Labs</span>
+        <button type="button" id="floating-ai-labs-close" class="fcp-close" aria-label="Close AI Labs">×</button>
+    </div>
+    <div class="fcp-body">
         <div id="ai-labs-panel" class="ai-labs-panel">
-        <details id="ai-analytics-panel" class="ai-analytics-panel">
-            <summary>🔬 Computational Pathology AI Labs</summary>
+        <div id="ai-analytics-panel" class="ai-analytics-panel">
             <div class="ai-lab-actions">
                 <details class="ai-lab-disclaimer">
                     <summary>System Diagnostic Disclaimer</summary>
@@ -2472,9 +2971,17 @@
                     </div>
                 </div>
             </div>
-        </details>
         </div>
-        <details id="workstation-admin-tools" class="workstation-admin-tools">
+        </div>
+    </div>
+</aside>
+<aside id="floating-admin-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-admin-title">
+    <div class="fcp-titlebar" id="floating-admin-handle">
+        <span class="fcp-title" id="floating-admin-title">Workstation Admin Tools</span>
+        <button type="button" id="floating-admin-close" class="fcp-close" aria-label="Close workstation admin tools">×</button>
+    </div>
+    <div class="fcp-body">
+        <details id="workstation-admin-tools" class="workstation-admin-tools" open>
             <summary>Workstation Admin Tools</summary>
             <div class="workstation-admin-body">
                 <div class="panel-kicker">Browse</div>
@@ -2486,8 +2993,46 @@
                 </div>
             </div>
         </details>
-    </aside>
-</div>
+    </div>
+</aside>
+<aside id="floating-zstack-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-zstack-title"
+       style="position: fixed; z-index: 9999; resize: both; overflow: hidden; display: none;">
+    <div class="fcp-titlebar" id="floating-zstack-handle">
+        <span class="fcp-title" id="floating-zstack-title">Z-Stack</span>
+        <div class="fcp-titlebar-actions">
+            <button type="button" id="floating-zstack-minimize" class="fcp-close fcp-minimize" title="Minimize"
+                    aria-label="Minimize Z-stack controls" aria-pressed="false">-</button>
+            <button type="button" id="floating-zstack-close" class="fcp-close" aria-label="Close Z-stack controls">×</button>
+        </div>
+    </div>
+    <div class="fcp-body">
+        <div class="right-stack-controls">
+            <div id="series-select-control" class="series-select-control" hidden>
+                <label for="series-select">Select Scan Section / Series</label>
+                <select id="series-select" aria-label="Select Scan Section / Series"></select>
+            </div>
+            <div id="z-controls-card" class="z-controls-card" hidden>
+                <div id="z-depth-controls" class="z-depth-controls" hidden aria-label="Focal depth and animation">
+                    <span class="z-depth-controls-label">Z</span>
+                    <div class="z-stack-slider-wrap">
+                        <input id="z-stack-slider" type="range" min="0" max="0" value="0" step="1"
+                               aria-label="Focal Depth (Z)" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+                        <output id="z-stack-value" class="z-stack-control-value" for="z-stack-slider">0</output>
+                    </div>
+                    <div class="z-movie-icons" role="group" aria-label="Focal animation">
+                        <button id="z-movie-mode-loop" class="z-movie-icon is-active z-movie-mode-active" type="button"
+                                data-mode="LOOP" title="Head-to-tail loop — click to play"
+                                aria-label="Play head-to-tail loop" aria-pressed="true">🔁</button>
+                        <button id="z-movie-mode-pingpong" class="z-movie-icon" type="button"
+                                data-mode="PING_PONG" title="Ping-pong — click to play"
+                                aria-label="Play ping-pong" aria-pressed="false">↔️</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</aside>
+<div id="channels" hidden></div>
 <footer class="status-bar" aria-live="polite">
     <span class="status-dot" aria-hidden="true"></span>
     <span id="status">Loading sample directory…</span>
@@ -2529,7 +3074,8 @@
 
     const statusElement = document.getElementById("status");
     const imageListElement = document.getElementById("image-list");
-    const caseFilterSelect = document.getElementById("case-filter-select");
+    const caseFilterSelect = document.getElementById("case-filter-select")
+        || document.getElementById("case-selector");
     const channelsElement = document.getElementById("channels");
     const resetButton = document.getElementById("reset");
     const recomputeAutoButton = document.getElementById("recompute-auto");
@@ -2686,8 +3232,7 @@
             if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
-            const opened = window.open("/local-operations/", "_blank", "noopener");
-            if (!opened) window.location.assign("/local-operations/");
+            window.open("/local-operations/", "_blank");
         });
     }
 
@@ -2700,7 +3245,8 @@
             await WsiCsrf.initialize();
             imageInfoElement.open = localStorage.getItem(`${STORAGE_PREFIX}.imageInfoOpen`) !== "closed";
             const result = await request("/api/images");
-            document.getElementById("directory").textContent = result.directory;
+            const directoryEl = document.getElementById("directory");
+            if (directoryEl) directoryEl.textContent = result.directory;
             renderImageList(result.images);
             // Zero-exposure: while the case filter sits on the blank placeholder,
             // do not auto-open the last localStorage image or hit tile endpoints.
@@ -2743,7 +3289,7 @@
         AnnotationAdapter.renderImageBrowser(
             imageListElement,
             catalogImages,
-            caseFilterSelect?.value ?? AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE,
+            caseFilterSelect?.value ?? AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE,
             {
                 document,
                 onSelect: selectImage,
@@ -2814,7 +3360,7 @@
             catalogImages = next;
             AnnotationAdapter.cacheCatalogSidecarMetadata(catalogImages);
             const selectedCase = caseFilterSelect?.value
-                ?? AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE;
+                ?? AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE;
             const mode = AnnotationAdapter.resolveCaseFilterMode(selectedCase);
             const matched = mode === "case"
                 ? AnnotationAdapter.filterImagesForCase(catalogImages, selectedCase)
@@ -2842,7 +3388,7 @@
         return images.filter(image => !previousIds.has(image.id)).length;
     }
 
-    document.getElementById("refresh-images").addEventListener("click", () => {
+    document.getElementById("refresh-images")?.addEventListener("click", () => {
         if (liveDiscovery) void liveDiscovery.refresh(true);
     });
     const showSlideLabelsButton = document.getElementById("show-slide-labels");
@@ -2859,6 +3405,11 @@
     window.addEventListener("pagehide", () => { if (liveDiscovery) liveDiscovery.stop(); }, {once:true});
 
     async function selectImage(image) {
+        // Force reset and hide the floating Z-stack controller before evaluating the next image properties
+        let zStackPalette = document.getElementById('floating-zstack-palette');
+        if (zStackPalette) {
+            zStackPalette.style.display = 'none';
+        }
         // Clear overview OCR only — sidebar per-row if.<epitope> markers stay.
         AnnotationAdapter.clearNucleiCircleOverlays(viewer);
         AnnotationAdapter.replaceLocalizedCellObjects([]);
@@ -3163,10 +3714,12 @@
 
     function syncRightStackControlsVisibility() {
         const stack = document.querySelector(".right-stack-controls");
-        if (!stack) return;
         const seriesVisible = Boolean(seriesSelectControl && !seriesSelectControl.hidden);
         const zVisible = Boolean(zDepthControls && !zDepthControls.hidden);
-        stack.hidden = !(seriesVisible || zVisible);
+        const showStack = seriesVisible || zVisible;
+        if (stack) stack.hidden = !showStack;
+        // Series-only H&E must not reopen the Z-stack frame; only a true Z plane count does.
+        AnnotationAdapter.setFloatingZStackPaletteVisible(zVisible);
     }
 
     function syncZStackControl(imageMetadata) {
@@ -3354,12 +3907,14 @@
             const annotationModeButton = document.getElementById("annotation-mode");
             if (annotationModeButton) annotationModeButton.disabled = false;
             try {
+                AnnotationAdapter.ensureAnnotationEditorPopup(document);
                 annotationSpike = new AnnotoriousSpike(
                     viewer,
                     document.getElementById("annotation-mode"),
                     annotationVisibilityButton,
                     annotationNamesButton,
-                    document.getElementById("annotation-name"),
+                    document.getElementById("annotation-name-input")
+                        || document.getElementById("annotation-name"),
                     () => selectedImage?.id,
                     {
                         open: imageId => markImageSwitchTiming(imageId, "OSD open event"),
@@ -3421,6 +3976,7 @@
                     : null),
             preserveViewport: preserveViewport ? { bounds, zoom } : null,
             onReady: () => {
+                AnnotationAdapter.clearViewportTileContrastFilter(viewer);
                 AnnotationAdapter.applyZStackLayerOpacities(viewer, currentZ);
                 AnnotationAdapter.schedulePrefetchAdjacentZPlaneTiles({
                     viewer,
@@ -3743,6 +4299,10 @@
     }
 
     function renderChannels() {
+        if (!channelsElement) {
+            AnnotationAdapter.syncFloatingChannelPalette();
+            return;
+        }
         channelsElement.replaceChildren();
         for (const channel of display.channels) {
             const card = document.createElement("section");
@@ -3816,6 +4376,7 @@
             }));
             channelsElement.append(card);
         }
+        AnnotationAdapter.syncFloatingChannelPalette();
     }
 
     function rangeField(label, field, value, min, max, step) {
@@ -3888,12 +4449,18 @@
             saveLocalDisplay(imageId, display, currentSeries);
             if (reopen) openViewer(true);
             else AnnotationAdapter.applyChannelLayerOpacities(viewer, display.channels, currentZ);
+            AnnotationAdapter.clearViewportTileContrastFilter(viewer);
+            AnnotationAdapter.syncFloatingChannelPalette();
         } catch (error) {
             if (sequence === updateSequence) showError(error);
         }
     }
 
     function syncChannelControls() {
+        if (!channelsElement) {
+            AnnotationAdapter.syncFloatingChannelPalette();
+            return;
+        }
         const cards = channelsElement.querySelectorAll(".channel-card");
         display.channels.forEach((channel, index) => {
             const card = cards[index];
@@ -3912,6 +4479,7 @@
                 if (output) output.textContent = formatFieldValue(field, channel[field]);
             }
         });
+        AnnotationAdapter.syncFloatingChannelPalette();
     }
 
     resetButton.addEventListener("click", async () => {
@@ -3976,6 +4544,27 @@
         element.textContent = value;
         return element.innerHTML;
     }
+
+    AnnotationAdapter.setDisplayController({
+        getDisplay: () => display,
+        getViewer: () => viewer,
+        getCurrentZ: () => currentZ,
+        getCurrentSeries: () => currentSeries,
+        getSelectedImage: () => selectedImage,
+        getMetadata: () => metadata,
+        scheduleDisplayUpdate: options => scheduleDisplayUpdate(options || {}),
+        syncChannelControls,
+        renderChannels,
+        resetDisplay: () => resetButton?.click?.(),
+        recomputeAuto: () => recomputeAutoButton?.click?.(),
+        requestPixelBlock: (imageId, x, y, size, series) => request(
+            `/api/images/${encodeURIComponent(imageId)}/pixel-block?x=${x}&y=${y}&size=${size}&series=${series || 0}`
+        )
+    });
+    AnnotationAdapter.bindAdvancedChannelPalette();
+    AnnotationAdapter.bindFloatingAiLabsPalette();
+    AnnotationAdapter.bindFloatingAdminPalette();
+    AnnotationAdapter.bindFloatingZStackPalette();
 
     function showError(error) {
         console.error(error);
@@ -4053,6 +4642,7 @@
     }
 
     function setPanelCollapsed(side, collapsed) {
+        if (side === "right") return;
         workspace.classList.toggle(`${side}-collapsed`, collapsed);
         document.documentElement.classList.toggle(`workspace-${side}-collapsed`, collapsed);
         document.body.classList.toggle(`workspace-${side}-collapsed`, collapsed);
@@ -4067,30 +4657,38 @@
                 setPanelWidthVar(side, `${storedWidth}px`);
             }
         }
+        setTimeout(() => viewer?.viewport?.resize(), 0);
         const headerToggle = document.getElementById(`toggle-${side}`);
+        if (!headerToggle) return;
         headerToggle.setAttribute("aria-pressed", String(!collapsed));
-        const showLabel = side === "left" ? "Show Filenames" : "Show display controls";
-        const hideLabel = side === "left" ? "Hide image browser" : "Hide display controls";
-        const shortLabel = side === "left" ? "Images" : "Settings";
+        if (side === "left") {
+            headerToggle.title = collapsed ? "Show Image Browser" : "Hide Image Browser";
+            headerToggle.setAttribute("aria-label", "Show/Hide Image Browser");
+            headerToggle.setAttribute("data-tooltip", "Show/Hide Image Browser");
+            return;
+        }
+        const showLabel = "Show display controls";
+        const hideLabel = "Hide display controls";
+        const shortLabel = "Settings";
         const detail = collapsed ? showLabel : hideLabel;
         headerToggle.title = `${shortLabel} — ${detail}`;
         headerToggle.setAttribute("aria-label", shortLabel);
         headerToggle.setAttribute("data-tooltip", `${shortLabel}\n${detail}`);
-        setTimeout(() => viewer?.viewport?.resize(), 0);
     }
 
     imageInfoElement.addEventListener("toggle", () => localStorage.setItem(
         `${STORAGE_PREFIX}.imageInfoOpen`, imageInfoElement.open ? "open" : "closed"
     ));
 
-    document.getElementById("toggle-left").addEventListener("click", () => setPanelCollapsed("left", !workspace.classList.contains("left-collapsed")));
-    document.getElementById("toggle-right").addEventListener("click", () => setPanelCollapsed("right", !workspace.classList.contains("right-collapsed")));
-    document.getElementById("reveal-left").addEventListener("click", () => setPanelCollapsed("left", false));
-    document.getElementById("reveal-right").addEventListener("click", () => setPanelCollapsed("right", false));
+    document.getElementById("toggle-left")?.addEventListener("click", () => setPanelCollapsed("left", !workspace.classList.contains("left-collapsed")));
+    document.getElementById("toggle-right")?.addEventListener("click", () => setPanelCollapsed("right", !workspace.classList.contains("right-collapsed")));
+    document.getElementById("reveal-left")?.addEventListener("click", () => setPanelCollapsed("left", false));
+    document.getElementById("reveal-right")?.addEventListener("click", () => setPanelCollapsed("right", false));
     document.querySelectorAll("[data-collapse]").forEach(button => button.addEventListener("click", () => setPanelCollapsed(button.dataset.collapse, true)));
 
     function enableResizer(handleId, side) {
         const handle = document.getElementById(handleId);
+        if (!handle) return;
         handle.addEventListener("pointerdown", event => {
             event.preventDefault();
             handle.setPointerCapture(event.pointerId);
@@ -4113,9 +4711,8 @@
         });
     }
     enableResizer("left-resizer", "left");
-    enableResizer("right-resizer", "right");
 
-    for (const side of ["left", "right"]) {
+    for (const side of ["left"]) {
         const width = Number(localStorage.getItem(`${STORAGE_PREFIX}.${side}Width`));
         if (width) setPanelWidthVar(side, `${width}px`);
         setPanelCollapsed(side, localStorage.getItem(`${STORAGE_PREFIX}.${side}Collapsed`) === "true");
@@ -4154,28 +4751,17 @@
     function renderMeasureSessionList(list = AnnotationAdapter.measurementSessionList) {
         const panel = document.getElementById("measure-session-panel");
         const ul = document.getElementById("measure-session-list");
-        if (!panel || !ul) return;
-        const rows = Array.isArray(list) ? list : [];
-        panel.hidden = rows.length === 0;
-        ul.replaceChildren(...rows.slice().reverse().map(entry => {
-            const li = document.createElement("li");
-            const name = document.createElement("span");
-            name.textContent = entry.label || entry.lengthLabel || "Measurement";
-            const len = document.createElement("span");
-            len.className = "measure-session-length";
-            len.textContent = entry.lengthLabel || "";
-            li.append(name, len);
-            return li;
-        }));
+        if (panel) panel.hidden = true;
+        if (ul && typeof ul.replaceChildren === "function") ul.replaceChildren();
+        void list;
     }
 
     function onMeasurementComplete(microns, snapshot) {
+        AnnotationAdapter.hideMeasurementPopup();
         if (microns != null && microns > 0) {
-            const entry = snapshot?.entry;
-            statusElement.textContent = entry
-                ? `Saved ${entry.label} · session list ${AnnotationAdapter.measurementSessionList.length}`
-                : `Saved measurement ${AnnotationAdapter.formatMicrons(microns)}`;
-            renderMeasureSessionList();
+            statusElement.textContent = "Measurement recorded.";
+            const dialogLength = document.getElementById("measure-dialog-length");
+            if (dialogLength) dialogLength.textContent = "—";
             return;
         }
         if (microns == null) {
@@ -4212,7 +4798,8 @@
                 return;
             }
 
-            const nameInput = document.getElementById("annotation-name");
+            const nameInput = document.getElementById("annotation-name-input")
+                || document.getElementById("annotation-name");
             if (nameInput && !nameInput.hidden && !nameInput.disabled
                 && document.activeElement === nameInput) {
                 // AnnotationNameEditor handles Enter on the input; blur closes the naming view.
@@ -4256,13 +4843,11 @@
     bindEnterToCommitOverlays();
 
     document.getElementById("home-view").addEventListener("click", () => withReadyViewport(viewport => viewport.goHome()));
-    document.getElementById("zoom-in").addEventListener("click", () => withReadyViewport(viewport => {
-        // Pass null so OpenSeadragon zooms about the viewport center; omitting the
-        // ref-point has historically thrown in viewport.js when reading refPoint.x.
+    document.getElementById("zoom-in")?.addEventListener("click", () => withReadyViewport(viewport => {
         viewport.zoomBy(1.25, null);
         viewport.applyConstraints();
     }));
-    document.getElementById("zoom-out").addEventListener("click", () => withReadyViewport(viewport => {
+    document.getElementById("zoom-out")?.addEventListener("click", () => withReadyViewport(viewport => {
         viewport.zoomBy(0.8, null);
         viewport.applyConstraints();
     }));
@@ -4312,13 +4897,8 @@
         }
         const url = String(path || "");
         if (!url) return;
-        try {
-            const opened = window.open(url, "_blank", "noopener");
-            if (opened) return;
-        } catch (_error) {
-            // Fall through to same-tab navigation.
-        }
-        window.location.assign(url);
+        // Spawn docs in a separate tab; never rewrite the parent viewer URL.
+        window.open(url, "_blank");
     }
 
     function setPilotFeedbackVisible(visible) {
@@ -4384,5 +4964,13 @@
 <div id="annotation-name-portal" aria-hidden="true">
     <input id="annotation-name" class="annotation-name-inline-input" type="text" aria-label="Annotation name" data-max-unicode-length="200" placeholder="Unnamed annotation" hidden disabled>
 </div>
+<div id="annotation-editor-popup" role="dialog" aria-label="Annotation name">
+    <input type="text" id="annotation-name-input" placeholder="Enter annotation name..." autocomplete="off" aria-label="Annotation name" data-max-unicode-length="200">
+    <div class="annotation-editor-actions">
+        <button type="button" id="annotation-editor-cancel">Cancel</button>
+        <button type="button" id="annotation-editor-save">Save</button>
+    </div>
+</div>
+<div id="measurement-popup-overlay" role="status" aria-live="polite"></div>
 </body>
 </html>

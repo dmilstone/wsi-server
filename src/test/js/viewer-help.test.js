@@ -23,9 +23,13 @@ assert.match(index, /href="\/help\/viewer-guide\.html\?v=20260817"/);
 assert.match(index, /id="admin-ops-guide-link"/);
 assert.match(index, /href="\/help\/admin-ops-guide\.html\?v=20260817"/);
 assert.match(index, /target="_blank"/);
-assert.match(index, /rel="noopener"/);
+assert.match(index, /rel="noopener noreferrer"/);
 assert.match(index, /\["user-guide-link", "\/help\?v=20260817"\]/);
 assert.match(index, /openRelativeDocumentView\(documentPath, event\)/);
+assert.match(index, /window\.open\(url, "_blank"\)/);
+assert.match(index, /window\.open\("\/local-operations\/", "_blank"\)/);
+assert.doesNotMatch(index, /window\.location\.assign\(url\)/);
+assert.doesNotMatch(index, /if \(!opened\) window\.location\.assign/);
 
 assert.match(guide, /<title>WSI Viewer Quick Guide<\/title>/);
 assert.match(guide, /id="close-guide"/);

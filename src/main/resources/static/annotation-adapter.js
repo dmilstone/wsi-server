@@ -227,6 +227,7 @@ class AnnotationAdapter {
      * case filter remains on the zero-exposure placeholder.
      */
     static shouldBypassSessionImageAutoload(selectElement) {
+        if (!selectElement) return false;
         return AnnotationAdapter.isCaseFilterPlaceholderSelected(selectElement);
     }
 
@@ -282,7 +283,10 @@ class AnnotationAdapter {
         setText("discovery-status", "");
 
         const imageInfo = root.getElementById("image-info");
-        if (imageInfo) imageInfo.hidden = true;
+        if (imageInfo) {
+            imageInfo.hidden = false;
+            imageInfo.open = false;
+        }
 
         for (const id of [
             "z-controls-card",
@@ -297,6 +301,12 @@ class AnnotationAdapter {
         const stack = root.querySelector?.(".right-stack-controls");
         if (stack) stack.hidden = true;
 
+        AnnotationAdapter.closeFloatingChannelPalette(root);
+        AnnotationAdapter.closeFloatingAiLabsPalette(root);
+        AnnotationAdapter.closeFloatingAdminPalette(root);
+        AnnotationAdapter.setFloatingZStackPaletteVisible(false, root);
+        AnnotationAdapter.hideMeasurementPopup(root);
+        AnnotationAdapter.hideAnnotationEditorPopup(root);
         const channels = root.getElementById("channels");
         if (channels) {
             channels.replaceChildren();
@@ -2265,8 +2275,11 @@ class AnnotationAdapter {
     static collapseAiLabsPanel(doc = null) {
         const root = doc || (typeof document !== "undefined" ? document : null);
         if (!root || typeof root.getElementById !== "function") return false;
-        const aiAnalytics = root.getElementById("ai-analytics-panel");
-        const aiLabs = root.getElementById("ai-labs-panel");
+        AnnotationAdapter.closeFloatingAiLabsPalette(root);
+        const aiAnalytics = root.getElementById("ai-analytics-panel")
+            || AnnotationAdapter.aiLabsPaletteElement?.querySelector?.("#ai-analytics-panel");
+        const aiLabs = root.getElementById("ai-labs-panel")
+            || AnnotationAdapter.aiLabsPaletteElement?.querySelector?.("#ai-labs-panel");
         if (!aiAnalytics && !aiLabs) return false;
         if (aiAnalytics) {
             aiAnalytics.open = false;
@@ -2285,6 +2298,12 @@ class AnnotationAdapter {
 
     static onSlideClicked(image, doc = null) {
         const root = doc || (typeof document !== "undefined" ? document : null);
+        // Force reset and hide the floating Z-stack controller before evaluating the next image properties
+        let zStackPalette = root?.getElementById?.("floating-zstack-palette")
+            || (typeof document !== "undefined" ? document.getElementById("floating-zstack-palette") : null);
+        if (zStackPalette) {
+            zStackPalette.style.display = "none";
+        }
         if (!root || typeof root.getElementById !== "function") return false;
         AnnotationAdapter.enforceDefaultClosedPanelState(root);
         const multilayer = AnnotationAdapter.isMultiLayerSlide(image);
@@ -2298,6 +2317,9 @@ class AnnotationAdapter {
                 card.hidden = true;
                 if (card.style) card.style.display = "none";
             }
+            if (zDepth) zDepth.hidden = true;
+            if (stack) stack.hidden = true;
+            AnnotationAdapter.setFloatingZStackPaletteVisible(false, root);
             return false;
         }
         if (card) {
@@ -2314,6 +2336,7 @@ class AnnotationAdapter {
             aiLabs.classList.remove("show");
         }
         if (stack) stack.hidden = false;
+        AnnotationAdapter.setFloatingZStackPaletteVisible(true, root);
         return true;
     }
 
@@ -3196,6 +3219,10 @@ class AnnotationAdapter {
         AnnotationAdapter.ensureMeasurementDefaults();
         AnnotationAdapter.viewer = viewer || null;
         AnnotationAdapter.bindResetViewportHomeButton();
+        AnnotationAdapter.bindAdvancedChannelPalette();
+        AnnotationAdapter.bindFloatingAiLabsPalette();
+        AnnotationAdapter.bindFloatingAdminPalette();
+        AnnotationAdapter.bindFloatingZStackPalette();
         if (AnnotationAdapter.viewer) {
             AnnotationAdapter.bindViewportHomeOnOpen(AnnotationAdapter.viewer);
             AnnotationAdapter.bindAiVectorOverlayHandlers(AnnotationAdapter.viewer);
@@ -3223,6 +3250,871 @@ class AnnotationAdapter {
         return button;
     }
 
+    static CHANNEL_LEVEL_MAX = 58831;
+    static CHANNEL_PALETTE_LUT_COLORS = {
+        BLUE: "#438cff",
+        GREEN: "#3bd671",
+        RED: "#ff5757",
+        MAGENTA: "#ed62f5",
+        CYAN: "#4de4e4",
+        GRAY: "#b8c0ca",
+        YELLOW: "#f4df52"
+    };
+    static displayController = null;
+    static channelPaletteElement = null;
+    static channelPaletteHost = null;
+    static channelPaletteSidebarSnapshot = null;
+    static channelPaletteSelectedIndex = 0;
+    static channelPaletteHistogram = null;
+    static channelPaletteDrag = null;
+
+    static setDisplayController(controller) {
+        AnnotationAdapter.displayController = controller && typeof controller === "object"
+            ? controller
+            : null;
+        AnnotationAdapter.syncFloatingChannelPalette();
+        return AnnotationAdapter.displayController;
+    }
+
+    static placeholderPaletteChannels() {
+        return [
+            { index: 0, name: "Cyan", lut: "CYAN", visible: true, black: 0, white: AnnotationAdapter.CHANNEL_LEVEL_MAX, gamma: 1, opacity: 1 },
+            { index: 1, name: "Green", lut: "GREEN", visible: true, black: 0, white: AnnotationAdapter.CHANNEL_LEVEL_MAX, gamma: 1, opacity: 1 },
+            { index: 2, name: "Red", lut: "RED", visible: true, black: 0, white: AnnotationAdapter.CHANNEL_LEVEL_MAX, gamma: 1, opacity: 1 }
+        ];
+    }
+
+    static paletteChannelList() {
+        const display = AnnotationAdapter.displayController?.getDisplay?.();
+        const channels = Array.isArray(display?.channels) ? display.channels : [];
+        return channels.length ? channels : AnnotationAdapter.placeholderPaletteChannels();
+    }
+
+    static paletteSelectedChannel() {
+        const channels = AnnotationAdapter.paletteChannelList();
+        const index = Math.max(0, Math.min(channels.length - 1, Number(AnnotationAdapter.channelPaletteSelectedIndex) || 0));
+        AnnotationAdapter.channelPaletteSelectedIndex = index;
+        return channels[index] || null;
+    }
+
+    static resolvePaletteRoot(root = null) {
+        return root
+            || (AnnotationAdapter.channelPaletteElement && AnnotationAdapter.channelPaletteElement.ownerDocument)
+            || (typeof document !== "undefined" ? document : null);
+    }
+
+    static resolvePaletteNode(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        return doc?.getElementById?.("floating-channel-palette")
+            || AnnotationAdapter.channelPaletteElement
+            || null;
+    }
+
+    static injectAdvancedChannelPaletteButton(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        if (!doc?.getElementById) return null;
+        let button = doc.getElementById("show-advanced-channel-palette");
+        if (button) return button;
+        const home = doc.getElementById("home-view");
+        const host = home?.parentNode
+            || doc.querySelector?.(".toolbar-group.nav-group")
+            || doc.querySelector?.(".right-column-top")
+            || doc.getElementById("channels-panel");
+        if (!host || typeof doc.createElement !== "function") return null;
+        button = doc.createElement("button");
+        button.id = "show-advanced-channel-palette";
+        button.type = "button";
+        button.className = "toolbar-button fcp-launch-btn";
+        button.title = "Show Advanced Channel Palette";
+        button.setAttribute("aria-label", "Show Advanced Channel Palette");
+        button.setAttribute("aria-pressed", "false");
+        button.textContent = "◐";
+        if (home && home.nextSibling && typeof host.insertBefore === "function") {
+            host.insertBefore(button, home.nextSibling);
+        } else if (typeof host.append === "function") host.append(button);
+        else host.appendChild?.(button);
+        return button;
+    }
+
+    static bindAdvancedChannelPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        if (!doc?.getElementById) return null;
+        const button = AnnotationAdapter.injectAdvancedChannelPaletteButton(doc);
+        const palette = doc.getElementById("floating-channel-palette")
+            || AnnotationAdapter.channelPaletteElement;
+        if (palette) {
+            AnnotationAdapter.channelPaletteElement = palette;
+            if (palette.parentNode) AnnotationAdapter.channelPaletteHost = palette.parentNode;
+        }
+        if (button && button.dataset?.fcpToggleBound !== "1") {
+            button.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.toggleFloatingChannelPalette(doc);
+            });
+            if (button.dataset) button.dataset.fcpToggleBound = "1";
+        }
+        const closeBtn = palette?.querySelector?.("#floating-channel-palette-close")
+            || doc.getElementById("floating-channel-palette-close");
+        if (closeBtn && closeBtn.dataset?.fcpCloseBound !== "1") {
+            closeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.closeFloatingChannelPalette(doc);
+            });
+            if (closeBtn.dataset) closeBtn.dataset.fcpCloseBound = "1";
+        }
+        AnnotationAdapter.bindChannelPaletteDrag(doc);
+        AnnotationAdapter.bindChannelPaletteControls(doc);
+        AnnotationAdapter.bindFloatingPaletteResize(palette);
+        return palette || button || null;
+    }
+
+    static applyLiberatedFloatingStyle(element, options = {}) {
+        if (!element?.style) return false;
+        element.style.position = "fixed";
+        element.style.zIndex = "9999";
+        if (typeof element.style.setProperty === "function") {
+            element.style.setProperty("resize", "both", "important");
+            element.style.setProperty("overflow", "hidden", "important");
+        } else {
+            element.style.resize = "both";
+            element.style.overflow = "hidden";
+        }
+        element.style.minWidth = options.minWidth || "280px";
+        element.style.minHeight = options.minHeight || "400px";
+        return true;
+    }
+
+    static mountFloatingPaletteToBody(palette, doc) {
+        const body = doc?.body;
+        if (!palette || !body || typeof body.appendChild !== "function") return false;
+        if (typeof document !== "undefined" && doc === document && document.body) {
+            document.body.appendChild(palette);
+            return true;
+        }
+        if (palette.parentNode !== body) body.appendChild(palette);
+        return true;
+    }
+
+    static bindLiberatedPaletteDrag(handle, palette) {
+        if (!handle || !palette || handle.dataset?.fcpDragBound === "1") return false;
+        const onMove = event => {
+            const drag = palette._fcpDrag;
+            if (!drag) return;
+            palette.style.position = "fixed";
+            palette.style.left = `${event.clientX - drag.dx}px`;
+            palette.style.top = `${event.clientY - drag.dy}px`;
+            palette.style.right = "auto";
+            palette.style.bottom = "auto";
+        };
+        const onUp = () => {
+            palette._fcpDrag = null;
+            if (typeof window !== "undefined") {
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+            }
+        };
+        handle.addEventListener("pointerdown", event => {
+            if (event.button != null && event.button !== 0) return;
+            if (event.target?.closest?.(".fcp-close, .fcp-minimize")) return;
+            const rect = palette.getBoundingClientRect?.() || { left: 0, top: 0 };
+            palette._fcpDrag = {
+                dx: event.clientX - rect.left,
+                dy: event.clientY - rect.top
+            };
+            if (typeof window !== "undefined") {
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+            }
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        palette.addEventListener?.("pointerdown", event => event.stopPropagation());
+        if (handle.dataset) handle.dataset.fcpDragBound = "1";
+        return true;
+    }
+
+    static bindFloatingPaletteResize(palette) {
+        if (!palette || palette.dataset?.fcpResizeBound === "1" || typeof ResizeObserver !== "function") {
+            return false;
+        }
+        const canvas = palette.querySelector?.("#floating-channel-histogram");
+        const observer = new ResizeObserver(() => {
+            if (!canvas) return;
+            const wrap = canvas.parentElement;
+            const width = Math.max(80, Math.floor((wrap?.clientWidth || palette.clientWidth || 340) - 8));
+            if (canvas.width !== width) {
+                canvas.width = width;
+                AnnotationAdapter.drawChannelPaletteHistogram(palette.ownerDocument);
+            }
+        });
+        observer.observe(palette);
+        if (palette.dataset) palette.dataset.fcpResizeBound = "1";
+        return true;
+    }
+
+    static bindChannelPaletteDrag(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const handle = palette?.querySelector?.("#floating-channel-palette-handle")
+            || doc?.getElementById?.("floating-channel-palette-handle");
+        if (!palette || !handle || handle.dataset?.fcpDragBound === "1") return false;
+        return AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+    }
+
+    static bindChannelPaletteControls(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        if (!palette || palette.dataset?.fcpControlsBound === "1") return false;
+        const min = palette.querySelector?.("#fcp-min") || doc?.getElementById?.("fcp-min");
+        const max = palette.querySelector?.("#fcp-max") || doc?.getElementById?.("fcp-max");
+        const gamma = palette.querySelector?.("#fcp-gamma") || doc?.getElementById?.("fcp-gamma");
+        const autoBtn = palette.querySelector?.("#fcp-auto") || doc?.getElementById?.("fcp-auto");
+        const resetBtn = palette.querySelector?.("#fcp-reset") || doc?.getElementById?.("fcp-reset");
+        const onSlide = event => {
+            AnnotationAdapter.applyChannelPaletteWindowFromSliders(doc, { live: true });
+            if (event?.type === "change") {
+                AnnotationAdapter.commitChannelPaletteWindow(doc);
+            }
+        };
+        for (const input of [min, max, gamma]) {
+            if (!input?.addEventListener) continue;
+            input.addEventListener("input", onSlide);
+            input.addEventListener("change", onSlide);
+        }
+        autoBtn?.addEventListener?.("click", event => {
+            event.preventDefault();
+            const controller = AnnotationAdapter.displayController;
+            if (typeof controller?.recomputeAuto === "function") controller.recomputeAuto();
+        });
+        resetBtn?.addEventListener?.("click", event => {
+            event.preventDefault();
+            const controller = AnnotationAdapter.displayController;
+            if (typeof controller?.resetDisplay === "function") controller.resetDisplay();
+        });
+        if (palette.dataset) palette.dataset.fcpControlsBound = "1";
+        return true;
+    }
+
+    static isFloatingChannelPaletteOpen(root = null) {
+        const palette = AnnotationAdapter.resolvePaletteNode(root);
+        return Boolean(palette && palette.parentNode && !palette.hidden);
+    }
+
+    static toggleFloatingChannelPalette(root = null) {
+        if (AnnotationAdapter.isFloatingChannelPaletteOpen(root)) {
+            return AnnotationAdapter.closeFloatingChannelPalette(root);
+        }
+        return AnnotationAdapter.openFloatingChannelPalette(root);
+    }
+
+    static snapshotChannelPaletteSidebar(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const channels = doc?.getElementById?.("channels");
+        const header = doc?.querySelector?.("#channels-panel > .panel-header");
+        const actions = header?.querySelector?.(".display-actions");
+        AnnotationAdapter.channelPaletteSidebarSnapshot = {
+            channelsHidden: Boolean(channels?.hidden),
+            headerHidden: Boolean(header?.hidden),
+            actionsHidden: Boolean(actions?.hidden)
+        };
+        return AnnotationAdapter.channelPaletteSidebarSnapshot;
+    }
+
+    static restoreChannelPaletteSidebar(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const snapshot = AnnotationAdapter.channelPaletteSidebarSnapshot;
+        if (!doc || !snapshot) return false;
+        const channels = doc.getElementById?.("channels");
+        const header = doc.querySelector?.("#channels-panel > .panel-header");
+        const actions = header?.querySelector?.(".display-actions");
+        if (channels) channels.hidden = snapshot.channelsHidden;
+        if (header) header.hidden = snapshot.headerHidden;
+        if (actions) actions.hidden = snapshot.actionsHidden;
+        AnnotationAdapter.channelPaletteSidebarSnapshot = null;
+        return true;
+    }
+
+    static openFloatingChannelPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        if (!doc || !palette) return false;
+        if (!AnnotationAdapter.channelPaletteSidebarSnapshot) {
+            AnnotationAdapter.snapshotChannelPaletteSidebar(doc);
+        }
+        AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "280px", minHeight: "400px" });
+        palette.hidden = false;
+        palette.removeAttribute?.("hidden");
+        if (palette.style) palette.style.display = "flex";
+        palette.setAttribute("aria-hidden", "false");
+        AnnotationAdapter.channelPaletteElement = palette;
+        AnnotationAdapter.channelPaletteHost = doc.body || palette.parentNode;
+        const toggle = doc.getElementById?.("show-advanced-channel-palette");
+        if (toggle) toggle.setAttribute("aria-pressed", "true");
+        AnnotationAdapter.bindAdvancedChannelPalette(doc);
+        AnnotationAdapter.syncFloatingChannelPalette(doc);
+        AnnotationAdapter.refreshChannelPaletteHistogram(doc);
+        return true;
+    }
+
+    static closeFloatingChannelPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        if (palette) {
+            AnnotationAdapter.channelPaletteElement = palette;
+            if (palette.parentNode) AnnotationAdapter.channelPaletteHost = palette.parentNode;
+            palette.hidden = true;
+            palette.setAttribute("aria-hidden", "true");
+            if (palette.style) palette.style.display = "none";
+            if (palette.parentNode) palette.parentNode.removeChild(palette);
+        }
+        AnnotationAdapter.clearViewportTileContrastFilter(
+            AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer
+        );
+        AnnotationAdapter.restoreChannelPaletteSidebar(doc);
+        const toggle = doc?.getElementById?.("show-advanced-channel-palette");
+        if (toggle) toggle.setAttribute("aria-pressed", "false");
+        return true;
+    }
+
+    static bindFloatingAiLabsPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        if (!doc?.getElementById) return null;
+        const palette = doc.getElementById("floating-ai-labs-palette")
+            || AnnotationAdapter.aiLabsPaletteElement;
+        if (palette) AnnotationAdapter.aiLabsPaletteElement = palette;
+        const toggle = doc.getElementById("toggle-ai-labs-palette");
+        if (toggle && toggle.dataset?.fcpToggleBound !== "1") {
+            toggle.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.toggleFloatingAiLabsPalette(doc);
+            });
+            if (toggle.dataset) toggle.dataset.fcpToggleBound = "1";
+        }
+        const closeBtn = palette?.querySelector?.("#floating-ai-labs-close")
+            || doc.getElementById("floating-ai-labs-close");
+        if (closeBtn && closeBtn.dataset?.fcpCloseBound !== "1") {
+            closeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.closeFloatingAiLabsPalette(doc);
+            });
+            if (closeBtn.dataset) closeBtn.dataset.fcpCloseBound = "1";
+        }
+        const handle = palette?.querySelector?.("#floating-ai-labs-handle")
+            || doc.getElementById("floating-ai-labs-handle");
+        if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        return palette || toggle || null;
+    }
+
+    static isFloatingAiLabsOpen(root = null) {
+        const palette = AnnotationAdapter.resolvePaletteRoot(root)?.getElementById?.("floating-ai-labs-palette")
+            || AnnotationAdapter.aiLabsPaletteElement;
+        return Boolean(palette && palette.parentNode && !palette.hidden);
+    }
+
+    static toggleFloatingAiLabsPalette(root = null) {
+        if (AnnotationAdapter.isFloatingAiLabsOpen(root)) {
+            return AnnotationAdapter.closeFloatingAiLabsPalette(root);
+        }
+        return AnnotationAdapter.openFloatingAiLabsPalette(root);
+    }
+
+    static openFloatingAiLabsPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = doc?.getElementById?.("floating-ai-labs-palette")
+            || AnnotationAdapter.aiLabsPaletteElement;
+        if (!doc || !palette) return false;
+        AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "320px", minHeight: "400px" });
+        palette.hidden = false;
+        palette.removeAttribute?.("hidden");
+        if (palette.style) palette.style.display = "flex";
+        palette.setAttribute("aria-hidden", "false");
+        AnnotationAdapter.aiLabsPaletteElement = palette;
+        const toggle = doc.getElementById?.("toggle-ai-labs-palette");
+        if (toggle) toggle.setAttribute("aria-pressed", "true");
+        const aiLabs = doc.getElementById?.("ai-labs-panel");
+        if (aiLabs) {
+            aiLabs.hidden = false;
+            aiLabs.classList?.add?.("show");
+        }
+        const aiAnalytics = doc.getElementById?.("ai-analytics-panel");
+        if (aiAnalytics) {
+            aiAnalytics.hidden = false;
+            aiAnalytics.open = true;
+        }
+        AnnotationAdapter.bindFloatingAiLabsPalette(doc);
+        return true;
+    }
+
+    static closeFloatingAiLabsPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = doc?.getElementById?.("floating-ai-labs-palette")
+            || AnnotationAdapter.aiLabsPaletteElement;
+        if (palette) {
+            AnnotationAdapter.aiLabsPaletteElement = palette;
+            palette.hidden = true;
+            palette.setAttribute("aria-hidden", "true");
+            if (palette.style) palette.style.display = "none";
+            if (palette.parentNode) palette.parentNode.removeChild(palette);
+        }
+        const toggle = doc?.getElementById?.("toggle-ai-labs-palette");
+        if (toggle) toggle.setAttribute("aria-pressed", "false");
+        const aiLabs = doc?.getElementById?.("ai-labs-panel") || palette?.querySelector?.("#ai-labs-panel");
+        if (aiLabs) aiLabs.classList?.remove?.("show");
+        return true;
+    }
+
+    static bindFloatingAdminPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        if (!doc?.getElementById) return null;
+        const palette = doc.getElementById("floating-admin-palette")
+            || AnnotationAdapter.adminPaletteElement;
+        if (palette) AnnotationAdapter.adminPaletteElement = palette;
+        const toggle = doc.getElementById("workstation-admin-tools-btn");
+        if (toggle && toggle.dataset?.fcpToggleBound !== "1") {
+            toggle.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.toggleFloatingAdminPalette(doc);
+            });
+            if (toggle.dataset) toggle.dataset.fcpToggleBound = "1";
+        }
+        const closeBtn = palette?.querySelector?.("#floating-admin-close")
+            || doc.getElementById("floating-admin-close");
+        if (closeBtn && closeBtn.dataset?.fcpCloseBound !== "1") {
+            closeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.closeFloatingAdminPalette(doc);
+            });
+            if (closeBtn.dataset) closeBtn.dataset.fcpCloseBound = "1";
+        }
+        const handle = palette?.querySelector?.("#floating-admin-handle")
+            || doc.getElementById("floating-admin-handle");
+        if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        return palette || toggle || null;
+    }
+
+    static toggleFloatingAdminPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = doc?.getElementById?.("floating-admin-palette")
+            || AnnotationAdapter.adminPaletteElement;
+        const open = Boolean(palette && palette.parentNode && !palette.hidden);
+        return open
+            ? AnnotationAdapter.closeFloatingAdminPalette(doc)
+            : AnnotationAdapter.openFloatingAdminPalette(doc);
+    }
+
+    static openFloatingAdminPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = doc?.getElementById?.("floating-admin-palette")
+            || AnnotationAdapter.adminPaletteElement;
+        if (!doc || !palette) return false;
+        AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "280px", minHeight: "400px" });
+        palette.hidden = false;
+        palette.removeAttribute?.("hidden");
+        if (palette.style) palette.style.display = "flex";
+        palette.setAttribute("aria-hidden", "false");
+        AnnotationAdapter.adminPaletteElement = palette;
+        const toggle = doc.getElementById?.("workstation-admin-tools-btn");
+        if (toggle) toggle.setAttribute("aria-pressed", "true");
+        AnnotationAdapter.bindFloatingAdminPalette(doc);
+        return true;
+    }
+
+    static closeFloatingAdminPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = doc?.getElementById?.("floating-admin-palette")
+            || AnnotationAdapter.adminPaletteElement;
+        if (palette) {
+            AnnotationAdapter.adminPaletteElement = palette;
+            palette.hidden = true;
+            palette.setAttribute("aria-hidden", "true");
+            if (palette.style) palette.style.display = "none";
+            if (palette.parentNode) palette.parentNode.removeChild(palette);
+        }
+        const toggle = doc?.getElementById?.("workstation-admin-tools-btn");
+        if (toggle) toggle.setAttribute("aria-pressed", "false");
+        return true;
+    }
+
+    static resolveZStackPaletteNode(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        return doc?.getElementById?.("floating-zstack-palette") || AnnotationAdapter.zStackPaletteElement || null;
+    }
+
+    static bindFloatingZStackPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        if (!doc?.getElementById) return null;
+        const palette = AnnotationAdapter.resolveZStackPaletteNode(doc);
+        if (palette) AnnotationAdapter.zStackPaletteElement = palette;
+        const closeBtn = palette?.querySelector?.("#floating-zstack-close")
+            || doc.getElementById("floating-zstack-close");
+        if (closeBtn && closeBtn.dataset?.fcpCloseBound !== "1") {
+            closeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.setFloatingZStackPaletteVisible(false, doc);
+            });
+            if (closeBtn.dataset) closeBtn.dataset.fcpCloseBound = "1";
+        }
+        const minimizeBtn = palette?.querySelector?.("#floating-zstack-minimize")
+            || doc.getElementById("floating-zstack-minimize");
+        if (minimizeBtn && minimizeBtn.dataset?.zstackMinBound !== "1") {
+            minimizeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.toggleFloatingZStackMinimized(doc);
+            });
+            if (minimizeBtn.dataset) minimizeBtn.dataset.zstackMinBound = "1";
+        }
+        const handle = palette?.querySelector?.("#floating-zstack-handle")
+            || doc.getElementById("floating-zstack-handle");
+        if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        if (palette) AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        return palette || null;
+    }
+
+    static setFloatingZStackPaletteVisible(visible, root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolveZStackPaletteNode(doc);
+        if (!palette) return false;
+        AnnotationAdapter.zStackPaletteElement = palette;
+        AnnotationAdapter.bindFloatingZStackPalette(doc);
+        if (visible) {
+            AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+            AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "280px", minHeight: "160px" });
+            palette.hidden = false;
+            palette.removeAttribute?.("hidden");
+            palette.setAttribute?.("aria-hidden", "false");
+            if (palette.style) palette.style.display = "block";
+            AnnotationAdapter.syncFloatingZStackMinimizedUi(palette, doc);
+            return true;
+        }
+        palette.hidden = true;
+        palette.setAttribute?.("aria-hidden", "true");
+        if (palette.style) palette.style.display = "none";
+        return true;
+    }
+
+    static toggleFloatingZStackMinimized(root = null) {
+        const palette = AnnotationAdapter.resolveZStackPaletteNode(root);
+        if (!palette?.classList) return false;
+        palette.classList.toggle("zstack-minimized");
+        return AnnotationAdapter.syncFloatingZStackMinimizedUi(palette, root);
+    }
+
+    static syncFloatingZStackMinimizedUi(palette = null, root = null) {
+        const node = palette || AnnotationAdapter.resolveZStackPaletteNode(root);
+        if (!node) return false;
+        const minimized = Boolean(node.classList?.contains?.("zstack-minimized"));
+        if (node.style) {
+            node.style.maxHeight = minimized ? "32px" : "";
+            node.style.minHeight = minimized ? "32px" : "160px";
+            node.style.overflow = "hidden";
+        }
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const btn = node.querySelector?.("#floating-zstack-minimize")
+            || doc?.getElementById?.("floating-zstack-minimize");
+        if (btn) {
+            btn.setAttribute("aria-pressed", String(minimized));
+            btn.setAttribute("title", minimized ? "Expand" : "Minimize");
+            btn.setAttribute("aria-label", minimized ? "Expand Z-stack controls" : "Minimize Z-stack controls");
+            btn.textContent = "-";
+        }
+        return true;
+    }
+
+    static formatChannelLevel(value) {
+        return Math.round(Number(value) || 0).toLocaleString();
+    }
+
+    static escapePaletteHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, ch => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        }[ch]));
+    }
+
+    static channelPaletteColor(channel) {
+        const lut = String(channel?.lut || "").toUpperCase();
+        return AnnotationAdapter.CHANNEL_PALETTE_LUT_COLORS[lut] || "#888";
+    }
+
+    static syncFloatingChannelPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        if (!palette) return false;
+        const channels = AnnotationAdapter.paletteChannelList();
+        if (AnnotationAdapter.channelPaletteSelectedIndex >= channels.length) {
+            AnnotationAdapter.channelPaletteSelectedIndex = 0;
+        }
+        const body = palette.querySelector?.("#floating-channel-palette-rows")
+            || doc?.getElementById?.("floating-channel-palette-rows");
+        if (body && typeof body.replaceChildren === "function") {
+            const owner = palette.ownerDocument || doc;
+            const rows = channels.map((channel, index) => {
+                const row = owner.createElement("tr");
+                row.className = index === AnnotationAdapter.channelPaletteSelectedIndex ? "is-selected" : "";
+                row.dataset.channelIndex = String(channel.index ?? index);
+                const color = AnnotationAdapter.channelPaletteColor(channel);
+                const name = AnnotationAdapter.escapePaletteHtml(AnnotationAdapter.compactChannelName(channel));
+                row.innerHTML = `
+                    <td><input type="checkbox" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}"></td>
+                    <td><span class="fcp-swatch" style="background:${color}"></span></td>
+                    <td>${name}</td>
+                    <td>${AnnotationAdapter.formatChannelLevel(channel.black)}</td>
+                    <td>${AnnotationAdapter.formatChannelLevel(channel.white)}</td>
+                `;
+                row.addEventListener("click", event => {
+                    if (event.target?.closest?.("input")) return;
+                    AnnotationAdapter.channelPaletteSelectedIndex = index;
+                    AnnotationAdapter.syncFloatingChannelPalette(doc);
+                    AnnotationAdapter.refreshChannelPaletteHistogram(doc);
+                });
+                const checkbox = row.querySelector("input[data-fcp-visible]");
+                checkbox?.addEventListener("change", () => {
+                    AnnotationAdapter.applyChannelPaletteVisibility(index, checkbox.checked, doc);
+                });
+                return row;
+            });
+            body.replaceChildren(...rows);
+        }
+        const selected = AnnotationAdapter.paletteSelectedChannel();
+        if (selected) {
+            const min = palette.querySelector?.("#fcp-min") || doc?.getElementById?.("fcp-min");
+            const max = palette.querySelector?.("#fcp-max") || doc?.getElementById?.("fcp-max");
+            const gamma = palette.querySelector?.("#fcp-gamma") || doc?.getElementById?.("fcp-gamma");
+            const minOut = palette.querySelector?.("#fcp-min-value") || doc?.getElementById?.("fcp-min-value");
+            const maxOut = palette.querySelector?.("#fcp-max-value") || doc?.getElementById?.("fcp-max-value");
+            const gammaOut = palette.querySelector?.("#fcp-gamma-value") || doc?.getElementById?.("fcp-gamma-value");
+            const scaleMax = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+            if (min) {
+                min.max = String(scaleMax);
+                min.value = String(Math.max(0, Math.min(scaleMax, Number(selected.black) || 0)));
+            }
+            if (max) {
+                max.max = String(scaleMax);
+                max.value = String(Math.max(1, Math.min(scaleMax, Number(selected.white) || scaleMax)));
+            }
+            if (gamma) gamma.value = String(Number(selected.gamma) || 1);
+            if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min?.value || selected.black);
+            if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max?.value || selected.white);
+            if (gammaOut) gammaOut.textContent = Number(gamma?.value || selected.gamma || 1).toFixed(2);
+            AnnotationAdapter.drawChannelPaletteHistogram(doc);
+        }
+        return true;
+    }
+
+    static applyChannelPaletteVisibility(index, visible, root = null) {
+        const channels = AnnotationAdapter.paletteChannelList();
+        const channel = channels[index];
+        if (!channel) return false;
+        const groupKey = AnnotationAdapter.channelVisibilityGroupKey(channel);
+        for (const peer of channels) {
+            if (AnnotationAdapter.channelVisibilityGroupKey(peer) !== groupKey) continue;
+            peer.visible = Boolean(visible);
+        }
+        const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        if (viewer?.world && typeof viewer.world.getItemAt === "function") {
+            AnnotationAdapter.applyChannelLayerOpacities(
+                viewer,
+                channels,
+                AnnotationAdapter.displayController?.getCurrentZ?.()
+            );
+        }
+        AnnotationAdapter.displayController?.syncChannelControls?.();
+        AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: false });
+        AnnotationAdapter.syncFloatingChannelPalette(root);
+        return true;
+    }
+
+    static readChannelPaletteSliders(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const scaleMax = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        let min = Number(palette?.querySelector?.("#fcp-min")?.value
+            ?? doc?.getElementById?.("fcp-min")?.value
+            ?? 0);
+        let max = Number(palette?.querySelector?.("#fcp-max")?.value
+            ?? doc?.getElementById?.("fcp-max")?.value
+            ?? scaleMax);
+        let gamma = Number(palette?.querySelector?.("#fcp-gamma")?.value
+            ?? doc?.getElementById?.("fcp-gamma")?.value
+            ?? 1);
+        if (!Number.isFinite(min)) min = 0;
+        if (!Number.isFinite(max)) max = scaleMax;
+        if (!Number.isFinite(gamma) || gamma <= 0) gamma = 1;
+        min = Math.max(0, Math.min(scaleMax - 1, Math.round(min)));
+        max = Math.max(min + 1, Math.min(scaleMax, Math.round(max)));
+        gamma = Math.max(0.2, Math.min(4, gamma));
+        return { min, max, gamma };
+    }
+
+    static applyChannelPaletteWindowFromSliders(root = null, options = {}) {
+        const { min, max, gamma } = AnnotationAdapter.readChannelPaletteSliders(root);
+        const channel = AnnotationAdapter.paletteSelectedChannel();
+        if (channel) {
+            channel.black = min;
+            channel.white = max;
+            channel.gamma = gamma;
+        }
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const minOut = palette?.querySelector?.("#fcp-min-value") || doc?.getElementById?.("fcp-min-value");
+        const maxOut = palette?.querySelector?.("#fcp-max-value") || doc?.getElementById?.("fcp-max-value");
+        const gammaOut = palette?.querySelector?.("#fcp-gamma-value") || doc?.getElementById?.("fcp-gamma-value");
+        if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min);
+        if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max);
+        if (gammaOut) gammaOut.textContent = Number(gamma).toFixed(2);
+        const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        AnnotationAdapter.applyViewportTileContrastFilter(viewer, min, max, gamma);
+        AnnotationAdapter.drawChannelPaletteHistogram(doc);
+        if (options.live) {
+            AnnotationAdapter.displayController?.syncChannelControls?.();
+        }
+        return { min, max, gamma };
+    }
+
+    static commitChannelPaletteWindow(root = null) {
+        AnnotationAdapter.applyChannelPaletteWindowFromSliders(root);
+        AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: true });
+        return true;
+    }
+
+    static applyViewportTileContrastFilter(viewer, min, max, gamma) {
+        const canvas = viewer?.drawer?.canvas || viewer?.canvas?.querySelector?.("canvas") || viewer?.canvas;
+        if (!canvas?.style) return false;
+        const scale = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        const lo = Math.max(0, Math.min(1, Number(min) / scale));
+        const hi = Math.max(lo + (1 / scale), Math.min(1, Number(max) / scale));
+        const contrast = Math.max(0.25, Math.min(12, 1 / (hi - lo)));
+        const mid = (lo + hi) / 2;
+        const brightness = Math.max(0.25, Math.min(2.8, 1 + (0.5 - mid) * 1.35));
+        const g = Math.max(0.2, Math.min(4, Number(gamma) || 1));
+        const owner = canvas.ownerDocument || (typeof document !== "undefined" ? document : null);
+        for (const id of ["fcp-gamma-func-r", "fcp-gamma-func-g", "fcp-gamma-func-b"]) {
+            const fn = owner?.getElementById?.(id);
+            if (fn?.setAttribute) fn.setAttribute("exponent", String(g));
+        }
+        canvas.style.filter = `contrast(${contrast}) brightness(${brightness}) url(#fcp-gamma-filter)`;
+        return true;
+    }
+
+    static clearViewportTileContrastFilter(viewer) {
+        const host = viewer || AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        const canvas = host?.drawer?.canvas || host?.canvas?.querySelector?.("canvas") || host?.canvas;
+        if (canvas?.style) canvas.style.filter = "";
+        return true;
+    }
+
+    static histogramBinsFromPixelBlock(block, channelIndex, binCount = 256) {
+        const bins = new Array(binCount).fill(0);
+        if (!block || !Array.isArray(block.values) || !block.width || !block.height) return bins;
+        const plane = Math.max(0, Number(block.width) * Number(block.height));
+        const channels = Math.max(1, Number(block.channels) || 1);
+        const channel = Math.max(0, Math.min(channels - 1, Number(channelIndex) || 0));
+        const start = channel * plane;
+        const scale = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        for (let i = 0; i < plane; i += 1) {
+            const value = Number(block.values[start + i]) || 0;
+            const bin = Math.max(0, Math.min(binCount - 1, Math.floor((value / scale) * binCount)));
+            bins[bin] += 1;
+        }
+        return bins;
+    }
+
+    static async refreshChannelPaletteHistogram(root = null) {
+        const controller = AnnotationAdapter.displayController;
+        const image = controller?.getSelectedImage?.();
+        const viewer = controller?.getViewer?.() || AnnotationAdapter.viewer;
+        const selected = AnnotationAdapter.paletteSelectedChannel();
+        if (!image?.id || typeof controller?.requestPixelBlock !== "function" || !viewer?.world?.getItemAt) {
+            AnnotationAdapter.channelPaletteHistogram = null;
+            AnnotationAdapter.drawChannelPaletteHistogram(root);
+            return null;
+        }
+        try {
+            const item = viewer.world.getItemAt(0);
+            const bounds = viewer.viewport?.getBounds?.();
+            const center = bounds && item?.viewportToImageCoordinates
+                ? item.viewportToImageCoordinates(bounds.getCenter())
+                : { x: 0, y: 0 };
+            const size = 64;
+            const x = Math.max(0, Math.floor((Number(center.x) || 0) - size / 2));
+            const y = Math.max(0, Math.floor((Number(center.y) || 0) - size / 2));
+            const series = Number(controller.getCurrentSeries?.() || 0);
+            const block = await controller.requestPixelBlock(image.id, x, y, size, series);
+            AnnotationAdapter.channelPaletteHistogram = AnnotationAdapter.histogramBinsFromPixelBlock(
+                block,
+                selected?.index ?? 0
+            );
+            AnnotationAdapter.drawChannelPaletteHistogram(root);
+            return AnnotationAdapter.channelPaletteHistogram;
+        } catch (_error) {
+            AnnotationAdapter.channelPaletteHistogram = null;
+            AnnotationAdapter.drawChannelPaletteHistogram(root);
+            return null;
+        }
+    }
+
+    static syntheticHistogram(channel, binCount = 256) {
+        const bins = new Array(binCount).fill(0);
+        const black = Math.max(0, Number(channel?.black) || 0);
+        const white = Math.max(black + 1, Number(channel?.white) || AnnotationAdapter.CHANNEL_LEVEL_MAX);
+        const peak = Math.max(1, Math.min(binCount - 2, Math.floor((black / AnnotationAdapter.CHANNEL_LEVEL_MAX) * binCount) + 8));
+        for (let i = 0; i < binCount; i += 1) {
+            const t = (i - peak) / 18;
+            const spread = (i - peak) / 70;
+            bins[i] = Math.exp(-t * t) * 120 + (i > peak ? Math.exp(-(spread * spread)) * 40 : 0);
+            if (i < Math.floor((black / AnnotationAdapter.CHANNEL_LEVEL_MAX) * binCount)
+                || i > Math.floor((white / AnnotationAdapter.CHANNEL_LEVEL_MAX) * binCount)) {
+                bins[i] *= 0.35;
+            }
+        }
+        return bins;
+    }
+
+    static drawChannelPaletteHistogram(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const canvas = palette?.querySelector?.("#floating-channel-histogram")
+            || doc?.getElementById?.("floating-channel-histogram");
+        if (!canvas || typeof canvas.getContext !== "function") return false;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return false;
+        const width = canvas.width || 340;
+        const height = canvas.height || 88;
+        const channel = AnnotationAdapter.paletteSelectedChannel();
+        const bins = AnnotationAdapter.channelPaletteHistogram
+            || AnnotationAdapter.syntheticHistogram(channel);
+        const maxBin = Math.max(1, ...bins);
+        const color = AnnotationAdapter.channelPaletteColor(channel);
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = color;
+        const barWidth = width / bins.length;
+        for (let i = 0; i < bins.length; i += 1) {
+            const h = (bins[i] / maxBin) * (height - 2);
+            ctx.fillRect(i * barWidth, height - h, Math.max(1, barWidth), h);
+        }
+        const scale = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        const minX = ((Number(channel?.black) || 0) / scale) * width;
+        const maxX = ((Number(channel?.white) || scale) / scale) * width;
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(minX, 0);
+        ctx.lineTo(minX, height);
+        ctx.moveTo(maxX, 0);
+        ctx.lineTo(maxX, height);
+        ctx.stroke();
+        return true;
+    }
+
     /**
      * Toggle measurement mode and disable/enable OSD mouse navigation.
      * Enabling the toolbar tool must NOT seed coordinates or draw a line.
@@ -3237,6 +4129,7 @@ class AnnotationAdapter {
             v.setMouseNavEnabled(!enabled);
         }
         if (enabled) {
+            AnnotationAdapter.hideAnnotationEditorPopup();
             AnnotationAdapter.ensureMeasureOverlay();
             AnnotationAdapter.clearMeasureVector({ remove: false, keepDragState: true });
             AnnotationAdapter.resetMeasurementDragState();
@@ -3294,7 +4187,351 @@ class AnnotationAdapter {
             dragEndHandler: (event) => AnnotationAdapter._measureReleaseHandler(event)
         });
         AnnotationAdapter.setMeasureTracking(AnnotationAdapter.isMeasurementModeActive);
+        AnnotationAdapter.ensureMeasurementPopupOverlay();
         return AnnotationAdapter.measureMouseTracker;
+    }
+
+    static _documentFromRoot(root = null) {
+        return root
+            || (typeof document !== "undefined" ? document : null);
+    }
+
+    static _appendToBody(node, doc) {
+        if (!node || !doc) return false;
+        const body = doc.body;
+        if (!body || typeof body.appendChild !== "function") return false;
+        if (node.parentNode !== body) body.appendChild(node);
+        return true;
+    }
+
+    static annotationImageBounds(annotation) {
+        const spike = AnnotationAdapter.annotationSpike;
+        if (spike && typeof spike.getAnnotationBounds === "function") {
+            try {
+                const bounds = spike.getAnnotationBounds(annotation);
+                if (bounds && Number.isFinite(Number(bounds.x)) && Number.isFinite(Number(bounds.y))) {
+                    return bounds;
+                }
+            } catch (_error) { /* fall through to local geometry */ }
+        }
+        const geometry = annotation?.target?.selector?.geometry;
+        const box = geometry?.bounds;
+        const minX = Number(box?.minX ?? geometry?.x);
+        const minY = Number(box?.minY ?? geometry?.y);
+        const maxX = Number(box?.maxX ?? (Number(geometry?.x) + Number(geometry?.w ?? geometry?.width)));
+        const maxY = Number(box?.maxY ?? (Number(geometry?.y) + Number(geometry?.h ?? geometry?.height)));
+        if ([minX, minY, maxX, maxY].every(Number.isFinite) && maxX >= minX && maxY >= minY) {
+            return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        }
+        return null;
+    }
+
+    static imagePointToClient(imageX, imageY, viewer = AnnotationAdapter.viewer) {
+        const mapped = AnnotationAdapter.imagePointToViewerElement([imageX, imageY], viewer);
+        if (!mapped || !Number.isFinite(Number(mapped.x)) || !Number.isFinite(Number(mapped.y))) {
+            return null;
+        }
+        const host = viewer?.element || viewer?.canvas || viewer?.container;
+        const rect = host?.getBoundingClientRect?.();
+        if (!rect) return { x: Number(mapped.x), y: Number(mapped.y) };
+        return { x: rect.left + Number(mapped.x), y: rect.top + Number(mapped.y) };
+    }
+
+    static annotationShapeClientAnchor(annotation, viewer = AnnotationAdapter.viewer) {
+        const bounds = AnnotationAdapter.annotationImageBounds(annotation);
+        if (!bounds) return null;
+        const right = AnnotationAdapter.imagePointToClient(
+            Number(bounds.x) + Number(bounds.width || 0),
+            Number(bounds.y),
+            viewer
+        );
+        if (right) return right;
+        return AnnotationAdapter.imagePointToClient(Number(bounds.x), Number(bounds.y), viewer);
+    }
+
+    static applyAnnotationEditorPopupStyle(popup) {
+        if (!popup?.style) return popup;
+        popup.style.position = "fixed";
+        popup.style.background = "#1e1e1e";
+        popup.style.border = "1px solid #444";
+        popup.style.borderRadius = "8px";
+        popup.style.padding = "10px";
+        popup.style.zIndex = "10001";
+        popup.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+        if (!popup.style.display || popup.style.display === "") {
+            popup.style.display = "none";
+        }
+        return popup;
+    }
+
+    static ensureAnnotationEditorPopup(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        if (!doc) return null;
+        let popup = doc.getElementById?.("annotation-editor-popup")
+            || AnnotationAdapter.annotationEditorPopupEl;
+        if (!popup && typeof doc.createElement === "function") {
+            popup = doc.createElement("div");
+            popup.id = "annotation-editor-popup";
+            popup.setAttribute("role", "dialog");
+            popup.setAttribute("aria-label", "Annotation name");
+            popup.innerHTML = '<input type="text" id="annotation-name-input" placeholder="Enter annotation name...">'
+                + '<div class="annotation-editor-actions">'
+                + '<button type="button" id="annotation-editor-cancel">Cancel</button>'
+                + '<button type="button" id="annotation-editor-save">Save</button>'
+                + "</div>";
+        }
+        if (!popup) return null;
+        AnnotationAdapter.annotationEditorPopupEl = popup;
+        AnnotationAdapter.applyAnnotationEditorPopupStyle(popup);
+        AnnotationAdapter._appendToBody(popup, doc);
+        AnnotationAdapter.bindAnnotationEditorPopup(popup, doc);
+        return popup;
+    }
+
+    static bindAnnotationEditorPopup(popup, root = null) {
+        if (!popup || popup._wsiAnnotationEditorBound) return popup;
+        popup._wsiAnnotationEditorBound = true;
+        const stop = event => event.stopPropagation();
+        popup.addEventListener("pointerdown", stop);
+        popup.addEventListener("mousedown", stop);
+        popup.addEventListener("click", stop);
+        popup.addEventListener("wheel", stop);
+        const save = popup.querySelector?.("#annotation-editor-save");
+        const cancel = popup.querySelector?.("#annotation-editor-cancel");
+        cancel?.addEventListener("mousedown", event => event.preventDefault());
+        save?.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const editor = AnnotationAdapter.annotationSpike?.nameEditor;
+            editor?.commit();
+        });
+        cancel?.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const editor = AnnotationAdapter.annotationSpike?.nameEditor;
+            if (editor?.input) {
+                editor.input.value = editor.storedValue;
+                if (typeof editor.input.setCustomValidity === "function") {
+                    editor.input.setCustomValidity("");
+                }
+            }
+            AnnotationAdapter.hideAnnotationEditorPopup(root);
+        });
+        return popup;
+    }
+
+    static bindAnnotationShapeEditorLoop(viewer, root = null) {
+        const host = viewer?.element || viewer?.canvas || viewer?.container;
+        if (!host || host._wsiAnnotationEditorLoopBound) return false;
+        host._wsiAnnotationEditorLoopBound = true;
+        const handlePointer = event => {
+            if (AnnotationAdapter.isMeasurementModeActive) return;
+            if (event?.button != null && event.button !== 0) return;
+            if (event?.target?.closest?.("#annotation-editor-popup")) return;
+            const spike = AnnotationAdapter.annotationSpike;
+            queueMicrotask(() => {
+                const selected = spike?.getSelectedAnnotations?.() || [];
+                if (selected.length === 1 && spike.annotationsVisible !== false) {
+                    AnnotationAdapter.showAnnotationEditorForShape(selected[0], viewer, {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        root
+                    });
+                    return;
+                }
+                AnnotationAdapter.hideAnnotationEditorPopup(root);
+            });
+        };
+        host.addEventListener("pointerup", handlePointer, true);
+        AnnotationAdapter.bindAnnotationEditorViewportFollow(viewer);
+        return true;
+    }
+
+    static bindAnnotationEditorViewportFollow(viewer) {
+        if (!viewer || viewer._wsiAnnotationEditorViewportBound) return false;
+        if (typeof viewer.addHandler !== "function") return false;
+        viewer._wsiAnnotationEditorViewportBound = true;
+        const follow = () => AnnotationAdapter.syncAnnotationEditorPopupPosition(viewer);
+        viewer.addHandler("update-viewport", follow);
+        viewer.addHandler("animation", follow);
+        return true;
+    }
+
+    static syncAnnotationEditorPopupPosition(viewer = AnnotationAdapter.viewer) {
+        const popup = AnnotationAdapter.annotationEditorPopupEl
+            || AnnotationAdapter._documentFromRoot()?.getElementById?.("annotation-editor-popup");
+        if (!popup || popup.style?.display === "none" || popup.hidden) return false;
+        const annotation = AnnotationAdapter._annotationEditorAnnotation
+            || AnnotationAdapter.annotationSpike?.getSelectedAnnotations?.()?.[0];
+        if (!annotation) return false;
+        const anchor = AnnotationAdapter.annotationShapeClientAnchor(annotation, viewer);
+        if (!anchor) return false;
+        AnnotationAdapter._placeAnnotationEditorPopup(popup, anchor.x + 12, anchor.y);
+        return true;
+    }
+
+    static _placeAnnotationEditorPopup(popup, left, top) {
+        if (!popup?.style) return false;
+        const width = Number(popup.offsetWidth) || 280;
+        const height = Number(popup.offsetHeight) || 96;
+        const viewW = typeof window !== "undefined" ? window.innerWidth : 1024;
+        const viewH = typeof window !== "undefined" ? window.innerHeight : 768;
+        const maxLeft = Math.max(8, viewW - width - 8);
+        const maxTop = Math.max(8, viewH - height - 8);
+        popup.style.left = `${Math.min(maxLeft, Math.max(8, Number(left) || 8))}px`;
+        popup.style.top = `${Math.min(maxTop, Math.max(8, Number(top) || 8))}px`;
+        popup.style.right = "auto";
+        popup.style.bottom = "auto";
+        return true;
+    }
+
+    static showAnnotationEditorForShape(annotation, viewer = AnnotationAdapter.viewer, options = {}) {
+        if (!annotation) return AnnotationAdapter.hideAnnotationEditorPopup(options.root);
+        const popup = AnnotationAdapter.ensureAnnotationEditorPopup(options.root);
+        if (!popup) return false;
+        AnnotationAdapter._annotationEditorAnnotation = annotation;
+        const anchor = AnnotationAdapter.annotationShapeClientAnchor(
+            annotation,
+            viewer || AnnotationAdapter.viewer
+        );
+        let left;
+        let top;
+        if (anchor) {
+            left = anchor.x + 12;
+            top = anchor.y;
+        } else if (Number.isFinite(Number(options.clientX)) && Number.isFinite(Number(options.clientY))) {
+            left = Number(options.clientX) + 12;
+            top = Number(options.clientY) + 12;
+        } else {
+            left = 24;
+            top = 80;
+        }
+        popup.hidden = false;
+        popup.removeAttribute?.("hidden");
+        if (popup.style) popup.style.display = "block";
+        AnnotationAdapter._placeAnnotationEditorPopup(popup, left, top);
+        AnnotationAdapter.bindAnnotationEditorViewportFollow(viewer || AnnotationAdapter.viewer);
+        const input = popup.querySelector?.("#annotation-name-input")
+            || AnnotationAdapter._documentFromRoot(options.root)?.getElementById?.("annotation-name-input");
+        if (input && !input.disabled) {
+            queueMicrotask(() => {
+                try { input.focus(); } catch (_error) { /* ignore */ }
+            });
+        }
+        return true;
+    }
+
+    static hideAnnotationEditorPopup(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        const popup = doc?.getElementById?.("annotation-editor-popup")
+            || AnnotationAdapter.annotationEditorPopupEl;
+        AnnotationAdapter._annotationEditorAnnotation = null;
+        if (!popup) return false;
+        popup.hidden = true;
+        if (popup.style) popup.style.display = "none";
+        return true;
+    }
+
+    static ensureMeasurementPopupOverlay(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        if (!doc) return null;
+        let popup = doc.getElementById?.("measurement-popup-overlay")
+            || AnnotationAdapter.measurementPopupEl;
+        if (!popup && typeof doc.createElement === "function") {
+            popup = doc.createElement("div");
+            popup.id = "measurement-popup-overlay";
+            popup.setAttribute("role", "status");
+            popup.setAttribute("aria-live", "polite");
+        }
+        if (!popup) return null;
+        AnnotationAdapter.measurementPopupEl = popup;
+        if (popup.style) {
+            popup.style.position = "fixed";
+            popup.style.pointerEvents = "none";
+            popup.style.zIndex = "10002";
+            popup.style.background = "rgba(0, 0, 0, 0.9)";
+            popup.style.color = "#00FF00";
+            popup.style.fontFamily = "monospace";
+            popup.style.padding = "4px 8px";
+            popup.style.borderRadius = "4px";
+            popup.style.border = "1px solid #333";
+            if (!popup.style.display || popup.style.display === "") {
+                popup.style.display = "none";
+            }
+        }
+        AnnotationAdapter._appendToBody(popup, doc);
+        return popup;
+    }
+
+    static updateMeasurementPopup(text, event = null, root = null) {
+        const popup = AnnotationAdapter.ensureMeasurementPopupOverlay(root);
+        if (!popup) return false;
+        const options = text && typeof text === "object" ? text : null;
+        const pointerEvent = options?.event || event;
+        const microns = options ? options.microns : null;
+        const pixels = options ? options.pixels : null;
+        if (options && (Number.isFinite(Number(microns)) || Number.isFinite(Number(pixels)))) {
+            return AnnotationAdapter.placeMeasurementPopupAtCursor(
+                pointerEvent,
+                microns,
+                pixels,
+                options.root || root
+            );
+        }
+        const label = String(text || "").trim();
+        if (!label) {
+            return AnnotationAdapter.hideMeasurementPopup(root);
+        }
+        popup.innerHTML = label;
+        popup.hidden = false;
+        popup.removeAttribute?.("hidden");
+        if (popup.style) popup.style.display = "block";
+        const src = pointerEvent?.originalEvent || pointerEvent;
+        const x = Number(src?.clientX);
+        const y = Number(src?.clientY);
+        if (popup.style && Number.isFinite(x) && Number.isFinite(y)) {
+            popup.style.left = (x + 15) + "px";
+            popup.style.top = (y + 15) + "px";
+            popup.style.right = "auto";
+            popup.style.bottom = "auto";
+        }
+        return true;
+    }
+
+    static placeMeasurementPopupAtCursor(event, calculatedMicrons, calculatedPixels, root = null) {
+        let overlay = AnnotationAdapter._documentFromRoot(root)?.getElementById?.("measurement-popup-overlay")
+            || AnnotationAdapter.measurementPopupEl;
+        if (!overlay) overlay = AnnotationAdapter.ensureMeasurementPopupOverlay(root);
+        if (!overlay) return false;
+        overlay.style.display = "block";
+        overlay.hidden = false;
+        overlay.removeAttribute?.("hidden");
+        const pointer = event?.originalEvent || event;
+        const clientX = Number(pointer?.clientX);
+        const clientY = Number(pointer?.clientY);
+        if (Number.isFinite(clientX) && Number.isFinite(clientY) && overlay.style) {
+            overlay.style.left = (clientX + 15) + "px";
+            overlay.style.top = (clientY + 15) + "px";
+            overlay.style.right = "auto";
+            overlay.style.bottom = "auto";
+        }
+        const px = Number.isFinite(Number(calculatedPixels)) ? Math.round(Number(calculatedPixels)) : 0;
+        if (Number.isFinite(Number(calculatedMicrons))) {
+            overlay.innerHTML = `📏 ${Number(calculatedMicrons).toFixed(2)} µm (${px} px)`;
+        } else {
+            overlay.innerHTML = `📏 ${px} px`;
+        }
+        return true;
+    }
+
+    static hideMeasurementPopup(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        const popup = doc?.getElementById?.("measurement-popup-overlay")
+            || AnnotationAdapter.measurementPopupEl;
+        if (!popup) return false;
+        popup.hidden = true;
+        if (popup.style) popup.style.display = "none";
+        return true;
     }
 
     /** Convert MouseTracker position → image pixels via OSD viewport APIs. */
@@ -3382,22 +4619,40 @@ class AnnotationAdapter {
         if (!imagePoint || !overlayPoint) return;
         if (AnnotationAdapter.measureStartX == null || AnnotationAdapter.measureStartY == null) return;
 
-        const microns = AnnotationAdapter.measureLengthMicrons(
+        const calculatedMicrons = AnnotationAdapter.measureLengthMicrons(
             AnnotationAdapter.measureStartImageX,
             AnnotationAdapter.measureStartImageY,
             imagePoint.x,
             imagePoint.y
         );
-        const label = microns == null
-            ? "Not calibrated"
-            : AnnotationAdapter.formatMicrons(microns);
+        const calculatedPixels = Math.hypot(
+            imagePoint.x - AnnotationAdapter.measureStartImageX,
+            imagePoint.y - AnnotationAdapter.measureStartImageY
+        );
         AnnotationAdapter.updateMeasureVector(
             AnnotationAdapter.measureStartX,
             AnnotationAdapter.measureStartY,
             overlayPoint.x,
             overlayPoint.y,
-            label
+            ""
         );
+        let overlay = typeof document !== "undefined"
+            ? document.getElementById("measurement-popup-overlay")
+            : null;
+        if (!overlay) overlay = AnnotationAdapter.ensureMeasurementPopupOverlay();
+        if (overlay) {
+            overlay.style.display = "block";
+            const pointer = event?.originalEvent || event;
+            overlay.style.left = (pointer.clientX + 15) + "px";
+            overlay.style.top = (pointer.clientY + 15) + "px";
+            if (Number.isFinite(Number(calculatedMicrons))) {
+                overlay.innerHTML = `📏 ${Number(calculatedMicrons).toFixed(2)} µm (${Math.round(calculatedPixels)} px)`;
+            } else {
+                overlay.innerHTML = `📏 ${Math.round(calculatedPixels)} px`;
+            }
+            overlay.hidden = false;
+            overlay.removeAttribute?.("hidden");
+        }
     }
 
     static _measureReleaseHandler(event) {
@@ -3427,10 +4682,11 @@ class AnnotationAdapter {
 
         if ([startOverlayX, startOverlayY, endOverlayX, endOverlayY].every(Number.isFinite)) {
             AnnotationAdapter.updateMeasureVector(
-                startOverlayX, startOverlayY, endOverlayX, endOverlayY, lengthLabel
+                startOverlayX, startOverlayY, endOverlayX, endOverlayY, ""
             );
         }
 
+        AnnotationAdapter.hideMeasurementPopup();
         AnnotationAdapter.resetMeasurementDragState();
         AnnotationAdapter.lastMeasuredMicrons =
             Number.isFinite(microns) && microns > 0 ? microns : null;
@@ -3528,8 +4784,9 @@ class AnnotationAdapter {
             AnnotationAdapter.measureStartY,
             ox,
             oy,
-            labelText
+            ""
         );
+        if (labelText) AnnotationAdapter.updateMeasurementPopup(labelText);
         return true;
     }
 
@@ -3559,10 +4816,11 @@ class AnnotationAdapter {
                 start.overlayY,
                 endOverlayX,
                 endOverlayY,
-                labelText
+                ""
             );
         }
 
+        AnnotationAdapter.hideMeasurementPopup();
         AnnotationAdapter.resetMeasurementDragState();
         return {
             startOverlayX: start.overlayX,
@@ -3748,6 +5006,7 @@ class AnnotationAdapter {
     /** Wipe the tracking vector (and optionally detach the overlay node). */
     static clearMeasureVector({ remove = false, keepDragState = false } = {}) {
         if (!keepDragState) AnnotationAdapter.resetMeasurementDragState();
+        AnnotationAdapter.hideMeasurementPopup();
         const svg = AnnotationAdapter.measureOverlayEl;
         if (!svg) return;
         const halo = svg.querySelector('[data-measure="halo"]');
@@ -6563,8 +7822,25 @@ class AnnotationAdapter {
 AnnotationAdapter.ensureMeasurementDefaults();
 AnnotationAdapter.scheduleAiMlBackendInit();
 AnnotationAdapter.bindResetViewportHomeButton();
+AnnotationAdapter.bindAdvancedChannelPalette();
+AnnotationAdapter.bindFloatingAiLabsPalette();
+AnnotationAdapter.bindFloatingAdminPalette();
+AnnotationAdapter.bindFloatingZStackPalette();
 if (typeof document !== "undefined" && document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
         AnnotationAdapter.bindResetViewportHomeButton();
+        AnnotationAdapter.bindAdvancedChannelPalette();
+        AnnotationAdapter.bindFloatingAiLabsPalette();
+        AnnotationAdapter.bindFloatingAdminPalette();
+        AnnotationAdapter.bindFloatingZStackPalette();
+        AnnotationAdapter.ensureMeasurementPopupOverlay();
+        AnnotationAdapter.ensureAnnotationEditorPopup();
     });
+} else if (typeof document !== "undefined") {
+    AnnotationAdapter.bindAdvancedChannelPalette();
+    AnnotationAdapter.bindFloatingAiLabsPalette();
+    AnnotationAdapter.bindFloatingAdminPalette();
+    AnnotationAdapter.bindFloatingZStackPalette();
+    AnnotationAdapter.ensureMeasurementPopupOverlay();
+    AnnotationAdapter.ensureAnnotationEditorPopup();
 }

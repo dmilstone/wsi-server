@@ -13,20 +13,23 @@ function element(id = "") {
     return {
         id,
         hidden: true,
-        style: { display: "none" },
+        style: { display: "none", setProperty() {} },
         open: false,
         className: "",
         textContent: "",
         dataset: {},
         children: [],
+        parentNode: null,
         removedClasses: removed,
         classList: {
             add() {},
             remove(name) { removed.push(name); },
             contains() { return false; }
         },
+        setAttribute() {},
         removeAttribute(name) {
             if (name === "open") this.open = false;
+            if (name === "hidden") this.hidden = false;
         },
         querySelector() { return null; },
         addEventListener() {}
@@ -37,7 +40,8 @@ const nodes = {
     "z-controls-card": element("z-controls-card"),
     "z-depth-controls": element("z-depth-controls"),
     "ai-analytics-panel": element("ai-analytics-panel"),
-    "ai-labs-panel": element("ai-labs-panel")
+    "ai-labs-panel": element("ai-labs-panel"),
+    "floating-zstack-palette": element("floating-zstack-palette")
 };
 const stack = { hidden: true, style: { display: "none" } };
 
@@ -105,15 +109,20 @@ const { AnnotationAdapter } = context;
     nodes["ai-analytics-panel"].hidden = true;
     nodes["ai-analytics-panel"].open = true;
     nodes["ai-labs-panel"].hidden = true;
+    nodes["floating-zstack-palette"].hidden = true;
+    nodes["floating-zstack-palette"].style.display = "none";
     stack.hidden = true;
 
     AnnotationAdapter.onSlideClicked({ zPlanes: 1, folder: "routine" }, context.document);
     assert.equal(nodes["z-controls-card"].hidden, true);
+    assert.equal(nodes["floating-zstack-palette"].style.display, "none");
 
     AnnotationAdapter.onSlideClicked({ folder: "stack_z" }, context.document);
     assert.equal(nodes["z-controls-card"].hidden, false);
     assert.equal(nodes["z-controls-card"].style.display, "block");
     assert.equal(nodes["z-depth-controls"].hidden, false);
+    assert.equal(nodes["floating-zstack-palette"].hidden, false);
+    assert.equal(nodes["floating-zstack-palette"].style.display, "block");
     assert.equal(nodes["ai-analytics-panel"].hidden, false);
     assert.equal(nodes["ai-analytics-panel"].open, false);
     assert.equal(nodes["ai-labs-panel"].hidden, false);
