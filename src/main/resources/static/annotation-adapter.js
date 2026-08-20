@@ -305,6 +305,7 @@ class AnnotationAdapter {
         AnnotationAdapter.closeFloatingAiLabsPalette(root);
         AnnotationAdapter.closeFloatingAdminPalette(root);
         AnnotationAdapter.setFloatingZStackPaletteVisible(false, root);
+        AnnotationAdapter.closeFloatingMeasurementPalette(root);
         AnnotationAdapter.hideMeasurementPopup(root);
         AnnotationAdapter.hideAnnotationEditorPopup(root);
         const channels = root.getElementById("channels");
@@ -327,6 +328,7 @@ class AnnotationAdapter {
         const measureList = root.getElementById("measure-session-list");
         if (measureList) measureList.replaceChildren();
         AnnotationAdapter.measurementSessionList = [];
+        AnnotationAdapter.clearMeasurementResultsTable(root);
         AnnotationAdapter.setEmptyViewportGuidanceVisible(root, true);
     }
 
@@ -2302,7 +2304,9 @@ class AnnotationAdapter {
         let zStackPalette = root?.getElementById?.("floating-zstack-palette")
             || (typeof document !== "undefined" ? document.getElementById("floating-zstack-palette") : null);
         if (zStackPalette) {
+            zStackPalette.classList?.remove?.("zstack-minimized");
             zStackPalette.style.display = "none";
+            zStackPalette.style.maxHeight = "none";
         }
         if (!root || typeof root.getElementById !== "function") return false;
         AnnotationAdapter.enforceDefaultClosedPanelState(root);
@@ -3018,6 +3022,16 @@ class AnnotationAdapter {
      * Toolbar activation must never set this.
      */
     static isDragging = false;
+    /** True while a floating palette title bar is being dragged. */
+    static isDraggingWindow = false;
+    static activeDraggingPanel = null;
+    /** Alias used by the pointer-unlock sequence (`isDrawing = false`). */
+    static get isDrawing() {
+        return AnnotationAdapter.isDragging;
+    }
+    static set isDrawing(value) {
+        AnnotationAdapter.isDragging = Boolean(value);
+    }
     /** @deprecated alias — prefer {@link AnnotationAdapter.isDragging}. */
     static get isDraggingMeasurement() {
         return AnnotationAdapter.isDragging;
@@ -3028,6 +3042,15 @@ class AnnotationAdapter {
     /** Image-pixel drag start; null until canvas press. */
     static measureStartImageX = null;
     static measureStartImageY = null;
+    /** Last overlay / image end from an in-progress drag (for Enter commit). */
+    static measureEndX = null;
+    static measureEndY = null;
+    static measureEndImageX = null;
+    static measureEndImageY = null;
+    /** Last pointer id captured during a measurement drag. */
+    static lastPointerId = null;
+    /** `single` (one-shot) or `multiple` (stay in mode until icon/Enter escape). */
+    static _measurementEntryMode = "single";
     /** Active OpenSeadragon viewer (for mouse-nav enable/disable). */
     static viewer = null;
     /** Dedicated SVG overlay above OSD tiles (not the drawer canvas). */
@@ -3190,6 +3213,30 @@ class AnnotationAdapter {
         AnnotationAdapter.measureStartY = null;
         AnnotationAdapter.measureStartImageX = null;
         AnnotationAdapter.measureStartImageY = null;
+        AnnotationAdapter.measureEndX = null;
+        AnnotationAdapter.measureEndY = null;
+        AnnotationAdapter.measureEndImageX = null;
+        AnnotationAdapter.measureEndImageY = null;
+    }
+
+    static measurementModeSelectorEl(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        return doc?.getElementById?.("measurement-mode-selector") || null;
+    }
+
+    static measurementEntryMode(root = null) {
+        const select = AnnotationAdapter.measurementModeSelectorEl(root);
+        const raw = String(select?.value || AnnotationAdapter._measurementEntryMode || "single")
+            .toLowerCase();
+        return raw === "multiple" ? "multiple" : "single";
+    }
+
+    static setMeasurementEntryMode(mode, root = null) {
+        const next = String(mode || "").toLowerCase() === "multiple" ? "multiple" : "single";
+        AnnotationAdapter._measurementEntryMode = next;
+        const select = AnnotationAdapter.measurementModeSelectorEl(root);
+        if (select) select.value = next;
+        return next;
     }
 
     static _openSeadragon() {
@@ -3227,6 +3274,7 @@ class AnnotationAdapter {
             AnnotationAdapter.bindViewportHomeOnOpen(AnnotationAdapter.viewer);
             AnnotationAdapter.bindAiVectorOverlayHandlers(AnnotationAdapter.viewer);
         }
+        AnnotationAdapter.bindMeasurementKeyboardEscape();
         return AnnotationAdapter.viewer;
     }
 
@@ -3251,6 +3299,7 @@ class AnnotationAdapter {
     }
 
     static CHANNEL_LEVEL_MAX = 58831;
+    static BIT16_INTENSITY_SCALE = 65535;
     static CHANNEL_PALETTE_LUT_COLORS = {
         BLUE: "#438cff",
         GREEN: "#3bd671",
@@ -3262,6 +3311,7 @@ class AnnotationAdapter {
     };
     static displayController = null;
     static channelPaletteElement = null;
+    static measurementPaletteElement = null;
     static channelPaletteHost = null;
     static channelPaletteSidebarSnapshot = null;
     static channelPaletteSelectedIndex = 0;
@@ -3345,6 +3395,7 @@ class AnnotationAdapter {
         if (palette) {
             AnnotationAdapter.channelPaletteElement = palette;
             if (palette.parentNode) AnnotationAdapter.channelPaletteHost = palette.parentNode;
+            AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         }
         if (button && button.dataset?.fcpToggleBound !== "1") {
             button.addEventListener("click", event => {
@@ -3368,10 +3419,28 @@ class AnnotationAdapter {
         return palette || button || null;
     }
 
+    static isolateFloatingPalettePointerEvents(paletteDiv) {
+        if (!paletteDiv?.addEventListener) return false;
+        if (paletteDiv.dataset?.fcpEventIsolateBound === "1") return true;
+        ['mousedown', 'mouseup', 'mousemove', 'click', 'mouseover', 'mouseout', 'wheel', 'mousewheel', 'DOMMouseScroll'].forEach(function(eventName) {
+            paletteDiv.addEventListener(eventName, function(e) {
+                e.stopPropagation();
+            }, { passive: false });
+        });
+        ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'touchstart', 'touchmove', 'touchend'].forEach(function(eventName) {
+            paletteDiv.addEventListener(eventName, function(e) {
+                e.stopPropagation();
+            }, { passive: false });
+        });
+        if (paletteDiv.dataset) paletteDiv.dataset.fcpEventIsolateBound = "1";
+        return true;
+    }
+
     static applyLiberatedFloatingStyle(element, options = {}) {
         if (!element?.style) return false;
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(element);
         element.style.position = "fixed";
-        element.style.zIndex = "9999";
+        element.style.zIndex = String(options.zIndex || "9999");
         if (typeof element.style.setProperty === "function") {
             element.style.setProperty("resize", "both", "important");
             element.style.setProperty("overflow", "hidden", "important");
@@ -3386,6 +3455,7 @@ class AnnotationAdapter {
 
     static mountFloatingPaletteToBody(palette, doc) {
         const body = doc?.body;
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         if (!palette || !body || typeof body.appendChild !== "function") return false;
         if (typeof document !== "undefined" && doc === document && document.body) {
             document.body.appendChild(palette);
@@ -3397,38 +3467,97 @@ class AnnotationAdapter {
 
     static bindLiberatedPaletteDrag(handle, palette) {
         if (!handle || !palette || handle.dataset?.fcpDragBound === "1") return false;
-        const onMove = event => {
-            const drag = palette._fcpDrag;
-            if (!drag) return;
-            palette.style.position = "fixed";
-            palette.style.left = `${event.clientX - drag.dx}px`;
-            palette.style.top = `${event.clientY - drag.dy}px`;
-            palette.style.right = "auto";
-            palette.style.bottom = "auto";
+
+        const dragPanelLoop = function dragPanelLoop(event) {
+            const panel = AnnotationAdapter.activeDraggingPanel || palette;
+            const drag = panel?._fcpDrag;
+            if (!AnnotationAdapter.isDraggingWindow || !panel?.style || !drag) return;
+            const point = event?.touches?.[0] || event;
+            panel.style.position = "fixed";
+            panel.style.left = `${Number(point.clientX) - drag.dx}px`;
+            panel.style.top = `${Number(point.clientY) - drag.dy}px`;
+            panel.style.right = "auto";
+            panel.style.bottom = "auto";
         };
-        const onUp = () => {
-            palette._fcpDrag = null;
-            if (typeof window !== "undefined") {
-                window.removeEventListener("pointermove", onMove);
-                window.removeEventListener("pointerup", onUp);
+
+        // Definitive floating window release tracking loop
+        function handleWindowMouseUp(e) {
+            let isDraggingWindow = false;
+            let activeDraggingPanel = null;
+            AnnotationAdapter.isDraggingWindow = isDraggingWindow;
+            if (AnnotationAdapter.activeDraggingPanel) {
+                AnnotationAdapter.activeDraggingPanel._fcpDrag = null;
             }
-        };
-        handle.addEventListener("pointerdown", event => {
+            if (palette) palette._fcpDrag = null;
+            AnnotationAdapter.activeDraggingPanel = activeDraggingPanel;
+            if (e && e.target && typeof e.target.releasePointerCapture === "function") {
+                try {
+                    e.target.releasePointerCapture(e.pointerId);
+                } catch (_error) { /* pointer was not captured */ }
+            }
+            if (handle && typeof handle.releasePointerCapture === "function" && e?.pointerId != null) {
+                try {
+                    handle.releasePointerCapture(e.pointerId);
+                } catch (_error) { /* ignore */ }
+            }
+            // Clear global window event hooks to ensure the cursor is 100% liberated
+            if (typeof window !== "undefined") {
+                window.removeEventListener("mousemove", dragPanelLoop);
+                window.removeEventListener("mouseup", handleWindowMouseUp);
+                window.removeEventListener("mousemove", dragPanelLoop, true);
+                window.removeEventListener("mouseup", handleWindowMouseUp, true);
+                window.removeEventListener("pointermove", dragPanelLoop, true);
+                window.removeEventListener("pointerup", handleWindowMouseUp, true);
+                window.removeEventListener("pointercancel", handleWindowMouseUp, true);
+            }
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer) {
+                if (typeof viewer.setMouseNavEnabled === "function") {
+                    viewer.setMouseNavEnabled(true); // Guarantees pan/zoom navigation returns to the tissue canvas
+                }
+                if (viewer.gestureSettingsMouse) viewer.gestureSettingsMouse.scrollToZoom = true;
+            }
+        }
+
+        const beginWindowDrag = event => {
             if (event.button != null && event.button !== 0) return;
             if (event.target?.closest?.(".fcp-close, .fcp-minimize")) return;
             const rect = palette.getBoundingClientRect?.() || { left: 0, top: 0 };
+            const point = event?.touches?.[0] || event;
+            AnnotationAdapter.isDraggingWindow = true;
+            AnnotationAdapter.activeDraggingPanel = palette;
             palette._fcpDrag = {
-                dx: event.clientX - rect.left,
-                dy: event.clientY - rect.top
+                dx: Number(point.clientX) - rect.left,
+                dy: Number(point.clientY) - rect.top
             };
-            if (typeof window !== "undefined") {
-                window.addEventListener("pointermove", onMove);
-                window.addEventListener("pointerup", onUp);
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(false);
             }
-            event.preventDefault();
-            event.stopPropagation();
-        });
+            if (typeof window !== "undefined") {
+                window.addEventListener("mousemove", dragPanelLoop);
+                window.addEventListener("mouseup", handleWindowMouseUp);
+                window.addEventListener("mousemove", dragPanelLoop, true);
+                window.addEventListener("mouseup", handleWindowMouseUp, true);
+                window.addEventListener("pointermove", dragPanelLoop, true);
+                window.addEventListener("pointerup", handleWindowMouseUp, true);
+                window.addEventListener("pointercancel", handleWindowMouseUp, true);
+            }
+            if (typeof handle.setPointerCapture === "function" && event.pointerId != null) {
+                try {
+                    handle.setPointerCapture(event.pointerId);
+                } catch (_error) { /* ignore */ }
+            }
+            event.preventDefault?.();
+            event.stopPropagation?.();
+        };
+
+        handle.addEventListener("pointerdown", beginWindowDrag);
+        handle.addEventListener("mousedown", beginWindowDrag);
+        handle.addEventListener("pointerup", handleWindowMouseUp);
+        handle.addEventListener("mouseup", handleWindowMouseUp);
         palette.addEventListener?.("pointerdown", event => event.stopPropagation());
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         if (handle.dataset) handle.dataset.fcpDragBound = "1";
         return true;
     }
@@ -3470,16 +3599,12 @@ class AnnotationAdapter {
         const gamma = palette.querySelector?.("#fcp-gamma") || doc?.getElementById?.("fcp-gamma");
         const autoBtn = palette.querySelector?.("#fcp-auto") || doc?.getElementById?.("fcp-auto");
         const resetBtn = palette.querySelector?.("#fcp-reset") || doc?.getElementById?.("fcp-reset");
-        const onSlide = event => {
+        const onSlide = () => {
             AnnotationAdapter.applyChannelPaletteWindowFromSliders(doc, { live: true });
-            if (event?.type === "change") {
-                AnnotationAdapter.commitChannelPaletteWindow(doc);
-            }
         };
         for (const input of [min, max, gamma]) {
             if (!input?.addEventListener) continue;
             input.addEventListener("input", onSlide);
-            input.addEventListener("change", onSlide);
         }
         autoBtn?.addEventListener?.("click", event => {
             event.preventDefault();
@@ -3554,6 +3679,10 @@ class AnnotationAdapter {
         AnnotationAdapter.bindAdvancedChannelPalette(doc);
         AnnotationAdapter.syncFloatingChannelPalette(doc);
         AnnotationAdapter.refreshChannelPaletteHistogram(doc);
+        const zDepth = doc.getElementById?.("z-depth-controls");
+        if (zDepth && !zDepth.hidden) {
+            AnnotationAdapter.setFloatingZStackPaletteVisible(true, doc);
+        }
         return true;
     }
 
@@ -3583,6 +3712,7 @@ class AnnotationAdapter {
         const palette = doc.getElementById("floating-ai-labs-palette")
             || AnnotationAdapter.aiLabsPaletteElement;
         if (palette) AnnotationAdapter.aiLabsPaletteElement = palette;
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         const toggle = doc.getElementById("toggle-ai-labs-palette");
         if (toggle && toggle.dataset?.fcpToggleBound !== "1") {
             toggle.addEventListener("click", event => {
@@ -3603,6 +3733,7 @@ class AnnotationAdapter {
         const handle = palette?.querySelector?.("#floating-ai-labs-handle")
             || doc.getElementById("floating-ai-labs-handle");
         if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         return palette || toggle || null;
     }
 
@@ -3691,6 +3822,7 @@ class AnnotationAdapter {
         const handle = palette?.querySelector?.("#floating-admin-handle")
             || doc.getElementById("floating-admin-handle");
         if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         return palette || toggle || null;
     }
 
@@ -3770,8 +3902,29 @@ class AnnotationAdapter {
         const handle = palette?.querySelector?.("#floating-zstack-handle")
             || doc.getElementById("floating-zstack-handle");
         if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         if (palette) AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
         return palette || null;
+    }
+
+    static positionZStackPaletteUpperLeft(palette, root = null) {
+        const zStackPalette = palette || AnnotationAdapter.resolveZStackPaletteNode(root);
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!zStackPalette?.style || !doc?.getElementById) return false;
+        const viewerHost = doc.getElementById("openseadragon-viewer")
+            || (typeof document !== "undefined" ? document.getElementById("openseadragon-viewer") : null)
+            || doc.getElementById("viewer")
+            || AnnotationAdapter.viewer?.element
+            || AnnotationAdapter.viewer?.container
+            || null;
+        if (!viewerHost || typeof viewerHost.getBoundingClientRect !== "function") return false;
+        let viewerRect = viewerHost.getBoundingClientRect();
+        zStackPalette.style.left = (viewerRect.left + 10) + "px";
+        zStackPalette.style.top = (viewerRect.top + 10) + "px";
+        zStackPalette.style.right = "auto";
+        zStackPalette.style.bottom = "auto";
+        return true;
     }
 
     static setFloatingZStackPaletteVisible(visible, root = null) {
@@ -3783,13 +3936,168 @@ class AnnotationAdapter {
         if (visible) {
             AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
             AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "280px", minHeight: "160px" });
+            palette.classList?.remove?.("zstack-minimized");
             palette.hidden = false;
             palette.removeAttribute?.("hidden");
             palette.setAttribute?.("aria-hidden", "false");
-            if (palette.style) palette.style.display = "block";
+            if (palette.style) {
+                palette.style.display = "block";
+                palette.style.maxHeight = "none";
+                palette.style.minHeight = "160px";
+            }
+            AnnotationAdapter.positionZStackPaletteUpperLeft(palette, doc);
             AnnotationAdapter.syncFloatingZStackMinimizedUi(palette, doc);
             return true;
         }
+        palette.hidden = true;
+        palette.setAttribute?.("aria-hidden", "true");
+        if (palette.style) palette.style.display = "none";
+        return true;
+    }
+
+    static resolveMeasurementPaletteNode(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        return doc?.getElementById?.("floating-measurement-palette")
+            || AnnotationAdapter.measurementPaletteElement
+            || null;
+    }
+
+    static bindFloatingMeasurementPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        if (!doc?.getElementById) return null;
+        const palette = AnnotationAdapter.resolveMeasurementPaletteNode(doc);
+        if (palette) AnnotationAdapter.measurementPaletteElement = palette;
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
+        const closeBtn = palette?.querySelector?.("#floating-measurement-close")
+            || doc.getElementById("floating-measurement-close");
+        if (closeBtn && closeBtn.dataset?.fcpCloseBound !== "1") {
+            closeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.closeFloatingMeasurementPalette(doc);
+            });
+            if (closeBtn.dataset) closeBtn.dataset.fcpCloseBound = "1";
+        }
+        const handle = palette?.querySelector?.("#floating-measurement-handle")
+            || doc.getElementById("floating-measurement-handle");
+        if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        const copyBtn = palette?.querySelector?.("#copy-all-measurements-btn")
+            || palette?.querySelector?.("#measurement-copy-btn")
+            || doc.getElementById("copy-all-measurements-btn")
+            || doc.getElementById("measurement-copy-btn");
+        if (copyBtn && copyBtn.dataset?.measureCopyBound !== "1") {
+            copyBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.copyMeasurementResults(doc);
+                AnnotationAdapter.releaseMeasurementDrawingAfterExport();
+            });
+            if (copyBtn.dataset) copyBtn.dataset.measureCopyBound = "1";
+        }
+        const saveBtn = palette?.querySelector?.("#download-measurements-btn")
+            || palette?.querySelector?.("#measurement-save-btn")
+            || doc.getElementById("download-measurements-btn")
+            || doc.getElementById("measurement-save-btn");
+        if (saveBtn && saveBtn.dataset?.measureSaveBound !== "1") {
+            saveBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.saveMeasurementResults(doc);
+                AnnotationAdapter.releaseMeasurementDrawingAfterExport();
+            });
+            if (saveBtn.dataset) saveBtn.dataset.measureSaveBound = "1";
+        }
+        if (palette) AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        return palette || null;
+    }
+
+    static openFloatingMeasurementPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolveMeasurementPaletteNode(doc);
+        if (!palette) return false;
+        AnnotationAdapter.measurementPaletteElement = palette;
+        const wasHidden = Boolean(palette.hidden)
+            || palette.style?.display === "none"
+            || palette.style?.display === ""
+            || palette.style?.display == null;
+        AnnotationAdapter.bindFloatingMeasurementPalette(doc);
+        AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, {
+            minWidth: "340px",
+            minHeight: "200px",
+            zIndex: "9998"
+        });
+        if (palette.style) {
+            palette.style.background = "#111";
+            palette.style.color = "#fff";
+            palette.style.border = "1px solid #444";
+            palette.style.borderRadius = "8px";
+            palette.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+            palette.style.display = "block";
+            palette.style.zIndex = "9998";
+        }
+        palette.hidden = false;
+        palette.removeAttribute?.("hidden");
+        palette.setAttribute?.("aria-hidden", "false");
+        if (wasHidden) AnnotationAdapter.positionFloatingMeasurementPalette(doc);
+        return true;
+    }
+
+    /**
+     * Upper-left of the image container, or stacked under an open Z-stack palette.
+     * Uses cascaded offsetParent geometry (not getBoundingClientRect / body view rect).
+     * Same path for fluorescence and brightfield.
+     */
+    static positionFloatingMeasurementPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc?.getElementById) return false;
+
+        let viewerEl = doc.getElementById("openseadragon-viewer")
+            || (typeof document !== "undefined" ? document.getElementById("openseadragon-viewer") : null)
+            || doc.getElementById("viewer")
+            || AnnotationAdapter.viewer?.element
+            || AnnotationAdapter.viewer?.container
+            || null;
+
+        let targetLeft = 15;
+        let targetTop = 15;
+        if (viewerEl) {
+            targetLeft = viewerEl.offsetLeft + 15;
+            targetTop = viewerEl.offsetTop + 15;
+            let offsetParent = viewerEl.offsetParent;
+            while (offsetParent) {
+                targetLeft += Number(offsetParent.offsetLeft) || 0;
+                targetTop += Number(offsetParent.offsetTop) || 0;
+                offsetParent = offsetParent.offsetParent;
+            }
+        }
+
+        let zStack = doc.getElementById("floating-zstack-palette");
+        if (zStack && zStack.style.display !== "none" && zStack.style.visibility !== "hidden") {
+            const zOpen = !zStack.hidden
+                && zStack.getAttribute?.("aria-hidden") !== "true"
+                && (Number(zStack.offsetHeight) || 0) > 0;
+            if (zOpen) {
+                // If Z-controls are open, stack the measurements box perfectly aligned underneath its bottom edge border line
+                targetTop = zStack.offsetTop + zStack.offsetHeight + 15;
+                targetLeft = zStack.offsetLeft;
+            }
+        }
+
+        let measPalette = doc.getElementById("floating-measurement-palette")
+            || AnnotationAdapter.measurementPaletteElement;
+        if (!measPalette?.style) return false;
+        measPalette.style.left = targetLeft + "px";
+        measPalette.style.top = targetTop + "px";
+        measPalette.style.right = "auto";
+        measPalette.style.bottom = "auto";
+        return true;
+    }
+
+    static closeFloatingMeasurementPalette(root = null) {
+        const palette = AnnotationAdapter.resolveMeasurementPaletteNode(root);
+        if (!palette) return false;
+        AnnotationAdapter.measurementPaletteElement = palette;
         palette.hidden = true;
         palette.setAttribute?.("aria-hidden", "true");
         if (palette.style) palette.style.display = "none";
@@ -3807,10 +4115,19 @@ class AnnotationAdapter {
         const node = palette || AnnotationAdapter.resolveZStackPaletteNode(root);
         if (!node) return false;
         const minimized = Boolean(node.classList?.contains?.("zstack-minimized"));
+        const body = node.querySelector?.(".fcp-body");
         if (node.style) {
-            node.style.maxHeight = minimized ? "32px" : "";
+            node.style.maxHeight = minimized ? "32px" : "none";
             node.style.minHeight = minimized ? "32px" : "160px";
             node.style.overflow = "hidden";
+            if (!minimized && node.style.display === "none") {
+                node.style.display = "block";
+            }
+        }
+        if (body?.style) {
+            body.style.maxHeight = minimized ? "0px" : "none";
+            body.style.overflow = "hidden";
+            if (body.style.display === "none") body.style.display = "";
         }
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const btn = node.querySelector?.("#floating-zstack-minimize")
@@ -3935,20 +4252,20 @@ class AnnotationAdapter {
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const palette = AnnotationAdapter.resolvePaletteNode(doc);
         const scaleMax = AnnotationAdapter.CHANNEL_LEVEL_MAX;
-        let min = Number(palette?.querySelector?.("#fcp-min")?.value
+        let min = parseFloat(palette?.querySelector?.("#fcp-min")?.value
             ?? doc?.getElementById?.("fcp-min")?.value
             ?? 0);
-        let max = Number(palette?.querySelector?.("#fcp-max")?.value
+        let max = parseFloat(palette?.querySelector?.("#fcp-max")?.value
             ?? doc?.getElementById?.("fcp-max")?.value
             ?? scaleMax);
-        let gamma = Number(palette?.querySelector?.("#fcp-gamma")?.value
+        let gamma = parseFloat(palette?.querySelector?.("#fcp-gamma")?.value
             ?? doc?.getElementById?.("fcp-gamma")?.value
             ?? 1);
         if (!Number.isFinite(min)) min = 0;
         if (!Number.isFinite(max)) max = scaleMax;
         if (!Number.isFinite(gamma) || gamma <= 0) gamma = 1;
-        min = Math.max(0, Math.min(scaleMax - 1, Math.round(min)));
-        max = Math.max(min + 1, Math.min(scaleMax, Math.round(max)));
+        min = Math.max(0, Math.min(scaleMax - 1, min));
+        max = Math.max(min + (1 / AnnotationAdapter.BIT16_INTENSITY_SCALE), Math.min(scaleMax, max));
         gamma = Math.max(0.2, Math.min(4, gamma));
         return { min, max, gamma };
     }
@@ -3971,7 +4288,10 @@ class AnnotationAdapter {
         if (gammaOut) gammaOut.textContent = Number(gamma).toFixed(2);
         const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
         AnnotationAdapter.applyViewportTileContrastFilter(viewer, min, max, gamma);
-        AnnotationAdapter.drawChannelPaletteHistogram(doc);
+        if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
+        if (!options.live) {
+            AnnotationAdapter.drawChannelPaletteHistogram(doc);
+        }
         if (options.live) {
             AnnotationAdapter.displayController?.syncChannelControls?.();
         }
@@ -3984,22 +4304,85 @@ class AnnotationAdapter {
         return true;
     }
 
+    /**
+     * Map channel-window slider values onto the 16-bit (0–65535) intensity
+     * baseline as float multipliers for OpenSeadragon canvas filters.
+     * Never pass raw integer slider strings into contrast()/brightness().
+     */
+    static mapChannelWindowToFloatFilter(min, max, gamma) {
+        const scale = AnnotationAdapter.BIT16_INTENSITY_SCALE;
+        const lo = Math.max(0, Math.min(1, parseFloat(min) / scale));
+        const hi = Math.max(lo + (1 / scale), Math.min(1, parseFloat(max) / scale));
+        const slope = 1 / (hi - lo);
+        const intercept = -lo * slope;
+        const exponent = Math.max(0.2, Math.min(4, parseFloat(gamma) || 1));
+        return { lo, hi, slope, intercept, exponent, scale };
+    }
+
+    static applyFloat16BitWindowProcessor(context, mapped) {
+        if (!context?.canvas || typeof context.getImageData !== "function") return false;
+        const width = Number(context.canvas.width) || 0;
+        const height = Number(context.canvas.height) || 0;
+        if (width < 1 || height < 1) return false;
+        const image = context.getImageData(0, 0, width, height);
+        const data = image.data;
+        const scale = mapped.scale || AnnotationAdapter.BIT16_INTENSITY_SCALE;
+        const lo16 = mapped.lo * scale;
+        const range = Math.max(1, (mapped.hi - mapped.lo) * scale);
+        const exponent = mapped.exponent || 1;
+        for (let i = 0; i < data.length; i += 4) {
+            for (let c = 0; c < 3; c += 1) {
+                const v16 = data[i + c] * (scale / 255);
+                let t = (v16 - lo16) / range;
+                if (t < 0) t = 0;
+                else if (t > 1) t = 1;
+                data[i + c] = Math.pow(t, exponent) * 255;
+            }
+        }
+        context.putImageData(image, 0, 0);
+        return true;
+    }
+
     static applyViewportTileContrastFilter(viewer, min, max, gamma) {
         const canvas = viewer?.drawer?.canvas || viewer?.canvas?.querySelector?.("canvas") || viewer?.canvas;
         if (!canvas?.style) return false;
-        const scale = AnnotationAdapter.CHANNEL_LEVEL_MAX;
-        const lo = Math.max(0, Math.min(1, Number(min) / scale));
-        const hi = Math.max(lo + (1 / scale), Math.min(1, Number(max) / scale));
-        const contrast = Math.max(0.25, Math.min(12, 1 / (hi - lo)));
-        const mid = (lo + hi) / 2;
-        const brightness = Math.max(0.25, Math.min(2.8, 1 + (0.5 - mid) * 1.35));
-        const g = Math.max(0.2, Math.min(4, Number(gamma) || 1));
+        const mapped = AnnotationAdapter.mapChannelWindowToFloatFilter(min, max, gamma);
         const owner = canvas.ownerDocument || (typeof document !== "undefined" ? document : null);
+        const slope = mapped.slope.toFixed(8);
+        const intercept = mapped.intercept.toFixed(8);
+        const exponent = mapped.exponent.toFixed(8);
+        for (const id of ["fcp-window-func-r", "fcp-window-func-g", "fcp-window-func-b"]) {
+            const fn = owner?.getElementById?.(id);
+            if (!fn?.setAttribute) continue;
+            fn.setAttribute("type", "linear");
+            fn.setAttribute("slope", slope);
+            fn.setAttribute("intercept", intercept);
+        }
         for (const id of ["fcp-gamma-func-r", "fcp-gamma-func-g", "fcp-gamma-func-b"]) {
             const fn = owner?.getElementById?.(id);
-            if (fn?.setAttribute) fn.setAttribute("exponent", String(g));
+            if (!fn?.setAttribute) continue;
+            fn.setAttribute("type", "gamma");
+            fn.setAttribute("amplitude", "1");
+            fn.setAttribute("exponent", exponent);
+            fn.setAttribute("offset", "0");
         }
-        canvas.style.filter = `contrast(${contrast}) brightness(${brightness}) url(#fcp-gamma-filter)`;
+        if (typeof viewer?.setFilterOptions === "function") {
+            viewer.setFilterOptions({
+                loadMode: "sync",
+                filters: {
+                    processors: [
+                        (context, callback) => {
+                            AnnotationAdapter.applyFloat16BitWindowProcessor(context, mapped);
+                            if (typeof callback === "function") callback();
+                        }
+                    ]
+                }
+            });
+            canvas.style.filter = "";
+        } else {
+            canvas.style.filter = "url(#fcp-gamma-filter)";
+        }
+        if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
         return true;
     }
 
@@ -4124,6 +4507,7 @@ class AnnotationAdapter {
         const enabled = Boolean(active);
         AnnotationAdapter.isMeasurementModeActive = enabled;
         AnnotationAdapter.resetMeasurementDragState();
+        AnnotationAdapter.setMeasurementEntryMode(enabled ? "multiple" : "single");
         const v = AnnotationAdapter.viewer;
         if (v && typeof v.setMouseNavEnabled === "function") {
             v.setMouseNavEnabled(!enabled);
@@ -4137,6 +4521,7 @@ class AnnotationAdapter {
             AnnotationAdapter.clearMeasureVector({ remove: false });
         }
         AnnotationAdapter.setMeasureTracking(enabled);
+        AnnotationAdapter.syncMeasurementModeChrome(enabled);
         return AnnotationAdapter.isMeasurementModeActive;
     }
 
@@ -4188,7 +4573,200 @@ class AnnotationAdapter {
         });
         AnnotationAdapter.setMeasureTracking(AnnotationAdapter.isMeasurementModeActive);
         AnnotationAdapter.ensureMeasurementPopupOverlay();
+        AnnotationAdapter.bindMeasurementPointerUnlock();
+        AnnotationAdapter.bindMeasurementKeyboardEscape();
         return AnnotationAdapter.measureMouseTracker;
+    }
+
+    static bindMeasurementPointerUnlock() {
+        if (typeof window === "undefined" || window._wsiMeasurePointerUnlockBound) return false;
+        const onUp = event => {
+            if (!AnnotationAdapter.isDragging && !AnnotationAdapter.isDrawing) return;
+            AnnotationAdapter._measureReleaseHandler({
+                originalEvent: event,
+                pointerId: event?.pointerId,
+                position: event?.position
+            });
+        };
+        window.addEventListener("pointerup", onUp, false);
+        window.addEventListener("mouseup", onUp, false);
+        window._wsiMeasurePointerUnlockBound = true;
+        AnnotationAdapter.bindMeasurementKeyboardEscape();
+        return true;
+    }
+
+    /**
+     * Enter / Return while in multiple-entry measure mode: commit the current
+     * vector to the Saved Measurements table, then drop pointer capture.
+     */
+    static bindMeasurementKeyboardEscape() {
+        if (typeof window === "undefined" || window._wsiMeasureKeyboardEscapeBound) return false;
+        window.addEventListener("keydown", function handleKeyboardEscape(e) {
+            AnnotationAdapter.handleMeasurementKeyboardEscape(e);
+        }, true);
+        window._wsiMeasureKeyboardEscapeBound = true;
+        return true;
+    }
+
+    static handleMeasurementKeyboardEscape(e) {
+        if (!e || e.isComposing) return false;
+        const selector = typeof document !== "undefined"
+            ? document.getElementById("measurement-mode-selector")
+            : AnnotationAdapter.measurementModeSelectorEl();
+        const currentMode = String(selector?.value || AnnotationAdapter.measurementEntryMode())
+            .toLowerCase();
+        if ((e.key === "Enter" || e.key === "Return") && currentMode === "multiple") {
+            const tag = String(e.target?.tagName || "").toLowerCase();
+            const typing = tag === "input" || tag === "textarea" || Boolean(e.target?.isContentEditable);
+            if (typing && !AnnotationAdapter.isDrawing && !AnnotationAdapter.isDragging) return false;
+            if (typeof e.preventDefault === "function") e.preventDefault();
+            // Force complete mouse pointer release and exit multiple entry tracking mode
+            AnnotationAdapter.commitActiveMeasurementSegment(e);
+            if (selector) selector.value = "single";
+            let isDrawing = false;
+            AnnotationAdapter.isDrawing = isDrawing;
+            const measurementTracker = AnnotationAdapter.measureMouseTracker;
+            const viewer = AnnotationAdapter.viewer;
+            const lastPointerId = e.pointerId
+                ?? e.originalEvent?.pointerId
+                ?? AnnotationAdapter.lastPointerId;
+            if (measurementTracker) measurementTracker.setTracking(false);
+            if (viewer && viewer.canvas) {
+                try { viewer.canvas.releasePointerCapture(lastPointerId); } catch (_error) { /* ignore */ }
+            }
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(true);
+            }
+            AnnotationAdapter.escapeMeasurementMultipleMode(e);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Measurement-icon click: activate, toggle off, or escape an in-progress
+     * multiple-entry draw (commit the vector first).
+     */
+    static onMeasureModeButtonClick(event = null, options = {}) {
+        AnnotationAdapter.ensureMeasurementDefaults();
+        const currentMode = AnnotationAdapter.measurementEntryMode();
+        // Double-click toggle escape routine
+        if (currentMode === "multiple") {
+            if (AnnotationAdapter.isDrawing || AnnotationAdapter.isDragging) {
+                AnnotationAdapter.commitActiveMeasurementSegment(event);
+                const selector = typeof document !== "undefined"
+                    ? document.getElementById("measurement-mode-selector")
+                    : AnnotationAdapter.measurementModeSelectorEl();
+                if (selector) selector.value = "single";
+                let isDrawing = false;
+                AnnotationAdapter.isDrawing = isDrawing;
+                const measurementTracker = AnnotationAdapter.measureMouseTracker;
+                const viewer = AnnotationAdapter.viewer;
+                const lastPointerId = event?.pointerId
+                    ?? event?.originalEvent?.pointerId
+                    ?? AnnotationAdapter.lastPointerId;
+                if (measurementTracker) measurementTracker.setTracking(false);
+                if (viewer && viewer.canvas) {
+                    try { viewer.canvas.releasePointerCapture(lastPointerId); } catch (_error) { /* ignore */ }
+                }
+                if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                    viewer.setMouseNavEnabled(true); // Returns full pan/zoom control instantly
+                }
+                AnnotationAdapter.escapeMeasurementMultipleMode(event);
+                return false;
+            }
+        }
+        const next = !AnnotationAdapter.isMeasurementModeActive;
+        const spike = options.annotationSpike || AnnotationAdapter.annotationSpike;
+        if (next && spike?.setDrawingEnabled) {
+            try { spike.setDrawingEnabled(false); } catch (_error) { /* optional API */ }
+        }
+        if (next) {
+            const doc = typeof document !== "undefined" ? document : null;
+            const annotationModeButton = doc?.getElementById?.("annotation-mode");
+            if (annotationModeButton?.getAttribute?.("aria-pressed") === "true"
+                && typeof annotationModeButton.click === "function") {
+                annotationModeButton.click();
+            }
+        }
+        AnnotationAdapter.setMeasurementModeActive(next);
+        return AnnotationAdapter.isMeasurementModeActive;
+    }
+
+    /**
+     * Forcefully deactivate multiple-entry measure mode and restore pan/zoom.
+     * Call {@link commitActiveMeasurementSegment} first so the table is current.
+     */
+    static escapeMeasurementMultipleMode(event = null) {
+        const e = event?.originalEvent || event || {};
+        const selector = typeof document !== "undefined"
+            ? document.getElementById("measurement-mode-selector")
+            : AnnotationAdapter.measurementModeSelectorEl();
+        if (selector) selector.value = "single";
+        AnnotationAdapter.setMeasurementEntryMode("single");
+        let isDrawing = false;
+        AnnotationAdapter.isDrawing = isDrawing;
+        const measurementTracker = AnnotationAdapter.measureMouseTracker;
+        const viewer = AnnotationAdapter.viewer;
+        const lastPointerId = e.pointerId
+            ?? event?.pointerId
+            ?? AnnotationAdapter.lastPointerId;
+        if (measurementTracker) measurementTracker.setTracking(false);
+        if (viewer && viewer.canvas) {
+            try {
+                viewer.canvas.releasePointerCapture(lastPointerId);
+            } catch (_error) { /* pointer was not captured on the OSD canvas host */ }
+        }
+        if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+            viewer.setMouseNavEnabled(true); // Returns full pan/zoom control instantly
+        }
+        AnnotationAdapter.releaseMeasurementPointerLock(event);
+        return false;
+    }
+
+    /**
+     * Forceful complete pointer release and navigation un-lock sequence.
+     * Always safe to call: missing capture / tracker methods are ignored.
+     */
+    static releaseMeasurementPointerLock(event) {
+        const e = event?.originalEvent || event || {};
+        const viewer = AnnotationAdapter.viewer;
+        const measurementTracker = AnnotationAdapter.measureMouseTracker;
+        // Forceful complete pointer release and navigation un-lock sequence
+        let isDrawing = false;
+        AnnotationAdapter.isDrawing = isDrawing;
+        if (viewer && viewer.canvas) {
+            try {
+                viewer.canvas.releasePointerCapture(e.pointerId);
+            } catch (_error) { /* pointer was not captured on the OSD canvas host */ }
+        }
+        const innerCanvas = viewer?.drawer?.canvas || viewer?.canvas?.querySelector?.("canvas") || e.target;
+        if (innerCanvas && innerCanvas !== viewer?.canvas && typeof innerCanvas.releasePointerCapture === "function") {
+            try {
+                innerCanvas.releasePointerCapture(e.pointerId);
+            } catch (_error) { /* ignore */ }
+        }
+        if (measurementTracker) {
+            measurementTracker.setTracking(false); // Shuts down active line calculation hooks
+        }
+        if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+            viewer.setMouseNavEnabled(true); // Restores native mouse pan and wheel zoom instantly
+        }
+        if (viewer?.gestureSettingsMouse) viewer.gestureSettingsMouse.scrollToZoom = true;
+        AnnotationAdapter.isMeasurementModeActive = false;
+        AnnotationAdapter.setMeasurementEntryMode("single");
+        AnnotationAdapter.resetMeasurementDragState();
+        AnnotationAdapter.syncMeasurementModeChrome(false);
+        return true;
+    }
+
+    static syncMeasurementModeChrome(enabled) {
+        const doc = typeof document !== "undefined" ? document : null;
+        const button = doc?.getElementById?.("measure-mode");
+        if (button?.setAttribute) button.setAttribute("aria-pressed", String(Boolean(enabled)));
+        const stage = doc?.querySelector?.(".viewer-stage");
+        stage?.classList?.toggle?.("measure-mode-active", Boolean(enabled));
+        return Boolean(enabled);
     }
 
     static _documentFromRoot(root = null) {
@@ -4272,8 +4850,10 @@ class AnnotationAdapter {
         if (!popup && typeof doc.createElement === "function") {
             popup = doc.createElement("div");
             popup.id = "annotation-editor-popup";
-            popup.setAttribute("role", "dialog");
-            popup.setAttribute("aria-label", "Annotation name");
+            if (typeof popup.setAttribute === "function") {
+                popup.setAttribute("role", "dialog");
+                popup.setAttribute("aria-label", "Annotation name");
+            }
             popup.innerHTML = '<input type="text" id="annotation-name-input" placeholder="Enter annotation name...">'
                 + '<div class="annotation-editor-actions">'
                 + '<button type="button" id="annotation-editor-cancel">Cancel</button>'
@@ -4290,6 +4870,7 @@ class AnnotationAdapter {
 
     static bindAnnotationEditorPopup(popup, root = null) {
         if (!popup || popup._wsiAnnotationEditorBound) return popup;
+        if (typeof popup.addEventListener !== "function") return popup;
         popup._wsiAnnotationEditorBound = true;
         const stop = event => event.stopPropagation();
         popup.addEventListener("pointerdown", stop);
@@ -4440,8 +5021,10 @@ class AnnotationAdapter {
         if (!popup && typeof doc.createElement === "function") {
             popup = doc.createElement("div");
             popup.id = "measurement-popup-overlay";
-            popup.setAttribute("role", "status");
-            popup.setAttribute("aria-live", "polite");
+            if (typeof popup.setAttribute === "function") {
+                popup.setAttribute("role", "status");
+                popup.setAttribute("aria-live", "polite");
+            }
         }
         if (!popup) return null;
         AnnotationAdapter.measurementPopupEl = popup;
@@ -4459,8 +5042,76 @@ class AnnotationAdapter {
                 popup.style.display = "none";
             }
         }
+        AnnotationAdapter.ensureMeasurementPopupChrome(popup, doc);
         AnnotationAdapter._appendToBody(popup, doc);
         return popup;
+    }
+
+    static ensureMeasurementPopupChrome(popup, root = null) {
+        if (!popup) return null;
+        const doc = popup.ownerDocument || AnnotationAdapter._documentFromRoot(root);
+        let label = popup.querySelector?.("#measurement-popup-label");
+        if (!label && doc?.createElement) {
+            label = doc.createElement("span");
+            label.id = "measurement-popup-label";
+            if (typeof popup.insertBefore === "function") {
+                popup.insertBefore(label, popup.firstChild);
+            } else if (typeof popup.appendChild === "function") {
+                popup.appendChild(label);
+            }
+        }
+        let close = popup.querySelector?.("#measurement-popup-close");
+        if (!close && doc?.createElement) {
+            close = doc.createElement("button");
+            close.id = "measurement-popup-close";
+            close.type = "button";
+            if (typeof close.setAttribute === "function") {
+                close.setAttribute("aria-label", "Close measurement");
+            }
+            close.textContent = "×";
+            if (typeof popup.appendChild === "function") popup.appendChild(close);
+        }
+        if (close?.style) {
+            close.style.pointerEvents = "auto";
+            close.style.marginLeft = "8px";
+            close.style.cursor = "pointer";
+            close.style.color = "#00FF00";
+            close.style.background = "transparent";
+            close.style.border = "0";
+            close.style.font = "inherit";
+            close.style.lineHeight = "1";
+            close.style.padding = "0 2px";
+        }
+        if (close && close.dataset && close.dataset.wsiMeasureCloseBound !== "1") {
+            close.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.hideMeasurementPopup(root);
+                AnnotationAdapter.clearMeasureVector({ remove: false, keepDragState: false });
+            });
+            close.dataset.wsiMeasureCloseBound = "1";
+        }
+        return popup;
+    }
+
+    static setMeasurementPopupLabel(overlay, text) {
+        if (!overlay) return false;
+        AnnotationAdapter.ensureMeasurementPopupChrome(overlay);
+        const label = overlay.querySelector?.("#measurement-popup-label");
+        if (label) label.textContent = String(text || "");
+        else overlay.textContent = String(text || "");
+        return true;
+    }
+
+    static persistMeasurementPopup(root = null) {
+        const overlay = AnnotationAdapter.ensureMeasurementPopupOverlay(root);
+        if (!overlay) return false;
+        overlay.hidden = false;
+        overlay.removeAttribute?.("hidden");
+        if (overlay.style) overlay.style.display = "block";
+        const close = overlay.querySelector?.("#measurement-popup-close");
+        if (close) close.hidden = false;
+        return true;
     }
 
     static updateMeasurementPopup(text, event = null, root = null) {
@@ -4482,7 +5133,7 @@ class AnnotationAdapter {
         if (!label) {
             return AnnotationAdapter.hideMeasurementPopup(root);
         }
-        popup.innerHTML = label;
+        AnnotationAdapter.setMeasurementPopupLabel(popup, label);
         popup.hidden = false;
         popup.removeAttribute?.("hidden");
         if (popup.style) popup.style.display = "block";
@@ -4516,11 +5167,12 @@ class AnnotationAdapter {
             overlay.style.bottom = "auto";
         }
         const px = Number.isFinite(Number(calculatedPixels)) ? Math.round(Number(calculatedPixels)) : 0;
-        if (Number.isFinite(Number(calculatedMicrons))) {
-            overlay.innerHTML = `📏 ${Number(calculatedMicrons).toFixed(2)} µm (${px} px)`;
-        } else {
-            overlay.innerHTML = `📏 ${px} px`;
-        }
+        const text = Number.isFinite(Number(calculatedMicrons))
+            ? `📏 ${Number(calculatedMicrons).toFixed(2)} µm (${px} px)`
+            : `📏 ${px} px`;
+        AnnotationAdapter.setMeasurementPopupLabel(overlay, text);
+        const close = overlay.querySelector?.("#measurement-popup-close");
+        if (close) close.hidden = true;
         return true;
     }
 
@@ -4600,11 +5252,19 @@ class AnnotationAdapter {
         const overlayPoint = AnnotationAdapter.trackerPositionToOverlay(position);
         if (!imagePoint || !overlayPoint) return;
 
+        AnnotationAdapter.hideMeasurementPopup();
         AnnotationAdapter.isDragging = true;
+        AnnotationAdapter.lastPointerId = event?.pointerId
+            ?? event?.originalEvent?.pointerId
+            ?? AnnotationAdapter.lastPointerId;
         AnnotationAdapter.measureStartX = overlayPoint.x;
         AnnotationAdapter.measureStartY = overlayPoint.y;
         AnnotationAdapter.measureStartImageX = imagePoint.x;
         AnnotationAdapter.measureStartImageY = imagePoint.y;
+        AnnotationAdapter.measureEndX = overlayPoint.x;
+        AnnotationAdapter.measureEndY = overlayPoint.y;
+        AnnotationAdapter.measureEndImageX = imagePoint.x;
+        AnnotationAdapter.measureEndImageY = imagePoint.y;
         // Do not draw until dragHandler — avoids the startup false-anchor glitch.
     }
 
@@ -4629,6 +5289,13 @@ class AnnotationAdapter {
             imagePoint.x - AnnotationAdapter.measureStartImageX,
             imagePoint.y - AnnotationAdapter.measureStartImageY
         );
+        AnnotationAdapter.measureEndX = overlayPoint.x;
+        AnnotationAdapter.measureEndY = overlayPoint.y;
+        AnnotationAdapter.measureEndImageX = imagePoint.x;
+        AnnotationAdapter.measureEndImageY = imagePoint.y;
+        AnnotationAdapter.lastPointerId = event?.pointerId
+            ?? event?.originalEvent?.pointerId
+            ?? AnnotationAdapter.lastPointerId;
         AnnotationAdapter.updateMeasureVector(
             AnnotationAdapter.measureStartX,
             AnnotationAdapter.measureStartY,
@@ -4645,19 +5312,28 @@ class AnnotationAdapter {
             const pointer = event?.originalEvent || event;
             overlay.style.left = (pointer.clientX + 15) + "px";
             overlay.style.top = (pointer.clientY + 15) + "px";
-            if (Number.isFinite(Number(calculatedMicrons))) {
-                overlay.innerHTML = `📏 ${Number(calculatedMicrons).toFixed(2)} µm (${Math.round(calculatedPixels)} px)`;
-            } else {
-                overlay.innerHTML = `📏 ${Math.round(calculatedPixels)} px`;
-            }
+            const text = Number.isFinite(Number(calculatedMicrons))
+                ? `📏 ${Number(calculatedMicrons).toFixed(2)} µm (${Math.round(calculatedPixels)} px)`
+                : `📏 ${Math.round(calculatedPixels)} px`;
+            AnnotationAdapter.setMeasurementPopupLabel(overlay, text);
+            const close = overlay.querySelector?.("#measurement-popup-close");
+            if (close) close.hidden = true;
             overlay.hidden = false;
             overlay.removeAttribute?.("hidden");
         }
     }
 
-    static _measureReleaseHandler(event) {
-        if (!AnnotationAdapter.isDragging) return;
-        if (event) event.preventDefaultAction = true;
+    /**
+     * Persist the in-progress ruler to the Saved Measurements Copy/Save table.
+     * Must run before pointer capture is dropped.
+     */
+    static commitActiveMeasurementSegment(event = null) {
+        const wasDragging = Boolean(AnnotationAdapter.isDragging || AnnotationAdapter.isDrawing);
+        if (!wasDragging) return null;
+        if (AnnotationAdapter.measureStartImageX == null
+            || AnnotationAdapter.measureStartImageY == null) {
+            return null;
+        }
 
         const position = event?.position;
         const imagePoint = AnnotationAdapter.trackerPositionToImage(position);
@@ -4668,10 +5344,26 @@ class AnnotationAdapter {
         const startOverlayX = AnnotationAdapter.measureStartX;
         const startOverlayY = AnnotationAdapter.measureStartY;
 
-        const endImageX = Number.isFinite(imagePoint?.x) ? imagePoint.x : startImageX;
-        const endImageY = Number.isFinite(imagePoint?.y) ? imagePoint.y : startImageY;
-        const endOverlayX = Number.isFinite(overlayPoint?.x) ? overlayPoint.x : startOverlayX;
-        const endOverlayY = Number.isFinite(overlayPoint?.y) ? overlayPoint.y : startOverlayY;
+        const endImageX = Number.isFinite(imagePoint?.x)
+            ? imagePoint.x
+            : (Number.isFinite(AnnotationAdapter.measureEndImageX)
+                ? AnnotationAdapter.measureEndImageX
+                : startImageX);
+        const endImageY = Number.isFinite(imagePoint?.y)
+            ? imagePoint.y
+            : (Number.isFinite(AnnotationAdapter.measureEndImageY)
+                ? AnnotationAdapter.measureEndImageY
+                : startImageY);
+        const endOverlayX = Number.isFinite(overlayPoint?.x)
+            ? overlayPoint.x
+            : (Number.isFinite(AnnotationAdapter.measureEndX)
+                ? AnnotationAdapter.measureEndX
+                : startOverlayX);
+        const endOverlayY = Number.isFinite(overlayPoint?.y)
+            ? overlayPoint.y
+            : (Number.isFinite(AnnotationAdapter.measureEndY)
+                ? AnnotationAdapter.measureEndY
+                : startOverlayY);
 
         const microns = AnnotationAdapter.measureLengthMicrons(
             startImageX, startImageY, endImageX, endImageY
@@ -4680,14 +5372,18 @@ class AnnotationAdapter {
             ? "Not calibrated"
             : AnnotationAdapter.formatMicrons(microns);
 
-        if ([startOverlayX, startOverlayY, endOverlayX, endOverlayY].every(Number.isFinite)) {
-            AnnotationAdapter.updateMeasureVector(
-                startOverlayX, startOverlayY, endOverlayX, endOverlayY, ""
-            );
+        const calculatedPixels = Math.hypot(
+            Number(endImageX) - Number(startImageX),
+            Number(endImageY) - Number(startImageY)
+        );
+        const overlay = AnnotationAdapter.ensureMeasurementPopupOverlay();
+        if (overlay) {
+            const text = Number.isFinite(Number(microns))
+                ? `📏 ${Number(microns).toFixed(2)} µm (${Math.round(calculatedPixels)} px)`
+                : `📏 ${Math.round(calculatedPixels)} px`;
+            AnnotationAdapter.setMeasurementPopupLabel(overlay, text);
         }
-
-        AnnotationAdapter.hideMeasurementPopup();
-        AnnotationAdapter.resetMeasurementDragState();
+        AnnotationAdapter.persistMeasurementPopup();
         AnnotationAdapter.lastMeasuredMicrons =
             Number.isFinite(microns) && microns > 0 ? microns : null;
 
@@ -4701,14 +5397,17 @@ class AnnotationAdapter {
             endImageX,
             endImageY,
             microns: AnnotationAdapter.lastMeasuredMicrons,
+            lengthPixels: Number.isFinite(calculatedPixels) ? calculatedPixels : null,
             lengthLabel
         };
 
-        // Rapid-fire path: auto-save into the session list — no popup.
         let entry = null;
-        if (AnnotationAdapter.lastMeasuredMicrons != null) {
+        const hasLength = (Number.isFinite(calculatedPixels) && calculatedPixels > 0)
+            || AnnotationAdapter.lastMeasuredMicrons != null;
+        if (hasLength) {
             entry = AnnotationAdapter.saveMeasurementToSession({
                 lengthMicrons: AnnotationAdapter.lastMeasuredMicrons,
+                lengthPixels: calculatedPixels,
                 label: AnnotationAdapter.nextSequentialMeasurementLabel(
                     AnnotationAdapter.lastMeasuredMicrons
                 ),
@@ -4718,7 +5417,7 @@ class AnnotationAdapter {
             });
         }
 
-        if (typeof AnnotationAdapter.onMeasurementComplete === "function") {
+        if (typeof AnnotationAdapter.onMeasurementComplete === "function" && entry) {
             try {
                 AnnotationAdapter.onMeasurementComplete(
                     AnnotationAdapter.lastMeasuredMicrons,
@@ -4728,6 +5427,29 @@ class AnnotationAdapter {
                 console.warn("Measurement complete callback failed", error);
             }
         }
+
+        AnnotationAdapter.isDrawing = false;
+        return entry;
+    }
+
+    static _measureReleaseHandler(event) {
+        const wasDragging = Boolean(AnnotationAdapter.isDragging || AnnotationAdapter.isDrawing);
+        if (wasDragging) {
+            AnnotationAdapter.commitActiveMeasurementSegment(event);
+        }
+
+        AnnotationAdapter.clearMeasureVector({ remove: false, keepDragState: true });
+        const currentMode = AnnotationAdapter.measurementEntryMode();
+        if (currentMode === "multiple" && AnnotationAdapter.isMeasurementModeActive) {
+            AnnotationAdapter.resetMeasurementDragState();
+            AnnotationAdapter.setMeasureTracking(true);
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(false);
+            }
+            return;
+        }
+        AnnotationAdapter.releaseMeasurementPointerLock(event);
     }
 
     /**
@@ -4820,8 +5542,9 @@ class AnnotationAdapter {
             );
         }
 
-        AnnotationAdapter.hideMeasurementPopup();
+        AnnotationAdapter.persistMeasurementPopup();
         AnnotationAdapter.resetMeasurementDragState();
+        AnnotationAdapter.releaseMeasurementPointerLock({ originalEvent: null });
         return {
             startOverlayX: start.overlayX,
             startOverlayY: start.overlayY,
@@ -5040,14 +5763,20 @@ class AnnotationAdapter {
         }
     }
 
-    static saveMeasurementToSession({ lengthMicrons, label = "", imageId = null } = {}) {
+    static saveMeasurementToSession({ lengthMicrons, lengthPixels, label = "", imageId = null } = {}) {
         AnnotationAdapter.ensureMeasurementDefaults();
         const microns = Number(lengthMicrons);
-        if (!Number.isFinite(microns) || microns < 0) return null;
+        const pixels = Number(lengthPixels);
+        const hasMicrons = Number.isFinite(microns) && microns >= 0;
+        const hasPixels = Number.isFinite(pixels) && pixels >= 0;
+        if (!hasMicrons && !hasPixels) return null;
         const entry = {
-            id: `m-${Date.now()}-${AnnotationAdapter.measurementSessionList.length + 1}`,
-            lengthMicrons: microns,
-            lengthLabel: AnnotationAdapter.formatMicrons(microns),
+            id: String(AnnotationAdapter.measurementSessionList.length + 1),
+            lengthMicrons: hasMicrons ? microns : null,
+            lengthPixels: hasPixels ? pixels : null,
+            lengthLabel: hasMicrons
+                ? AnnotationAdapter.formatMicrons(microns)
+                : `${Math.round(pixels)} px`,
             label: String(label || "").trim(),
             imageId: imageId || null,
             series: Number(AnnotationAdapter.currentSeries) || 0,
@@ -5055,6 +5784,7 @@ class AnnotationAdapter {
             savedAt: new Date().toISOString()
         };
         AnnotationAdapter.measurementSessionList.push(entry);
+        AnnotationAdapter.openFloatingMeasurementPalette();
         if (typeof AnnotationAdapter.onSessionListChange === "function") {
             try {
                 AnnotationAdapter.onSessionListChange(
@@ -5063,9 +5793,182 @@ class AnnotationAdapter {
                 );
             } catch (error) {
                 console.warn("Session list change callback failed", error);
+                AnnotationAdapter.appendMeasurementResultRow(entry);
             }
+        } else {
+            AnnotationAdapter.appendMeasurementResultRow(entry);
         }
         return entry;
+    }
+
+    static measurementResultsBody(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        return doc?.getElementById?.("measurement-results-body") || null;
+    }
+
+    static clearMeasurementResultsTable(root = null) {
+        const body = AnnotationAdapter.measurementResultsBody(root);
+        if (body && typeof body.replaceChildren === "function") body.replaceChildren();
+        else if (body) body.innerHTML = "";
+        return true;
+    }
+
+    static appendMeasurementResultRow(entry, root = null) {
+        const body = AnnotationAdapter.measurementResultsBody(root);
+        const doc = body?.ownerDocument
+            || AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!body || !doc?.createElement || !entry) return false;
+        const tr = doc.createElement("tr");
+        tr.className = "measurement-row";
+        const idCell = doc.createElement("td");
+        const umCell = doc.createElement("td");
+        const pxCell = doc.createElement("td");
+        const micronsVal = Number.isFinite(Number(entry.lengthMicrons))
+            ? Number(entry.lengthMicrons).toFixed(2)
+            : "—";
+        const pixelsVal = Number.isFinite(Number(entry.lengthPixels))
+            ? String(Math.round(Number(entry.lengthPixels)))
+            : "—";
+        idCell.textContent = String(entry.id ?? "");
+        umCell.textContent = micronsVal;
+        pxCell.textContent = pixelsVal;
+        tr.appendChild(idCell);
+        tr.appendChild(umCell);
+        tr.appendChild(pxCell);
+        body.appendChild(tr);
+        return true;
+    }
+
+    static measurementExportFormat(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const select = doc?.getElementById?.("measurement-export-format");
+        const value = String(select?.value || "csv").toLowerCase();
+        if (value === "tsv" || value === "json") return value;
+        return "csv";
+    }
+
+    static formatMeasurementExport(list = AnnotationAdapter.measurementSessionList, format = "csv") {
+        const rows = Array.isArray(list) ? list : [];
+        const cells = rows.map(entry => ({
+            id: String(entry?.id ?? ""),
+            microns: Number.isFinite(Number(entry?.lengthMicrons))
+                ? Number(entry.lengthMicrons).toFixed(2)
+                : "",
+            pixels: Number.isFinite(Number(entry?.lengthPixels))
+                ? String(Math.round(Number(entry.lengthPixels)))
+                : ""
+        }));
+        if (format === "json") return JSON.stringify(cells, null, 2);
+        const sep = format === "tsv" ? "\t" : ",";
+        const header = ["ID", "Microns", "Pixels"].join(sep);
+        const lines = cells.map(row => [row.id, row.microns, row.pixels].join(sep));
+        return [header, ...lines].join("\n");
+    }
+
+    static copyMeasurementResults(root = null) {
+        const format = AnnotationAdapter.measurementExportFormat(root);
+        const text = AnnotationAdapter.formatMeasurementExport(
+            AnnotationAdapter.measurementSessionList,
+            format
+        );
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const btn = doc?.getElementById?.("copy-all-measurements-btn")
+            || doc?.getElementById?.("measurement-copy-btn");
+        const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+        if (clipboard && typeof clipboard.writeText === "function") {
+            navigator.clipboard.writeText(text).then(() => {
+                if (btn) {
+                    btn.innerText = "✓ Copied";
+                    setTimeout(() => { btn.innerText = "📋 Copy"; }, 1500);
+                }
+            });
+        }
+        AnnotationAdapter.releaseMeasurementDrawingAfterExport();
+        return text;
+    }
+
+    static saveMeasurementResults(root = null) {
+        const format = AnnotationAdapter.measurementExportFormat(root);
+        const text = AnnotationAdapter.formatMeasurementExport(
+            AnnotationAdapter.measurementSessionList,
+            format
+        );
+        const mime = format === "json" ? "application/json" : "text/plain";
+        const ext = format === "tsv" ? "tsv" : format === "json" ? "json" : "csv";
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc?.createElement) {
+            AnnotationAdapter.releaseMeasurementDrawingAfterExport();
+            return text;
+        }
+        const blob = typeof Blob === "function" ? new Blob([text], { type: `${mime};charset=utf-8` }) : null;
+        const url = blob && typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+            ? URL.createObjectURL(blob)
+            : `data:${mime},${encodeURIComponent(text)}`;
+        const link = doc.createElement("a");
+        link.href = url;
+        link.download = `measurements.${ext}`;
+        link.rel = "noopener";
+        if (typeof link.click === "function") link.click();
+        else if (doc.body && typeof doc.body.appendChild === "function") {
+            doc.body.appendChild(link);
+            link.click();
+            link.remove?.();
+        }
+        if (blob && typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        AnnotationAdapter.releaseMeasurementDrawingAfterExport();
+        return text;
+    }
+
+    /**
+     * Forceful tool deactivation and cursor liberation after Copy / Save.
+     * Serialization must already have finished.
+     */
+    static releaseMeasurementDrawingAfterExport() {
+        const doc = typeof document !== "undefined" ? document : null;
+        const selector = doc?.getElementById?.("measurement-mode-selector");
+        // Forceful tool deactivation and cursor liberation loop
+        if (selector) selector.value = "single";
+        AnnotationAdapter.setMeasurementEntryMode("single");
+        let isDrawing = false;
+        AnnotationAdapter.isDrawing = isDrawing;
+        const measurementTracker = AnnotationAdapter.measureMouseTracker;
+        const viewer = AnnotationAdapter.viewer;
+        const lastPointerId = AnnotationAdapter.lastPointerId;
+        if (measurementTracker) {
+            measurementTracker.setTracking(false); // Freezes active vector calculations
+        }
+        if (viewer && viewer.canvas) {
+            // Shatter any lingering pointer capture event locks on the OpenSeadragon canvas
+            if (typeof viewer.canvas.releasePointerCapture === "function") {
+                try {
+                    viewer.canvas.releasePointerCapture(lastPointerId);
+                } catch (_error) { /* pointer was not captured on the OSD canvas host */ }
+            }
+        }
+        if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+            viewer.setMouseNavEnabled(true); // Re-enables fluid mouse wheel zoom and trackpad panning instantly
+        }
+        AnnotationAdapter.releaseMeasurementPointerLock({
+            pointerId: lastPointerId
+        });
+        return true;
+    }
+
+    static renderMeasurementResultsTable(list = AnnotationAdapter.measurementSessionList, root = null) {
+        AnnotationAdapter.clearMeasurementResultsTable(root);
+        const rows = Array.isArray(list) ? list : [];
+        for (const entry of rows) {
+            AnnotationAdapter.appendMeasurementResultRow(entry, root);
+        }
+        if (rows.length) AnnotationAdapter.openFloatingMeasurementPalette(root);
+        return rows.length;
     }
 
     /** Optional UI hook: (list, latestEntry) => void */
@@ -7826,6 +8729,7 @@ AnnotationAdapter.bindAdvancedChannelPalette();
 AnnotationAdapter.bindFloatingAiLabsPalette();
 AnnotationAdapter.bindFloatingAdminPalette();
 AnnotationAdapter.bindFloatingZStackPalette();
+AnnotationAdapter.bindFloatingMeasurementPalette();
 if (typeof document !== "undefined" && document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
         AnnotationAdapter.bindResetViewportHomeButton();
@@ -7833,6 +8737,7 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
         AnnotationAdapter.bindFloatingAiLabsPalette();
         AnnotationAdapter.bindFloatingAdminPalette();
         AnnotationAdapter.bindFloatingZStackPalette();
+        AnnotationAdapter.bindFloatingMeasurementPalette();
         AnnotationAdapter.ensureMeasurementPopupOverlay();
         AnnotationAdapter.ensureAnnotationEditorPopup();
     });
@@ -7841,6 +8746,7 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
     AnnotationAdapter.bindFloatingAiLabsPalette();
     AnnotationAdapter.bindFloatingAdminPalette();
     AnnotationAdapter.bindFloatingZStackPalette();
+    AnnotationAdapter.bindFloatingMeasurementPalette();
     AnnotationAdapter.ensureMeasurementPopupOverlay();
     AnnotationAdapter.ensureAnnotationEditorPopup();
 }

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WSI Viewer Help Directory</title>
+    <style>
+        :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; background: #090d12; color: #f2f5f8; }
+        main { max-width: 640px; margin: 0 auto; padding: 40px 20px 64px; }
+        h1 { margin: 0 0 8px; font-size: 1.6rem; }
+        p { margin: 0 0 24px; color: #b5c0cc; }
+        .hub { display: grid; gap: 10px; }
+        a, button {
+            display: flex; align-items: center; justify-content: flex-start;
+            min-height: 44px; padding: 10px 14px; border-radius: 8px;
+            border: 1px solid #40546a; background: #18212c; color: #f2f5f8;
+            text-decoration: none; font: 700 14px/1.3 inherit; cursor: pointer; text-align: left;
+        }
+        a:hover, button:hover { background: #202c39; border-color: #4d94d8; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Help directory</h1>
+    <p>Documentation and operations launchers. The viewer tab stays open.</p>
+    <nav class="hub" aria-label="Help directory">
+        <a id="dashboard-link" href="/local-operations/" target="_blank" rel="noopener noreferrer">Dashboard</a>
+        <a id="user-guide-link" href="/help?v=20260817" target="_blank" rel="noopener noreferrer">User Guide</a>
+        <a id="viewer-quick-guide-link" href="/help/viewer-guide.html?v=20260817" target="_blank" rel="noopener noreferrer">Viewer Quick Guide</a>
+        <a id="admin-ops-guide-link" href="/help/admin-ops-guide.html?v=20260817" target="_blank" rel="noopener noreferrer">Admin and Ops Guide</a>
+        <button type="button" id="workstation-admin-tools-btn">Admin</button>
+        <a id="local-operations" href="/local-operations/" target="_blank" rel="noopener noreferrer">Local Operations</a>
+    </nav>
+</main>
+<script>
+    document.getElementById("workstation-admin-tools-btn")?.addEventListener("click", () => {
+        if (window.opener && !window.opener.closed) {
+            try {
+                window.opener.postMessage({ type: "wsi-open-admin-palette" }, window.location.origin);
+                window.opener.focus();
+                return;
+            } catch (_error) { /* fall through */ }
+        }
+        window.open("/help/admin-ops-guide.html", "_blank");
+    });
+</script>
+</body>
+</html>

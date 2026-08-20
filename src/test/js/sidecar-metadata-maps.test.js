@@ -19,6 +19,7 @@ function element(id = "") {
         textContent: "",
         dataset: {},
         children: [],
+        firstChild: null,
         parentNode: null,
         removedClasses: removed,
         classList: {
@@ -32,7 +33,17 @@ function element(id = "") {
             if (name === "hidden") this.hidden = false;
         },
         querySelector() { return null; },
-        addEventListener() {}
+        addEventListener() {},
+        insertBefore(child) {
+            this.children.unshift(child);
+            this.firstChild = this.children[0] || null;
+            return child;
+        },
+        appendChild(child) {
+            this.children.push(child);
+            if (!this.firstChild) this.firstChild = child;
+            return child;
+        }
     };
 }
 
