@@ -3448,8 +3448,8 @@ class AnnotationAdapter {
             element.style.resize = "both";
             element.style.overflow = "hidden";
         }
-        element.style.minWidth = options.minWidth || "280px";
-        element.style.minHeight = options.minHeight || "400px";
+        element.style.minWidth = options.minWidth || "17.5rem";
+        element.style.minHeight = options.minHeight || "25rem";
         return true;
     }
 
@@ -3667,7 +3667,7 @@ class AnnotationAdapter {
             AnnotationAdapter.snapshotChannelPaletteSidebar(doc);
         }
         AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
-        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "280px", minHeight: "400px" });
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "17.5rem", minHeight: "25rem" });
         palette.hidden = false;
         palette.removeAttribute?.("hidden");
         if (palette.style) palette.style.display = "flex";
@@ -3756,7 +3756,7 @@ class AnnotationAdapter {
             || AnnotationAdapter.aiLabsPaletteElement;
         if (!doc || !palette) return false;
         AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
-        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "320px", minHeight: "400px" });
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "20rem", minHeight: "25rem" });
         palette.hidden = false;
         palette.removeAttribute?.("hidden");
         if (palette.style) palette.style.display = "flex";
@@ -3842,7 +3842,7 @@ class AnnotationAdapter {
             || AnnotationAdapter.adminPaletteElement;
         if (!doc || !palette) return false;
         AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
-        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "280px", minHeight: "400px" });
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "17.5rem", minHeight: "25rem" });
         palette.hidden = false;
         palette.removeAttribute?.("hidden");
         if (palette.style) palette.style.display = "flex";
@@ -3935,7 +3935,7 @@ class AnnotationAdapter {
         AnnotationAdapter.bindFloatingZStackPalette(doc);
         if (visible) {
             AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
-            AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "280px", minHeight: "160px" });
+            AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "17.5rem", minHeight: "10rem" });
             palette.classList?.remove?.("zstack-minimized");
             palette.hidden = false;
             palette.removeAttribute?.("hidden");
@@ -3943,7 +3943,7 @@ class AnnotationAdapter {
             if (palette.style) {
                 palette.style.display = "block";
                 palette.style.maxHeight = "none";
-                palette.style.minHeight = "160px";
+                palette.style.minHeight = "10rem";
             }
             AnnotationAdapter.positionZStackPaletteUpperLeft(palette, doc);
             AnnotationAdapter.syncFloatingZStackMinimizedUi(palette, doc);
@@ -4022,16 +4022,16 @@ class AnnotationAdapter {
         AnnotationAdapter.bindFloatingMeasurementPalette(doc);
         AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
         AnnotationAdapter.applyLiberatedFloatingStyle(palette, {
-            minWidth: "340px",
-            minHeight: "200px",
+            minWidth: "21.25rem",
+            minHeight: "12.5rem",
             zIndex: "9998"
         });
         if (palette.style) {
             palette.style.background = "#111";
             palette.style.color = "#fff";
             palette.style.border = "1px solid #444";
-            palette.style.borderRadius = "8px";
-            palette.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+            palette.style.borderRadius = "0.5rem";
+            palette.style.boxShadow = "0 0.25rem 0.75rem rgba(0,0,0,0.5)";
             palette.style.display = "block";
             palette.style.zIndex = "9998";
         }
@@ -4117,8 +4117,8 @@ class AnnotationAdapter {
         const minimized = Boolean(node.classList?.contains?.("zstack-minimized"));
         const body = node.querySelector?.(".fcp-body");
         if (node.style) {
-            node.style.maxHeight = minimized ? "32px" : "none";
-            node.style.minHeight = minimized ? "32px" : "160px";
+            node.style.maxHeight = minimized ? "2rem" : "none";
+            node.style.minHeight = minimized ? "2rem" : "10rem";
             node.style.overflow = "hidden";
             if (!minimized && node.style.display === "none") {
                 node.style.display = "block";
@@ -4832,10 +4832,10 @@ class AnnotationAdapter {
         popup.style.position = "fixed";
         popup.style.background = "#1e1e1e";
         popup.style.border = "1px solid #444";
-        popup.style.borderRadius = "8px";
-        popup.style.padding = "10px";
+        popup.style.borderRadius = "0.5rem";
+        popup.style.padding = "0.625rem";
         popup.style.zIndex = "10001";
-        popup.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+        popup.style.boxShadow = "0 0.25rem 0.75rem rgba(0,0,0,0.5)";
         if (!popup.style.display || popup.style.display === "") {
             popup.style.display = "none";
         }
@@ -5035,8 +5035,8 @@ class AnnotationAdapter {
             popup.style.background = "rgba(0, 0, 0, 0.9)";
             popup.style.color = "#00FF00";
             popup.style.fontFamily = "monospace";
-            popup.style.padding = "4px 8px";
-            popup.style.borderRadius = "4px";
+            popup.style.padding = "0.25rem 0.5rem";
+            popup.style.borderRadius = "0.25rem";
             popup.style.border = "1px solid #333";
             if (!popup.style.display || popup.style.display === "") {
                 popup.style.display = "none";
@@ -5073,14 +5073,14 @@ class AnnotationAdapter {
         }
         if (close?.style) {
             close.style.pointerEvents = "auto";
-            close.style.marginLeft = "8px";
+            close.style.marginLeft = "0.5rem";
             close.style.cursor = "pointer";
             close.style.color = "#00FF00";
             close.style.background = "transparent";
             close.style.border = "0";
             close.style.font = "inherit";
             close.style.lineHeight = "1";
-            close.style.padding = "0 2px";
+            close.style.padding = "0 0.15em";
         }
         if (close && close.dataset && close.dataset.wsiMeasureCloseBound !== "1") {
             close.addEventListener("click", event => {
@@ -5633,7 +5633,7 @@ class AnnotationAdapter {
             label.setAttribute("paint-order", "stroke fill");
             label.setAttribute("text-anchor", "middle");
             label.setAttribute("dominant-baseline", "central");
-            label.style.font = "700 12px/1.2 ui-sans-serif, system-ui, sans-serif";
+            label.style.font = "700 0.75rem/1.2 ui-sans-serif, system-ui, sans-serif";
 
             svg.append(halo, stroke, arrowHalo, arrow, label);
             AnnotationAdapter.measureOverlayEl = svg;
@@ -6412,17 +6412,17 @@ class AnnotationAdapter {
             || host.getElementById("ai-lab-config")
             || host.getElementById("ai-analytics-panel");
         if (!stack) return null;
-        const markup = '<div style="margin-top: 10px; display: flex; gap: 5px;">'
-            + '<button id="ai-reset-baseline-btn" style="font-size: 0.8rem; background-color: #445566; color: #ffffff; border: 1px solid #667788; padding: 4px 8px; cursor: pointer; border-radius: 3px;">↺ Reset to Auto-Tuned Baseline</button>'
+        const markup = '<div style="margin-top: 0.625rem; display: flex; gap: 0.3em;">'
+            + '<button id="ai-reset-baseline-btn" style="font-size: 0.9rem; background-color: #445566; color: #ffffff; border: 1px solid #667788; padding: 0.4em 0.8em; cursor: pointer; border-radius: 0.5em; height: auto; max-height: none;">↺ Reset to Auto-Tuned Baseline</button>'
             + "</div>";
         if (typeof stack.insertAdjacentHTML === "function") {
             stack.insertAdjacentHTML("beforeend", markup);
         } else if (typeof stack.appendChild === "function" && typeof host.createElement === "function") {
             const wrap = host.createElement("div");
-            wrap.style.cssText = "margin-top: 10px; display: flex; gap: 5px;";
+            wrap.style.cssText = "margin-top: 0.625rem; display: flex; gap: 0.3em;";
             const button = host.createElement("button");
             button.id = "ai-reset-baseline-btn";
-            button.style.cssText = "font-size: 0.8rem; background-color: #445566; color: #ffffff; border: 1px solid #667788; padding: 4px 8px; cursor: pointer; border-radius: 3px;";
+            button.style.cssText = "font-size: 0.9rem; background-color: #445566; color: #ffffff; border: 1px solid #667788; padding: 0.4em 0.8em; cursor: pointer; border-radius: 0.5em; height: auto; max-height: none;";
             button.textContent = "↺ Reset to Auto-Tuned Baseline";
             wrap.appendChild(button);
             stack.appendChild(wrap);
