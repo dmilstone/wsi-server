@@ -15,7 +15,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260817"></script>
-    <script src="/annotation-adapter.js?v=20260820-fluid-rem"></script>
+    <script src="/annotation-adapter.js?v=20260821-viewport-tile"></script>
     <script src="/annotation-name-editor.js?v=20260819-ann-measure"></script>
     <script src="/annotation-label-layer.js?v=20260818-home-view"></script>
     <script src="/annotorious-spike.js?v=20260819-ann-measure"></script>
@@ -2487,6 +2487,151 @@
             pointer-events: auto;
             user-select: none;
         }
+        #floating-channel-palette {
+            position: fixed;
+            z-index: 9999;
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            resize: both !important; /* Unlocks independent horizontal and vertical dragging on all borders */
+            overflow: hidden !important;
+            min-width: 340px;
+            min-height: 400px;
+            display: flex;
+            flex-direction: column;
+            color: #e8e8e8;
+            box-sizing: border-box;
+        }
+        #floating-channel-palette .fcp-titlebar {
+            background: #222;
+            border-bottom: 1px solid #444;
+            flex: 0 0 auto;
+        }
+        #floating-channel-palette .fcp-title { color: #f2f2f2; }
+        #floating-channel-palette .fcp-close {
+            background: #2a2a2a;
+            color: #eee;
+            border-color: #555;
+        }
+        #floating-channel-palette .fcp-body {
+            overflow: hidden !important;
+            display: flex;
+            flex-direction: column;
+            padding: 0 0 0.5rem;
+            min-height: 0;
+        }
+        .fcp-layout-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            flex: 0 0 auto;
+            padding: 0.35rem 0.625rem;
+            background: #1f1f1f;
+            border-bottom: 1px solid #333;
+            user-select: none;
+        }
+        .fcp-layout-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            min-width: 0;
+            color: #ddd;
+            font-size: 0.75rem;
+        }
+        .fcp-layout-icon {
+            font-weight: 700;
+            color: #bbb;
+            font-size: 0.9rem;
+        }
+        .fcp-layout-select {
+            background: #2a2a2a;
+            border: 1px solid #555;
+            color: #f2f2f2;
+            border-radius: 0.25rem;
+            padding: 0.25em 0.45em;
+            font-size: 0.75rem;
+            min-height: 1.6rem;
+            cursor: pointer;
+        }
+        .fcp-layout-auto {
+            background: #2a2a2a;
+            border: 1px solid #555;
+            color: #f2f2f2;
+            border-radius: 0.25rem;
+            padding: 0.25em 0.65em;
+            font-size: 0.75rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .fcp-layout-auto:hover { background: #333; border-color: #777; }
+        .fcp-list-splitter {
+            flex: 0 0 8px;
+            cursor: ns-resize;
+            background: #2f2f2f;
+            border-top: 1px solid #555;
+            border-bottom: 1px solid #555;
+            position: relative;
+        }
+        .fcp-list-splitter::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 2.5rem;
+            height: 2px;
+            transform: translate(-50%, -50%);
+            background: #777;
+            border-radius: 1px;
+        }
+        .fcp-list-splitter:hover,
+        .fcp-list-splitter.is-dragging {
+            background: #3a4a5c;
+        }
+        #floating-channel-palette .fcp-histogram-wrap,
+        #floating-channel-palette .fcp-scale,
+        #floating-channel-palette .fcp-slider,
+        #floating-channel-palette .fcp-actions {
+            flex: 0 0 auto;
+            padding-left: 12px;
+            padding-right: 12px;
+        }
+        #floating-channel-palette .fcp-slider { color: #ddd; }
+        #floating-channel-palette .fcp-scale { color: #aaa; }
+        #floating-channel-palette .fcp-actions button {
+            background: linear-gradient(#3a3a3a, #2a2a2a);
+            color: #f2f2f2;
+            border-color: #555;
+        }
+        #floating-channel-palette .fcp-edge-handle {
+            position: absolute;
+            z-index: 6;
+            background: transparent;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="n"] {
+            top: 0; left: 8px; right: 8px; height: 8px; cursor: ns-resize;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="s"] {
+            bottom: 0; left: 8px; right: 8px; height: 8px; cursor: ns-resize;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="e"] {
+            top: 8px; right: 0; bottom: 8px; width: 8px; cursor: ew-resize;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="w"] {
+            top: 8px; left: 0; bottom: 8px; width: 8px; cursor: ew-resize;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="ne"] {
+            top: 0; right: 0; width: 10px; height: 10px; cursor: nesw-resize;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="nw"] {
+            top: 0; left: 0; width: 10px; height: 10px; cursor: nwse-resize;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="se"] {
+            bottom: 0; right: 0; width: 14px; height: 14px; cursor: nwse-resize;
+        }
+        #floating-channel-palette .fcp-edge-handle[data-edge="sw"] {
+            bottom: 0; left: 0; width: 10px; height: 10px; cursor: nesw-resize;
+        }
         #floating-ai-labs-palette {
             min-width: 20rem;
             left: 7.5rem;
@@ -2701,36 +2846,97 @@
             width: 100%;
             max-width: none;
         }
-        .fcp-table-wrap {
-            max-height: 132px;
-            overflow: auto;
-            border: 1px solid #c2c2c2;
-            background: #fff;
-        }
-        .fcp-channels {
+        .bc-channels-grid {
+            display: grid !important;
+            grid-template-columns: 1fr !important;
+            gap: 2px 10px;
+            max-height: none;
+            overflow-y: auto !important;
+            overflow-x: hidden;
+            height: var(--fcp-list-height, 9.5rem);
+            min-height: 4.5rem;
+            padding: 4px 6px 4px 8px;
             width: 100%;
-            border-collapse: collapse;
+            box-sizing: border-box;
+            flex: 0 0 auto;
+            align-content: start;
+            scrollbar-gutter: stable;
         }
-        .fcp-channels th,
-        .fcp-channels td {
-            padding: 4px 6px;
-            text-align: left;
-            border-bottom: 1px solid #e4e4e4;
-            font-size: 12px;
+        .bc-channels-grid[data-fcp-layout="2"] {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+        .bc-channels-grid[data-fcp-layout="3"] {
+            grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        }
+        .bc-channels-grid[data-fcp-layout="wrap"] {
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)) !important;
+        }
+        .bc-channels-grid::-webkit-scrollbar { width: 10px; }
+        .bc-channels-grid::-webkit-scrollbar-track { background: #2a2a2a; }
+        .bc-channels-grid::-webkit-scrollbar-thumb {
+            background: #666;
+            border-radius: 5px;
+            border: 2px solid #2a2a2a;
+        }
+        .bc-channel-cell {
+            display: grid;
+            grid-template-columns: auto auto minmax(0, 1fr);
+            grid-template-rows: auto;
+            align-items: center;
+            column-gap: 6px;
+            row-gap: 0.15em;
+            padding: 0.4em 0.45em;
+            border-radius: 3px;
+            cursor: pointer;
+            min-width: 0;
+            color: #eee;
+            font-size: 0.78rem;
+            line-height: 1.25;
+        }
+        .bc-channels-grid[data-fcp-layout="1"] .bc-channel-range { display: none; }
+        .bc-channel-cell.is-selected {
+            background: rgba(0, 255, 0, 0.12);
+            outline: 1px solid #00FF00;
+        }
+        .bc-channel-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
             white-space: nowrap;
+            min-width: 0;
+            font-weight: 650;
         }
-        .fcp-channels th {
-            background: #efefef;
-            font-weight: 700;
-            color: #444;
+        .bc-channel-epitope {
+            color: #c8c8c8;
+            font-weight: 500;
         }
-        .fcp-channels tr.is-selected { background: #cfe4ff; }
-        .fcp-channels tr { cursor: pointer; }
+        .bc-channel-range {
+            grid-column: 2 / -1;
+            color: #8a8a8a;
+            font-variant-numeric: tabular-nums;
+            font-size: 0.65rem;
+        }
+        .floating-channel-cb {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #fff !important;
+            background-color: transparent !important;
+            border-radius: 3px;
+            cursor: pointer;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        .floating-channel-cb:checked {
+            background-color: #00FF00 !important; /* Vibrant green check fill when active */
+            border-color: #00FF00 !important;
+        }
         .fcp-swatch {
             display: inline-block;
             width: 14px;
             height: 14px;
-            border: 1px solid rgba(0,0,0,.35);
+            border: 1px solid rgba(255,255,255,.45);
             vertical-align: middle;
         }
         .fcp-histogram-wrap {
@@ -2797,6 +3003,7 @@
         #toggle-left,
         #toggle-ai-labs-palette,
         #help-directory-link,
+        #toggle-secondary-annotation-toolbar,
         #measurement-copy-btn,
         #measurement-save-btn {
             font-size: 1.1em;
@@ -2806,6 +3013,53 @@
             font-size: 0.85em;
             line-height: 1.35;
             padding: 0.2em 0.5em 0.2em 0;
+        }
+        #secondary-annotation-toolbar {
+            display: none;
+            width: 100%;
+            height: var(--toolbar-height);
+            min-height: var(--toolbar-height);
+            box-sizing: border-box;
+            align-items: center;
+            gap: 0.15rem;
+            padding: 0 0.5rem;
+            overflow-x: auto;
+            overflow-y: hidden;
+            background: #2a2a2a;
+            border-bottom: 1px solid #444;
+        }
+        #secondary-annotation-toolbar.is-open {
+            display: flex !important;
+        }
+        #secondary-annotation-toolbar .ij-tool {
+            flex: 0 0 auto;
+            display: inline-grid;
+            place-items: center;
+            width: auto;
+            min-width: 1.75rem;
+            height: auto;
+            min-height: 0;
+            max-height: none;
+            margin: 0;
+            padding: 0.25em 0.4em;
+            border: 1px solid transparent;
+            border-radius: 0.35em;
+            background: transparent;
+            color: #f2f2f2;
+            font-size: 1.1em;
+            line-height: 1;
+            cursor: pointer;
+        }
+        #secondary-annotation-toolbar .ij-tool:hover {
+            background: rgba(255,255,255,.12);
+        }
+        #secondary-annotation-toolbar .ij-tool[aria-pressed="true"] {
+            background: rgba(77, 148, 216, .35);
+            border-color: rgba(140, 190, 240, .85);
+            color: #fff;
+        }
+        #viewer.ij-lookup-inverted {
+            filter: invert(1) hue-rotate(180deg);
         }
     </style>
 </head>
@@ -2893,10 +3147,56 @@
                             title="Computational Pathology AI Labs" aria-label="AI Labs" aria-pressed="false">🔬 AI Labs</button>
                     <button id="help-directory-link" class="toolbar-chip" type="button"
                             title="Help directory" aria-label="Help">?</button>
+                    <button id="toggle-secondary-annotation-toolbar" class="toolbar-chip" type="button"
+                            title="Tools — Show ImageJ-style annotation tools" aria-label="Tools"
+                            aria-pressed="false">🛠️ Tools</button>
                     <a id="pilot-feedback-link" class="toolbar-chip" href="/pilot-feedback/" title="Open pilot feedback (shortcut F in viewer)" aria-label="Feedback">Feedback</a>
                 </div>
             </div>
         </div>
+    </div>
+    <div id="secondary-annotation-toolbar" role="toolbar" aria-label="ImageJ annotation tools" hidden
+         style="display: none; width: 100%; height: var(--toolbar-height); background: #2a2a2a; border-bottom: 1px solid #444;">
+        <button type="button" class="ij-tool" id="ij-tool-1" data-ij-tool="ruler" data-ij-index="1"
+                title="Ruler — Click and drag to measure length in microns" aria-label="Ruler" aria-pressed="false">📏</button>
+        <button type="button" class="ij-tool" id="ij-tool-2" data-ij-tool="pan" data-ij-index="2"
+                title="Pan — Drag to scroll the image" aria-label="Pan" aria-pressed="false">✋</button>
+        <button type="button" class="ij-tool" id="ij-tool-3" data-ij-tool="rectangle" data-ij-index="3"
+                title="Rectangle — Drag to create a rectangular selection" aria-label="Rectangle" aria-pressed="false">▭</button>
+        <button type="button" class="ij-tool" id="ij-tool-4" data-ij-tool="oval" data-ij-index="4"
+                title="Oval — Drag to create an elliptical selection" aria-label="Oval" aria-pressed="false">⬭</button>
+        <button type="button" class="ij-tool" id="ij-tool-5" data-ij-tool="roundrect" data-ij-index="5"
+                title="Pending..." aria-label="Rounded rectangle" aria-pressed="false">▢</button>
+        <button type="button" class="ij-tool" id="ij-tool-6" data-ij-tool="freehand" data-ij-index="6"
+                title="Pending..." aria-label="Freehand" aria-pressed="false">∿</button>
+        <button type="button" class="ij-tool" id="ij-tool-7" data-ij-tool="polygon" data-ij-index="7"
+                title="Polygon — Click to add vertices; double-click or Enter to close" aria-label="Polygon" aria-pressed="false">⬠</button>
+        <button type="button" class="ij-tool" id="ij-tool-8" data-ij-tool="wand" data-ij-index="8"
+                title="Wand — Click a region of similar intensity to select it" aria-label="Wand" aria-pressed="false">✦</button>
+        <button type="button" class="ij-tool" id="ij-tool-9" data-ij-tool="text" data-ij-index="9"
+                title="Text — Click to place a text annotation" aria-label="Text" aria-pressed="false">T</button>
+        <button type="button" class="ij-tool" id="ij-tool-10" data-ij-tool="multipoint" data-ij-index="10"
+                title="Multi-Point — Click to add points; Enter to finish" aria-label="Multi-Point" aria-pressed="false">⁘</button>
+        <button type="button" class="ij-tool" id="ij-tool-11" data-ij-tool="angle" data-ij-index="11"
+                title="Pending..." aria-label="Angle" aria-pressed="false">∠</button>
+        <button type="button" class="ij-tool" id="ij-tool-12" data-ij-tool="zoom" data-ij-index="12"
+                title="Zoom — Click to zoom in; Alt-click to zoom out; drag to zoom to region" aria-label="Zoom" aria-pressed="false">🔍</button>
+        <button type="button" class="ij-tool" id="ij-tool-13" data-ij-tool="overlay" data-ij-index="13"
+                title="Overlay — Show or hide annotation overlays" aria-label="Overlay" aria-pressed="false">⧉</button>
+        <button type="button" class="ij-tool" id="ij-tool-14" data-ij-tool="arrow" data-ij-index="14"
+                title="Pending..." aria-label="Arrow" aria-pressed="false">➤</button>
+        <button type="button" class="ij-tool" id="ij-tool-15" data-ij-tool="brush" data-ij-index="15"
+                title="Pending..." aria-label="Brush" aria-pressed="false">✎</button>
+        <button type="button" class="ij-tool" id="ij-tool-16" data-ij-tool="dropper" data-ij-index="16"
+                title="Pending..." aria-label="Color picker" aria-pressed="false">💧</button>
+        <button type="button" class="ij-tool" id="ij-tool-17" data-ij-tool="fill" data-ij-index="17"
+                title="Pending..." aria-label="Flood fill" aria-pressed="false">▦</button>
+        <button type="button" class="ij-tool" id="ij-tool-18" data-ij-tool="spray" data-ij-index="18"
+                title="Pending..." aria-label="Spray" aria-pressed="false">░</button>
+        <button type="button" class="ij-tool" id="ij-tool-19" data-ij-tool="invert" data-ij-index="19"
+                title="Invert — Invert the displayed image lookup table" aria-label="Invert" aria-pressed="false">◑</button>
+        <button type="button" class="ij-tool" id="ij-tool-20" data-ij-tool="options" data-ij-index="20"
+                title="Pending..." aria-label="Options" aria-pressed="false">⚙</button>
     </div>
 </header>
 <div class="workspace">
@@ -2920,7 +3220,7 @@
     <main class="viewer-main" aria-label="Whole-slide image viewer">
         <div class="viewer-stage" id="openseadragon-viewer">
         <div id="viewer"></div>
-        <aside id="floating-channel-palette" class="floating-channel-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-channel-palette-title">
+        <aside id="floating-channel-palette" class="floating-palette floating-channel-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-channel-palette-title">
             <svg class="fcp-gamma-svg" aria-hidden="true" focusable="false">
                 <filter id="fcp-gamma-filter" color-interpolation-filters="linearRGB">
                     <feComponentTransfer>
@@ -2936,24 +3236,24 @@
                 </filter>
             </svg>
             <div class="fcp-titlebar" id="floating-channel-palette-handle">
-                <span class="fcp-title" id="floating-channel-palette-title">Brightness &amp; Contrast</span>
+                <span class="fcp-title" id="floating-channel-palette-title">🎛️ Brightness &amp; Contrast</span>
                 <button type="button" id="floating-channel-palette-close" class="fcp-close" aria-label="Close brightness and contrast">×</button>
             </div>
+            <div class="fcp-layout-bar" role="toolbar" aria-label="Layout options">
+                <label class="fcp-layout-label" for="fcp-layout-select">
+                    <span class="fcp-layout-icon" aria-hidden="true">Ξ</span>
+                    <select id="fcp-layout-select" class="fcp-layout-select" title="Column List" aria-label="Column List">
+                        <option value="1" selected>Column List</option>
+                        <option value="2">2 Columns</option>
+                        <option value="3">3 Columns</option>
+                        <option value="wrap">Wrap</option>
+                    </select>
+                </label>
+                <button id="fcp-auto" class="fcp-layout-auto" type="button" title="Auto">⚏ Auto</button>
+            </div>
             <div class="fcp-body">
-                <div class="fcp-table-wrap">
-                    <table class="fcp-channels">
-                        <thead>
-                            <tr>
-                                <th scope="col"></th>
-                                <th scope="col"></th>
-                                <th scope="col">Channel</th>
-                                <th scope="col">Min</th>
-                                <th scope="col">Max</th>
-                            </tr>
-                        </thead>
-                        <tbody id="floating-channel-palette-rows"></tbody>
-                    </table>
-                </div>
+                <div class="bc-channels-grid" id="floating-channel-palette-rows" data-fcp-layout="1"></div>
+                <div class="fcp-list-splitter" id="fcp-list-splitter" role="separator" aria-orientation="horizontal" aria-label="Adjust channel list height"></div>
                 <div class="fcp-histogram-wrap">
                     <canvas id="floating-channel-histogram" width="340" height="88" aria-label="Channel histogram"></canvas>
                 </div>
@@ -2977,10 +3277,17 @@
                     <output id="fcp-gamma-value" for="fcp-gamma">1.00</output>
                 </div>
                 <div class="fcp-actions">
-                    <button id="fcp-auto" type="button">Auto</button>
                     <button id="fcp-reset" type="button">Reset</button>
                 </div>
             </div>
+            <span class="fcp-edge-handle" data-edge="n" aria-hidden="true"></span>
+            <span class="fcp-edge-handle" data-edge="s" aria-hidden="true"></span>
+            <span class="fcp-edge-handle" data-edge="e" aria-hidden="true"></span>
+            <span class="fcp-edge-handle" data-edge="w" aria-hidden="true"></span>
+            <span class="fcp-edge-handle" data-edge="ne" aria-hidden="true"></span>
+            <span class="fcp-edge-handle" data-edge="nw" aria-hidden="true"></span>
+            <span class="fcp-edge-handle" data-edge="se" aria-hidden="true"></span>
+            <span class="fcp-edge-handle" data-edge="sw" aria-hidden="true"></span>
         </aside>
         <div id="empty-viewport-guidance" role="status" aria-live="polite">
             <span>Use the case selector to choose slides for viewing.</span>
@@ -3075,7 +3382,7 @@
         <button id="reveal-left" class="panel-reveal" type="button" aria-label="Show Image Browser">Show Image Browser</button>
     </main>
 </div>
-<aside id="floating-ai-labs-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-ai-labs-title">
+<aside id="floating-ai-labs-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-ai-labs-title">
     <div class="fcp-titlebar" id="floating-ai-labs-handle">
         <span class="fcp-title" id="floating-ai-labs-title">🔬 AI Labs</span>
         <button type="button" id="floating-ai-labs-close" class="fcp-close" aria-label="Close AI Labs">×</button>
@@ -3144,7 +3451,7 @@
         </div>
     </div>
 </aside>
-<aside id="floating-admin-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-admin-title">
+<aside id="floating-admin-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-admin-title">
     <div class="fcp-titlebar" id="floating-admin-handle">
         <span class="fcp-title" id="floating-admin-title">Workstation Admin Tools</span>
         <button type="button" id="floating-admin-close" class="fcp-close" aria-label="Close workstation admin tools">×</button>
@@ -3164,7 +3471,7 @@
         </details>
     </div>
 </aside>
-<aside id="floating-measurement-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-measurement-title"
+<aside id="floating-measurement-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-measurement-title"
        style="position: fixed; z-index: 9998; resize: both; overflow: hidden; display: none; min-width: 21.25rem; min-height: 12.5rem; background: #111; color: #fff; border: 1px solid #444; border-radius: 0.5rem; box-shadow: 0 0.25rem 0.75rem rgba(0,0,0,0.5);">
     <div class="fcp-titlebar" id="floating-measurement-handle">
         <span class="fcp-title" id="floating-measurement-title">📐 Saved Measurements</span>
@@ -3189,7 +3496,7 @@
         </table>
     </div>
 </aside>
-<aside id="floating-zstack-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-zstack-title"
+<aside id="floating-zstack-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-zstack-title"
        style="position: fixed; z-index: 9999; resize: both; overflow: hidden; display: none;">
     <div class="fcp-titlebar" id="floating-zstack-handle">
         <span class="fcp-title" id="floating-zstack-title">Z-Stack</span>
@@ -5135,6 +5442,7 @@
         event.stopPropagation();
         window.open("/help/help-directory.html", "_blank");
     });
+    AnnotationAdapter.bindSecondaryAnnotationToolbar(document);
     window.addEventListener("message", event => {
         if (event.origin !== window.location.origin) return;
         if (event.data?.type === "wsi-open-admin-palette") {

@@ -161,6 +161,7 @@ const { AnnotationAdapter } = context;
 }
 
 assert.match(adapterSource, /static onSlideClicked\(/);
+assert.match(adapterSource, /static resetImageControllerState\(/);
 assert.match(adapterSource, /static selectSlideCase\(/);
 assert.match(adapterSource, /static loadSlide\(/);
 assert.match(adapterSource, /static collapseAiLabsPanel\(/);

@@ -16,6 +16,33 @@ assert.match(html, /id="floating-channel-palette"/);
 assert.match(html, /id="floating-channel-palette-handle"/);
 assert.match(html, /id="floating-channel-palette-close"/);
 assert.match(html, /id="floating-channel-histogram"/);
+assert.match(html, /class="bc-channels-grid"/);
+assert.match(html, /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(100px,\s*1fr\)\)/);
+assert.match(html, /overflow-y:\s*auto\s*!important/);
+assert.match(html, /class="fcp-layout-bar"/);
+assert.match(html, /id="fcp-layout-select"/);
+assert.match(html, /Column List/);
+assert.match(html, /id="fcp-list-splitter"/);
+assert.match(html, /data-fcp-layout="1"/);
+assert.match(html, /🎛️ Brightness/);
+assert.match(adapterSource, /static formatChannelPaletteLabel\(/);
+assert.match(adapterSource, /static applyChannelPaletteLayout\(/);
+assert.match(adapterSource, /static bindChannelListSplitter\(/);
+assert.match(html, /\.floating-channel-cb\s*\{/);
+assert.match(html, /border:\s*2px solid #fff\s*!important/);
+assert.match(html, /\.floating-channel-cb:checked/);
+assert.match(html, /background-color:\s*#00FF00\s*!important/);
+assert.match(html, /#floating-channel-palette\s*\{[\s\S]*?min-width:\s*340px/);
+assert.match(html, /#floating-channel-palette\s*\{[\s\S]*?min-height:\s*400px/);
+assert.match(html, /#floating-channel-palette\s*\{[\s\S]*?resize:\s*both\s*!important/);
+assert.match(html, /class="fcp-edge-handle"/);
+assert.match(html, /data-edge="n"/);
+assert.match(html, /data-edge="se"/);
+assert.match(adapterSource, /static bindFloatingPaletteEdgeResize\(/);
+assert.match(adapterSource, /class="floating-channel-cb"/);
+assert.match(adapterSource, /bc-channel-cell/);
+assert.match(adapterSource, /minWidth: "340px"/);
+assert.match(adapterSource, /minHeight: "400px"/);
 assert.match(html, /id="fcp-min"/);
 assert.match(html, /id="fcp-max"/);
 assert.match(html, /id="fcp-gamma"/);
@@ -45,7 +72,18 @@ assert.doesNotMatch(html, /❓ Help/);
 assert.doesNotMatch(html, /💬 Feedback/);
 assert.match(html, /id="help-directory-link"[^>]*>\?</);
 assert.match(html, />Feedback</);
-assert.match(html, />Reset<\/button>[\s\S]*?>Auto<\/button>[\s\S]*?>🔬 AI Labs<\/button>[\s\S]*?>\?<\/button>[\s\S]*?>Feedback</);
+assert.match(html, />Reset<\/button>[\s\S]*?>Auto<\/button>[\s\S]*?>🔬 AI Labs<\/button>[\s\S]*?>\?<\/button>[\s\S]*?>🛠️ Tools<\/button>[\s\S]*?>Feedback</);
+assert.match(html, /id="toggle-secondary-annotation-toolbar"/);
+assert.match(html, /id="secondary-annotation-toolbar"/);
+assert.match(html, /id="ij-tool-1"/);
+assert.match(html, /id="ij-tool-20"/);
+assert.match(html, /title="Pending\.\.\."/);
+assert.match(html, /title="Ruler — Click and drag to measure length in microns"/);
+assert.match(adapterSource, /static bindSecondaryAnnotationToolbar\(/);
+assert.match(adapterSource, /static toggleSecondaryAnnotationToolbar\(/);
+assert.match(adapterSource, /static activateImageJTool\(/);
+assert.match(adapterSource, /console\.info\("Pending\.\.\."/);
+assert.match(adapterSource, /style\.display = "flex"/);
 assert.match(html, /id="help-directory-link"/);
 assert.match(html, /window\.open\("\/help\/help-directory\.html", "_blank"\)/);
 assert.match(html, /id="floating-zstack-palette"/);
@@ -179,6 +217,26 @@ assert.match(adapterSource, /static isolateFloatingPalettePointerEvents\(/);
 assert.match(adapterSource, /static bindFloatingMeasurementPalette\(/);
 assert.match(adapterSource, /static openFloatingMeasurementPalette\(/);
 assert.match(adapterSource, /static positionFloatingMeasurementPalette\(/);
+assert.match(adapterSource, /static positionFloatingChannelPalette\(/);
+assert.match(adapterSource, /static getAntiOverlapPosition\(/);
+assert.match(adapterSource, /function getAntiOverlapPosition\(/);
+assert.match(adapterSource, /\.floating-palette, \[id\^="floating-"\], #floating-zstack-palette/);
+assert.match(adapterSource, /maxViewportWidth = window\.innerWidth - 20/);
+assert.match(adapterSource, /maxViewportHeight = window\.innerHeight - 20/);
+assert.match(adapterSource, /finalLeft \+= 240/);
+assert.match(adapterSource, /safetyCounter < 15/);
+assert.match(adapterSource, /r\.bottom \+ 12/);
+assert.match(html, /id="floating-measurement-palette"[^>]*class="floating-palette"/);
+assert.match(adapterSource, /static resetImageControllerState\(/);
+assert.match(adapterSource, /static resetBrightnessContrastSettings\(/);
+assert.match(adapterSource, /controllersToHide/);
+assert.match(adapterSource, /savedMeasurementsArray = \[\]/);
+assert.match(adapterSource, /resetBrightnessContrastSettings\(\)/);
+assert.match(adapterSource, /measurement-results-body/);
+assert.match(adapterSource, /static palettesOverlap\(/);
+assert.match(adapterSource, /Overlap Collide Detected/);
+assert.match(adapterSource, /static viewerStageLaunchOrigin\(/);
+assert.match(adapterSource, /dataset\.fcpUserMoved = "1"/);
 assert.match(adapterSource, /palette\.style\.display = "block"/);
 assert.match(adapterSource, /viewerEl\.offsetLeft \+ 15/);
 assert.match(adapterSource, /viewerEl\.offsetTop \+ 15/);
@@ -207,7 +265,7 @@ assert.match(adapterSource, /removeEventListener\("mouseup", handleWindowMouseUp
 
 const context = vm.createContext({
     console: { info() {}, warn() {}, error() {} },
-    window: { setTimeout, clearTimeout, addEventListener() {}, removeEventListener() {} },
+    window: { setTimeout, clearTimeout, addEventListener() {}, removeEventListener() {}, innerWidth: 1920, innerHeight: 1080 },
     document: { getElementById() { return null; }, addEventListener() {} },
     fetch: null,
     WsiCsrf: { csrfFetch: async () => { throw new Error("unexpected save"); } }
@@ -467,7 +525,146 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     assert.equal(AnnotationAdapter.positionFloatingMeasurementPalette(), true);
     assert.equal(measPalette.style.left, "290px");
     assert.equal(measPalette.style.top, "269px");
+    const bcPalette = {
+        hidden: false,
+        style: { display: "flex", visibility: "", left: "295px", top: "79px" },
+        offsetLeft: 295,
+        offsetTop: 79,
+        offsetWidth: 340,
+        offsetHeight: 400,
+        getAttribute() { return "false"; }
+    };
+    const overlapMeas = {
+        style: { display: "none", visibility: "", width: "380px", height: "200px" },
+        offsetWidth: 380,
+        offsetHeight: 200
+    };
+    context.document.getElementById = (id) => {
+        if (id === "openseadragon-viewer" || id === "viewer") return viewerEl;
+        if (id === "floating-zstack-palette") return zStack;
+        if (id === "floating-measurement-palette") return overlapMeas;
+        if (id === "floating-channel-palette") return bcPalette;
+        return null;
+    };
+    zStack.style.display = "none";
+    zStack.hidden = true;
+    zStack.getAttribute = () => "true";
+    assert.equal(AnnotationAdapter.palettesOverlap(
+        { left: 295, top: 79, width: 380, height: 200 },
+        { left: 295, top: 79, width: 340, height: 400 }
+    ), true);
+    assert.equal(AnnotationAdapter.positionFloatingMeasurementPalette(), true);
+    assert.equal(overlapMeas.style.left, "295px");
+    assert.equal(overlapMeas.style.top, "494px");
+    AnnotationAdapter.channelPaletteElement = {
+        style: {},
+        dataset: {}
+    };
+    context.document.getElementById = (id) => {
+        if (id === "openseadragon-viewer" || id === "viewer") return viewerEl;
+        if (id === "floating-channel-palette") return AnnotationAdapter.channelPaletteElement;
+        return null;
+    };
+    assert.equal(AnnotationAdapter.positionFloatingChannelPalette(), true);
+    assert.equal(AnnotationAdapter.channelPaletteElement.style.left, "295px");
+    assert.equal(AnnotationAdapter.channelPaletteElement.style.top, "79px");
+    const overlapZ = {
+        id: "floating-zstack-palette",
+        style: { display: "block", visibility: "" },
+        offsetLeft: 290,
+        offsetTop: 74,
+        offsetWidth: 320,
+        offsetHeight: 180,
+        getBoundingClientRect() {
+            return { left: 290, top: 74, right: 610, bottom: 254, width: 320, height: 180 };
+        }
+    };
+    const overlapCurrent = {
+        id: "floating-measurement-palette",
+        style: { display: "block", width: "380px", height: "200px" },
+        offsetWidth: 380,
+        offsetHeight: 200
+    };
+    context.document.getElementById = (id) => {
+        if (id === "floating-zstack-palette") return overlapZ;
+        if (id === "floating-measurement-palette") return overlapCurrent;
+        return null;
+    };
+    const cascaded = AnnotationAdapter.getAntiOverlapPosition(
+        295,
+        79,
+        380,
+        200,
+        "floating-measurement-palette",
+        context.document
+    );
+    assert.equal(cascaded.left, 295);
+    assert.equal(cascaded.top, 266);
+    const previousW = context.window.innerWidth;
+    const previousH = context.window.innerHeight;
+    context.window.innerWidth = 820;
+    context.window.innerHeight = 420;
+    const columnBlocker = {
+        id: "floating-zstack-palette",
+        style: { display: "block", visibility: "" },
+        getBoundingClientRect() {
+            return { left: 40, top: 40, right: 220, bottom: 360, width: 180, height: 320 };
+        }
+    };
+    const wrapped = AnnotationAdapter.getAntiOverlapPosition(
+        40,
+        40,
+        200,
+        200,
+        "floating-measurement-palette",
+        {
+            getElementById(id) {
+                return id === "floating-zstack-palette" ? columnBlocker : null;
+            }
+        }
+    );
+    assert.equal(wrapped.left, 280);
+    assert.equal(wrapped.top, 40);
+    const clamped = AnnotationAdapter.getAntiOverlapPosition(
+        900,
+        40,
+        200,
+        200,
+        "floating-measurement-palette",
+        {
+            getElementById() { return null; }
+        }
+    );
+    assert.equal(clamped.left, 600);
+    assert.equal(clamped.top, 40);
+    context.window.innerWidth = previousW;
+    context.window.innerHeight = previousH;
     context.document.getElementById = previousGet;
+}
+
+{
+    const body = { innerHTML: "old-row" };
+    const channelPalette = { style: { display: "flex" } };
+    const zPalette = { style: { display: "block" } };
+    const doc = {
+        querySelector(sel) {
+            if (sel === "#floating-channel-palette") return channelPalette;
+            if (sel === "#floating-zstack-palette") return zPalette;
+            return null;
+        },
+        getElementById(id) {
+            if (id === "measurement-results-body") return body;
+            if (id === "floating-channel-palette") return channelPalette;
+            if (id === "floating-zstack-palette") return zPalette;
+            return null;
+        }
+    };
+    AnnotationAdapter.measurementSessionList = [{ id: "9", lengthMicrons: 1, lengthPixels: 2 }];
+    assert.equal(AnnotationAdapter.resetImageControllerState(doc), true);
+    assert.equal(channelPalette.style.display, "none");
+    assert.equal(zPalette.style.display, "none");
+    assert.equal(body.innerHTML, "");
+    assert.equal(AnnotationAdapter.measurementSessionList.length, 0);
 }
 
 {
@@ -515,6 +712,179 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     assert.equal(AnnotationAdapter.isDrawing, false);
     assert.equal(AnnotationAdapter.isMeasurementModeActive, false);
     assert.equal(navEnabled, true);
+}
+
+{
+    assert.equal(AnnotationAdapter.activateImageJTool("brush"), false);
+    assert.equal(AnnotationAdapter.activateImageJTool("pan"), true);
+    assert.equal(AnnotationAdapter.activeImageJTool, "pan");
+    AnnotationAdapter.viewer = {
+        element: { classList: { toggle() {} } },
+        setMouseNavEnabled() {},
+        viewport: { resize() {}, zoomBy() {}, applyConstraints() {} }
+    };
+    assert.equal(AnnotationAdapter.activateImageJTool("zoom"), true);
+    assert.equal(AnnotationAdapter.activeImageJTool, "zoom");
+}
+
+{
+    assert.equal(AnnotationAdapter.formatChannelPaletteLabel({
+        lut: "CYAN",
+        name: "Channel 0 - DAPI"
+    }), "Cyan (DAPI)");
+    assert.equal(AnnotationAdapter.formatChannelPaletteLabel({
+        lut: "GREEN",
+        name: "MHCII"
+    }), "Green (MHCII)");
+    assert.equal(AnnotationAdapter.formatChannelPaletteLabel({
+        lut: "CYAN",
+        name: "Cyan"
+    }), "Cyan");
+}
+
+{
+    const grid = { dataset: {}, setAttribute() {} };
+    const select = { value: "1" };
+    AnnotationAdapter.channelPaletteElement = {
+        querySelector(sel) {
+            if (sel === "#floating-channel-palette-rows") return grid;
+            if (sel === "#fcp-layout-select") return select;
+            return null;
+        }
+    };
+    assert.equal(AnnotationAdapter.applyChannelPaletteLayout("2"), "2");
+    assert.equal(grid.dataset.fcpLayout, "2");
+    assert.equal(select.value, "2");
+    assert.equal(AnnotationAdapter.applyChannelPaletteLayout("wrap"), "wrap");
+    assert.equal(AnnotationAdapter.channelPaletteLayout, "wrap");
+    AnnotationAdapter.applyChannelPaletteLayout("1");
+}
+
+{
+    const splitCalls = [];
+    const grid = {
+        style: { height: "", setProperty() {} },
+        getBoundingClientRect() { return { height: 152 }; }
+    };
+    const splitter = {
+        classList: { add() {}, remove() {} },
+        addEventListener(type, fn) { splitCalls.push([type, fn]); },
+        setPointerCapture() {}
+    };
+    const palette = {
+        dataset: {},
+        querySelector(sel) {
+            if (sel === "#fcp-list-splitter") return splitter;
+            if (sel === "#floating-channel-palette-rows") return grid;
+            return null;
+        },
+        getBoundingClientRect() { return { height: 480 }; }
+    };
+    assert.equal(AnnotationAdapter.bindChannelListSplitter(palette), true);
+    assert.equal(palette.dataset.fcpListSplitterBound, "1");
+    const begin = splitCalls.find(([type]) => type === "pointerdown")?.[1];
+    assert.equal(typeof begin, "function");
+    begin({
+        button: 0,
+        clientY: 200,
+        preventDefault() {},
+        stopPropagation() {}
+    });
+    assert.equal(palette._fcpListSplit.startH, 152);
+}
+
+{
+    const cells = [];
+    const grid = {
+        replaceChildren(...nodes) {
+            cells.length = 0;
+            cells.push(...nodes);
+        }
+    };
+    const owner = {
+        createElement(tag) {
+            return {
+                tagName: String(tag).toUpperCase(),
+                className: "",
+                dataset: {},
+                innerHTML: "",
+                querySelector(sel) {
+                    if (String(sel).includes("data-fcp-visible")) {
+                        return { addEventListener() {}, checked: true };
+                    }
+                    return null;
+                },
+                addEventListener() {}
+            };
+        }
+    };
+    const palette = {
+        ownerDocument: owner,
+        querySelector(sel) {
+            if (sel === "#floating-channel-palette-rows") return grid;
+            if (sel === "#fcp-min" || sel === "#fcp-max") return { value: "0", max: "" };
+            if (sel === "#fcp-gamma") return { value: "1" };
+            if (sel === "#fcp-min-value" || sel === "#fcp-max-value" || sel === "#fcp-gamma-value") {
+                return { textContent: "" };
+            }
+            return null;
+        }
+    };
+    AnnotationAdapter.channelPaletteElement = palette;
+    AnnotationAdapter.displayController = {
+        getDisplay() {
+            return {
+                channels: Array.from({ length: 22 }, (_, i) => ({
+                    index: i,
+                    name: `Marker ${i + 1}`,
+                    lut: i % 2 ? "GREEN" : "CYAN",
+                    visible: i !== 4,
+                    black: 0,
+                    white: 58831,
+                    gamma: 1
+                }))
+            };
+        }
+    };
+    assert.equal(AnnotationAdapter.syncFloatingChannelPalette(), true);
+    assert.equal(cells.length, 22);
+    assert.equal(cells[0].tagName, "DIV");
+    assert.match(cells[0].className, /bc-channel-cell/);
+    assert.match(cells[0].innerHTML, /floating-channel-cb/);
+    assert.match(cells[0].innerHTML, /Cyan \(Marker 1\)/);
+    assert.match(cells[0].innerHTML, /checked/);
+    assert.doesNotMatch(cells[4].innerHTML, /checked/);
+}
+
+{
+    const bound = [];
+    const palette = {
+        dataset: {},
+        style: {},
+        querySelectorAll() {
+            return [{
+                dataset: { edge: "e" },
+                addEventListener(type, fn) { bound.push([type, fn]); }
+            }];
+        },
+        getBoundingClientRect() {
+            return { left: 40, top: 50, width: 400, height: 420 };
+        }
+    };
+    assert.equal(AnnotationAdapter.bindFloatingPaletteEdgeResize(palette), true);
+    assert.equal(palette.dataset.fcpEdgeResizeBound, "1");
+    const begin = bound.find(([type]) => type === "pointerdown")?.[1];
+    assert.equal(typeof begin, "function");
+    begin({
+        button: 0,
+        currentTarget: { dataset: { edge: "e" }, setPointerCapture() {} },
+        clientX: 440,
+        clientY: 80,
+        preventDefault() {},
+        stopPropagation() {}
+    });
+    assert.equal(palette._fcpEdgeResize.edge, "e");
+    assert.equal(palette._fcpEdgeResize.startW, 400);
 }
 
 console.log("floating-channel-palette.test.js: ok");

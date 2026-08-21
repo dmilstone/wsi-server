@@ -2298,8 +2298,84 @@ class AnnotationAdapter {
         return AnnotationAdapter.collapseAiLabsPanel(doc);
     }
 
+    /**
+     * Mandatory tear-down when the left-column image browser selects a new slide.
+     * Hides leftover floating controllers, clears measurement rows, and resets
+     * brightness/contrast so the next image's channel matrix can bind cleanly.
+     */
+    static resetImageControllerState(root = null) {
+        const document = root && typeof root.querySelector === "function"
+            ? root
+            : (typeof globalThis !== "undefined" && globalThis.document) || root;
+        if (!document) return false;
+
+        // 1. Hide/Destroy active floating panels from the previous slide view context
+        let controllersToHide = ['#floating-channel-palette', '#floating-ai-labs-palette', '#floating-zstack-palette', '#floating-measurement-palette'];
+        controllersToHide.forEach(selector => {
+            let el = document.querySelector(selector)
+                || document.getElementById?.(String(selector).replace(/^#/, ""));
+            if (el) el.style.display = 'none';
+        });
+
+        // 2. Clear out measurement arrays and table listings
+        let measurementBody = document.getElementById('measurement-results-body');
+        if (measurementBody) measurementBody.innerHTML = '';
+        let savedMeasurementsArray = AnnotationAdapter.measurementSessionList;
+        if (typeof savedMeasurementsArray !== 'undefined') savedMeasurementsArray = [];
+        AnnotationAdapter.measurementSessionList = [];
+        AnnotationAdapter.clearMeasurementResultsTable(document);
+
+        // 3. Reset image adjustments back to clean factory default profiles
+        function resetBrightnessContrastSettings() {
+            AnnotationAdapter.resetBrightnessContrastSettings(document);
+        }
+        if (typeof resetBrightnessContrastSettings === 'function') {
+            resetBrightnessContrastSettings(); // Forces channel multipliers, min/max limits, and gammas back to default layers
+        }
+        return true;
+    }
+
+    /**
+     * Factory-default B&C sliders, histogram, and channel window fields so a
+     * newly selected 3-channel fluorescence or brightfield RGB matrix can
+     * rebuild checkboxes and sliders from its own metadata.
+     */
+    static resetBrightnessContrastSettings(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.channelPaletteSelectedIndex = 0;
+        AnnotationAdapter.channelPaletteHistogram = null;
+        AnnotationAdapter.clearViewportTileContrastFilter(
+            AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer
+        );
+        const rows = doc?.getElementById?.("floating-channel-palette-rows");
+        if (rows && typeof rows.replaceChildren === "function") rows.replaceChildren();
+        else if (rows) rows.innerHTML = "";
+        const scaleMax = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        const min = doc?.getElementById?.("fcp-min");
+        const max = doc?.getElementById?.("fcp-max");
+        const gamma = doc?.getElementById?.("fcp-gamma");
+        if (min) {
+            min.max = String(scaleMax);
+            min.value = "0";
+        }
+        if (max) {
+            max.max = String(scaleMax);
+            max.value = String(scaleMax);
+        }
+        if (gamma) gamma.value = "1.00";
+        const minOut = doc?.getElementById?.("fcp-min-value");
+        const maxOut = doc?.getElementById?.("fcp-max-value");
+        const gammaOut = doc?.getElementById?.("fcp-gamma-value");
+        if (minOut) minOut.textContent = "0";
+        if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(scaleMax);
+        if (gammaOut) gammaOut.textContent = "1.00";
+        return true;
+    }
+
     static onSlideClicked(image, doc = null) {
         const root = doc || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.resetImageControllerState(root);
         // Force reset and hide the floating Z-stack controller before evaluating the next image properties
         let zStackPalette = root?.getElementById?.("floating-zstack-palette")
             || (typeof document !== "undefined" ? document.getElementById("floating-zstack-palette") : null);
@@ -3049,6 +3125,21 @@ class AnnotationAdapter {
     static measureEndImageY = null;
     /** Last pointer id captured during a measurement drag. */
     static lastPointerId = null;
+    /** Active ImageJ-style secondary toolbar tool (`pan`, `ruler`, …). */
+    static activeImageJTool = "pan";
+    static imageJLookupInverted = false;
+    static imageJMultiPoints = [];
+    static IMAGEJ_PENDING_TOOLS = {
+        roundrect: true,
+        freehand: true,
+        angle: true,
+        arrow: true,
+        brush: true,
+        dropper: true,
+        fill: true,
+        spray: true,
+        options: true
+    };
     /** `single` (one-shot) or `multiple` (stay in mode until icon/Enter escape). */
     static _measurementEntryMode = "single";
     /** Active OpenSeadragon viewer (for mouse-nav enable/disable). */
@@ -3275,6 +3366,7 @@ class AnnotationAdapter {
             AnnotationAdapter.bindAiVectorOverlayHandlers(AnnotationAdapter.viewer);
         }
         AnnotationAdapter.bindMeasurementKeyboardEscape();
+        AnnotationAdapter.bindSecondaryAnnotationToolbar();
         return AnnotationAdapter.viewer;
     }
 
@@ -3317,6 +3409,7 @@ class AnnotationAdapter {
     static channelPaletteSelectedIndex = 0;
     static channelPaletteHistogram = null;
     static channelPaletteDrag = null;
+    static channelPaletteLayout = "1";
 
     static setDisplayController(controller) {
         AnnotationAdapter.displayController = controller && typeof controller === "object"
@@ -3416,6 +3509,9 @@ class AnnotationAdapter {
         AnnotationAdapter.bindChannelPaletteDrag(doc);
         AnnotationAdapter.bindChannelPaletteControls(doc);
         AnnotationAdapter.bindFloatingPaletteResize(palette);
+        AnnotationAdapter.bindFloatingPaletteEdgeResize(palette);
+        AnnotationAdapter.bindChannelListSplitter(palette);
+        AnnotationAdapter.applyChannelPaletteLayout(AnnotationAdapter.channelPaletteLayout, doc);
         return palette || button || null;
     }
 
@@ -3530,6 +3626,7 @@ class AnnotationAdapter {
                 dx: Number(point.clientX) - rect.left,
                 dy: Number(point.clientY) - rect.top
             };
+            if (palette.dataset) palette.dataset.fcpUserMoved = "1";
             const viewer = AnnotationAdapter.viewer;
             if (viewer && typeof viewer.setMouseNavEnabled === "function") {
                 viewer.setMouseNavEnabled(false);
@@ -3581,6 +3678,202 @@ class AnnotationAdapter {
         return true;
     }
 
+    static bindFloatingPaletteEdgeResize(palette) {
+        if (!palette || palette.dataset?.fcpEdgeResizeBound === "1") return false;
+        const handles = palette.querySelectorAll?.(".fcp-edge-handle");
+        if (!handles || !handles.length) return false;
+        const minWidth = 340;
+        const minHeight = 400;
+
+        const endEdgeResize = function endEdgeResize(event) {
+            palette._fcpEdgeResize = null;
+            AnnotationAdapter.isResizingWindow = false;
+            if (event && event.target && typeof event.target.releasePointerCapture === "function") {
+                try { event.target.releasePointerCapture(event.pointerId); } catch (_error) { /* ignore */ }
+            }
+            if (typeof window !== "undefined") {
+                window.removeEventListener("mousemove", moveEdgeResize);
+                window.removeEventListener("mouseup", endEdgeResize);
+                window.removeEventListener("pointermove", moveEdgeResize, true);
+                window.removeEventListener("pointerup", endEdgeResize, true);
+                window.removeEventListener("pointercancel", endEdgeResize, true);
+            }
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer) {
+                if (typeof viewer.setMouseNavEnabled === "function") viewer.setMouseNavEnabled(true);
+                if (viewer.gestureSettingsMouse) viewer.gestureSettingsMouse.scrollToZoom = true;
+            }
+        };
+
+        const moveEdgeResize = function moveEdgeResize(event) {
+            const state = palette._fcpEdgeResize;
+            if (!state || !palette.style) return;
+            const point = event?.touches?.[0] || event;
+            const dx = Number(point.clientX) - state.startX;
+            const dy = Number(point.clientY) - state.startY;
+            const edge = state.edge || "";
+            let width = state.startW;
+            let height = state.startH;
+            let left = state.startL;
+            let top = state.startT;
+            if (edge.includes("e")) width = Math.max(minWidth, state.startW + dx);
+            if (edge.includes("s")) height = Math.max(minHeight, state.startH + dy);
+            if (edge.includes("w")) {
+                width = Math.max(minWidth, state.startW - dx);
+                left = state.startL + (state.startW - width);
+            }
+            if (edge.includes("n")) {
+                height = Math.max(minHeight, state.startH - dy);
+                top = state.startT + (state.startH - height);
+            }
+            palette.style.width = `${width}px`;
+            palette.style.height = `${height}px`;
+            palette.style.left = `${left}px`;
+            palette.style.top = `${top}px`;
+            palette.style.right = "auto";
+            palette.style.bottom = "auto";
+        };
+
+        const beginEdgeResize = function beginEdgeResize(event) {
+            if (event.button != null && event.button !== 0) return;
+            const handle = event.currentTarget;
+            const rect = palette.getBoundingClientRect?.() || { left: 0, top: 0, width: minWidth, height: minHeight };
+            const point = event?.touches?.[0] || event;
+            AnnotationAdapter.isResizingWindow = true;
+            palette._fcpEdgeResize = {
+                edge: String(handle?.dataset?.edge || ""),
+                startX: Number(point.clientX),
+                startY: Number(point.clientY),
+                startW: rect.width,
+                startH: rect.height,
+                startL: rect.left,
+                startT: rect.top
+            };
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(false);
+            }
+            if (typeof window !== "undefined") {
+                window.addEventListener("mousemove", moveEdgeResize);
+                window.addEventListener("mouseup", endEdgeResize);
+                window.addEventListener("pointermove", moveEdgeResize, true);
+                window.addEventListener("pointerup", endEdgeResize, true);
+                window.addEventListener("pointercancel", endEdgeResize, true);
+            }
+            if (typeof handle.setPointerCapture === "function" && event.pointerId != null) {
+                try { handle.setPointerCapture(event.pointerId); } catch (_error) { /* ignore */ }
+            }
+            event.preventDefault?.();
+            event.stopPropagation?.();
+        };
+
+        Array.from(handles).forEach(handle => {
+            if (!handle?.addEventListener) return;
+            handle.addEventListener("pointerdown", beginEdgeResize);
+            handle.addEventListener("mousedown", beginEdgeResize);
+        });
+        if (palette.dataset) palette.dataset.fcpEdgeResizeBound = "1";
+        return true;
+    }
+
+    static formatChannelPaletteLabel(channel) {
+        const lut = String(channel?.lut || "").trim().toUpperCase();
+        const lutTitle = lut ? lut.charAt(0) + lut.slice(1).toLowerCase() : "";
+        const epitope = String(AnnotationAdapter.compactChannelName(channel) || "").trim();
+        if (lutTitle && epitope && epitope.toUpperCase() !== lut) {
+            return `${lutTitle} (${epitope})`;
+        }
+        return epitope || lutTitle || `Ch ${channel?.index ?? 0}`;
+    }
+
+    static applyChannelPaletteLayout(layout, root = null) {
+        const mode = ["1", "2", "3", "wrap"].includes(String(layout)) ? String(layout) : "1";
+        AnnotationAdapter.channelPaletteLayout = mode;
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const grid = palette?.querySelector?.("#floating-channel-palette-rows")
+            || doc?.getElementById?.("floating-channel-palette-rows");
+        if (grid) {
+            grid.dataset.fcpLayout = mode;
+            if (typeof grid.setAttribute === "function") grid.setAttribute("data-fcp-layout", mode);
+        }
+        const select = palette?.querySelector?.("#fcp-layout-select")
+            || doc?.getElementById?.("fcp-layout-select");
+        if (select && select.value !== mode) select.value = mode;
+        return mode;
+    }
+
+    static bindChannelListSplitter(palette) {
+        if (!palette || palette.dataset?.fcpListSplitterBound === "1") return false;
+        const splitter = palette.querySelector?.("#fcp-list-splitter");
+        const grid = palette.querySelector?.("#floating-channel-palette-rows");
+        if (!splitter?.addEventListener || !grid) return false;
+
+        const endSplit = function endSplit(event) {
+            palette._fcpListSplit = null;
+            splitter.classList?.remove?.("is-dragging");
+            if (event && event.target && typeof event.target.releasePointerCapture === "function") {
+                try { event.target.releasePointerCapture(event.pointerId); } catch (_error) { /* ignore */ }
+            }
+            if (typeof window !== "undefined") {
+                window.removeEventListener("mousemove", moveSplit);
+                window.removeEventListener("mouseup", endSplit);
+                window.removeEventListener("pointermove", moveSplit, true);
+                window.removeEventListener("pointerup", endSplit, true);
+                window.removeEventListener("pointercancel", endSplit, true);
+            }
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(true);
+            }
+        };
+
+        const moveSplit = function moveSplit(event) {
+            const state = palette._fcpListSplit;
+            if (!state || !grid.style) return;
+            const point = event?.touches?.[0] || event;
+            const dy = Number(point.clientY) - state.startY;
+            const minH = 72;
+            const paletteH = palette.getBoundingClientRect?.().height || 400;
+            const maxH = Math.max(minH, paletteH - 220);
+            const next = Math.max(minH, Math.min(maxH, state.startH + dy));
+            grid.style.height = `${next}px`;
+            grid.style.setProperty?.("--fcp-list-height", `${next}px`);
+        };
+
+        const beginSplit = function beginSplit(event) {
+            if (event.button != null && event.button !== 0) return;
+            const rect = grid.getBoundingClientRect?.() || { height: 152 };
+            const point = event?.touches?.[0] || event;
+            palette._fcpListSplit = {
+                startY: Number(point.clientY),
+                startH: rect.height
+            };
+            splitter.classList?.add?.("is-dragging");
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(false);
+            }
+            if (typeof window !== "undefined") {
+                window.addEventListener("mousemove", moveSplit);
+                window.addEventListener("mouseup", endSplit);
+                window.addEventListener("pointermove", moveSplit, true);
+                window.addEventListener("pointerup", endSplit, true);
+                window.addEventListener("pointercancel", endSplit, true);
+            }
+            if (typeof splitter.setPointerCapture === "function" && event.pointerId != null) {
+                try { splitter.setPointerCapture(event.pointerId); } catch (_error) { /* ignore */ }
+            }
+            event.preventDefault?.();
+            event.stopPropagation?.();
+        };
+
+        splitter.addEventListener("pointerdown", beginSplit);
+        splitter.addEventListener("mousedown", beginSplit);
+        if (palette.dataset) palette.dataset.fcpListSplitterBound = "1";
+        return true;
+    }
+
     static bindChannelPaletteDrag(root = null) {
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const palette = AnnotationAdapter.resolvePaletteNode(doc);
@@ -3599,6 +3892,7 @@ class AnnotationAdapter {
         const gamma = palette.querySelector?.("#fcp-gamma") || doc?.getElementById?.("fcp-gamma");
         const autoBtn = palette.querySelector?.("#fcp-auto") || doc?.getElementById?.("fcp-auto");
         const resetBtn = palette.querySelector?.("#fcp-reset") || doc?.getElementById?.("fcp-reset");
+        const layoutSelect = palette.querySelector?.("#fcp-layout-select") || doc?.getElementById?.("fcp-layout-select");
         const onSlide = () => {
             AnnotationAdapter.applyChannelPaletteWindowFromSliders(doc, { live: true });
         };
@@ -3615,6 +3909,9 @@ class AnnotationAdapter {
             event.preventDefault();
             const controller = AnnotationAdapter.displayController;
             if (typeof controller?.resetDisplay === "function") controller.resetDisplay();
+        });
+        layoutSelect?.addEventListener?.("change", event => {
+            AnnotationAdapter.applyChannelPaletteLayout(event.target?.value || "1", doc);
         });
         if (palette.dataset) palette.dataset.fcpControlsBound = "1";
         return true;
@@ -3667,7 +3964,7 @@ class AnnotationAdapter {
             AnnotationAdapter.snapshotChannelPaletteSidebar(doc);
         }
         AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
-        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "17.5rem", minHeight: "25rem" });
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "340px", minHeight: "400px" });
         palette.hidden = false;
         palette.removeAttribute?.("hidden");
         if (palette.style) palette.style.display = "flex";
@@ -3682,6 +3979,12 @@ class AnnotationAdapter {
         const zDepth = doc.getElementById?.("z-depth-controls");
         if (zDepth && !zDepth.hidden) {
             AnnotationAdapter.setFloatingZStackPaletteVisible(true, doc);
+        }
+        AnnotationAdapter.positionFloatingChannelPalette(doc);
+        const measPalette = AnnotationAdapter.resolveMeasurementPaletteNode(doc);
+        if (measPalette && measPalette.dataset?.fcpUserMoved !== "1"
+            && AnnotationAdapter.isFloatingPaletteVisible(measPalette)) {
+            AnnotationAdapter.positionFloatingMeasurementPalette(doc);
         }
         return true;
     }
@@ -4043,34 +4346,232 @@ class AnnotationAdapter {
     }
 
     /**
-     * Upper-left of the image container, or stacked under an open Z-stack palette.
-     * Uses cascaded offsetParent geometry (not getBoundingClientRect / body view rect).
-     * Same path for fluorescence and brightfield.
+     * Compact launch origin: upper-left of `#openseadragon-viewer` plus 15px,
+     * using cascaded offsetParent geometry.
      */
-    static positionFloatingMeasurementPalette(root = null) {
+    static viewerStageLaunchOrigin(root = null) {
         const doc = AnnotationAdapter.resolvePaletteRoot(root)
             || (typeof document !== "undefined" ? document : null);
-        if (!doc?.getElementById) return false;
-
+        if (!doc?.getElementById) return null;
         let viewerEl = doc.getElementById("openseadragon-viewer")
             || (typeof document !== "undefined" ? document.getElementById("openseadragon-viewer") : null)
             || doc.getElementById("viewer")
             || AnnotationAdapter.viewer?.element
             || AnnotationAdapter.viewer?.container
             || null;
-
-        let targetLeft = 15;
-        let targetTop = 15;
+        let left = 15;
+        let top = 15;
         if (viewerEl) {
-            targetLeft = viewerEl.offsetLeft + 15;
-            targetTop = viewerEl.offsetTop + 15;
+            left = viewerEl.offsetLeft + 15;
+            top = viewerEl.offsetTop + 15;
             let offsetParent = viewerEl.offsetParent;
             while (offsetParent) {
-                targetLeft += Number(offsetParent.offsetLeft) || 0;
-                targetTop += Number(offsetParent.offsetTop) || 0;
+                left += Number(offsetParent.offsetLeft) || 0;
+                top += Number(offsetParent.offsetTop) || 0;
                 offsetParent = offsetParent.offsetParent;
             }
         }
+        return { left, top, viewerEl, doc };
+    }
+
+    static isFloatingPaletteVisible(el) {
+        if (!el) return false;
+        if (el.hidden) return false;
+        if (el.style?.display === "none" || el.style?.visibility === "hidden") return false;
+        if (el.getAttribute?.("aria-hidden") === "true") return false;
+        return true;
+    }
+
+    static floatingPaletteBox(el, fallbackWidth = 340, fallbackHeight = 200) {
+        if (!el) return null;
+        const left = Number(el.offsetLeft) || parseFloat(el.style?.left) || 0;
+        const top = Number(el.offsetTop) || parseFloat(el.style?.top) || 0;
+        const width = Number(el.offsetWidth) || parseFloat(el.style?.width) || fallbackWidth;
+        const height = Number(el.offsetHeight) || parseFloat(el.style?.height) || fallbackHeight;
+        return { left, top, width, height };
+    }
+
+    static palettesOverlap(a, b) {
+        if (!a || !b) return false;
+        return a.left < b.left + b.width
+            && a.left + a.width > b.left
+            && a.top < b.top + b.height
+            && a.top + a.height > b.top;
+    }
+
+    static floatingPaletteClientBox(el, fallbackWidth = 340, fallbackHeight = 200) {
+        if (el && typeof el.getBoundingClientRect === "function") {
+            try {
+                const rect = el.getBoundingClientRect();
+                if (rect && Number(rect.width) > 0 && Number(rect.height) > 0) {
+                    return {
+                        left: Number(rect.left),
+                        top: Number(rect.top),
+                        width: Number(rect.width),
+                        height: Number(rect.height)
+                    };
+                }
+            } catch (_error) { /* fall through to offset box */ }
+        }
+        return AnnotationAdapter.floatingPaletteBox(el, fallbackWidth, fallbackHeight);
+    }
+
+    /**
+     * Collision-aware tiling with viewport clamping. Cascades below occupants,
+     * then wraps into a new column when the box would clip the bottom edge,
+     * and finally clamps to the visible browser window.
+     */
+    static getAntiOverlapPosition(defaultLeft, defaultTop, width, height, currentPanelId, root = null) {
+        let panel = null;
+        let left0 = defaultLeft;
+        let top0 = defaultTop;
+        let boxW = width;
+        let boxH = height;
+        let panelId = currentPanelId;
+        let scope = root;
+        if (defaultLeft && typeof defaultLeft === "object") {
+            panel = defaultLeft;
+            left0 = defaultTop;
+            top0 = width;
+            scope = height && typeof height === "object" ? height : root;
+            panelId = panel.id || "";
+            boxW = Number(panel.offsetWidth) || parseFloat(panel.style?.width) || 380;
+            boxH = Number(panel.offsetHeight) || parseFloat(panel.style?.height) || 200;
+        }
+
+        const document = (scope && (typeof scope.querySelectorAll === "function" || typeof scope.getElementById === "function"))
+            ? scope
+            : AnnotationAdapter.resolvePaletteRoot(scope)
+                || (typeof globalThis !== "undefined" && globalThis.document)
+                || null;
+
+        function getAntiOverlapPosition(defaultLeft, defaultTop, width, height, currentPanelId) {
+            let finalLeft = defaultLeft;
+            let finalTop = defaultTop;
+            let overlapDetected = true;
+            let safetyCounter = 0;
+
+            // Get the current usable viewport limits (excluding edges)
+            let maxViewportWidth = window.innerWidth - 20;
+            let maxViewportHeight = window.innerHeight - 20;
+            if (!Number.isFinite(maxViewportWidth) || maxViewportWidth <= 0) maxViewportWidth = 1900;
+            if (!Number.isFinite(maxViewportHeight) || maxViewportHeight <= 0) maxViewportHeight = 1060;
+
+            // Target all active visible floating panels
+            let activePanels = [];
+            if (document && typeof document.querySelectorAll === "function") {
+                activePanels = Array.from(document.querySelectorAll('.floating-palette, [id^="floating-"], #floating-zstack-palette'))
+                    .filter(p => p !== panel && p.id !== currentPanelId && p.style.display !== 'none' && p.style.visibility !== 'hidden');
+            } else if (document && typeof document.getElementById === "function") {
+                const ids = [
+                    "floating-channel-palette",
+                    "floating-ai-labs-palette",
+                    "floating-admin-palette",
+                    "floating-zstack-palette",
+                    "floating-measurement-palette"
+                ];
+                activePanels = ids
+                    .filter(id => id !== currentPanelId)
+                    .map(id => document.getElementById(id))
+                    .filter(p => p && p !== panel && p.id !== currentPanelId && p.style?.display !== "none" && p.style?.visibility !== "hidden");
+            }
+
+            while (overlapDetected && safetyCounter < 15) {
+                overlapDetected = false;
+                let currentRect = { left: finalLeft, top: finalTop, right: finalLeft + width, bottom: finalTop + height };
+
+                // 1. Viewport Edge Boundary Enforcement: If a cascade pushes the box past the bottom screen edge, wrap it horizontally
+                if (currentRect.bottom > maxViewportHeight) {
+                    finalTop = defaultTop; // Reset to top vertical level
+                    finalLeft += 240;      // Step rightward into a clean secondary column layout
+                    overlapDetected = true;
+                    safetyCounter++;
+                    continue;
+                }
+
+                // 2. Window Intersection Detection Loop
+                for (let occupant of activePanels) {
+                    let r = null;
+                    try {
+                        r = typeof occupant.getBoundingClientRect === "function"
+                            ? occupant.getBoundingClientRect()
+                            : null;
+                    } catch (_error) {
+                        r = null;
+                    }
+                    if (!r || !Number.isFinite(Number(r.left))) {
+                        const box = AnnotationAdapter.floatingPaletteClientBox(occupant);
+                        if (!box) continue;
+                        r = {
+                            left: box.left,
+                            top: box.top,
+                            right: box.left + box.width,
+                            bottom: box.top + box.height
+                        };
+                    }
+                    if (!(currentRect.right < r.left || currentRect.left > r.right ||
+                          currentRect.bottom < r.top || currentRect.top > r.bottom)) {
+                        overlapDetected = true;
+                        // Cascade down directly below this colliding block
+                        finalTop = r.bottom + 12;
+                        break;
+                    }
+                }
+                safetyCounter++;
+            }
+
+            // Final Hard Safety Clamping Guard
+            if (finalLeft + width > maxViewportWidth) finalLeft = maxViewportWidth - width;
+            if (finalTop + height > maxViewportHeight) finalTop = maxViewportHeight - height;
+            if (finalLeft < 0) finalLeft = 10;
+            if (finalTop < 0) finalTop = 10;
+
+            return { left: finalLeft, top: finalTop };
+        }
+
+        return getAntiOverlapPosition(
+            Number(left0) || 0,
+            Number(top0) || 0,
+            Number(boxW) || 380,
+            Number(boxH) || 200,
+            String(panelId || "")
+        );
+    }
+
+    static positionFloatingChannelPalette(root = null) {
+        const origin = AnnotationAdapter.viewerStageLaunchOrigin(root);
+        if (!origin) return false;
+        const palette = AnnotationAdapter.resolvePaletteNode(origin.doc);
+        if (!palette?.style) return false;
+        const width = Number(palette.offsetWidth) || parseFloat(palette.style?.width) || 340;
+        const height = Number(palette.offsetHeight) || parseFloat(palette.style?.height) || 400;
+        const cascaded = AnnotationAdapter.getAntiOverlapPosition(
+            origin.left,
+            origin.top,
+            width,
+            height,
+            palette.id || "floating-channel-palette",
+            origin.doc
+        );
+        palette.style.left = `${cascaded.left}px`;
+        palette.style.top = `${cascaded.top}px`;
+        palette.style.right = "auto";
+        palette.style.bottom = "auto";
+        if (palette.dataset) palette.dataset.fcpCompactLaunch = "1";
+        return true;
+    }
+
+    /**
+     * Upper-left of the image container, or stacked under an open Z-stack palette.
+     * Uses cascaded offsetParent geometry (not getBoundingClientRect / body view rect).
+     * Same path for fluorescence and brightfield.
+     */
+    static positionFloatingMeasurementPalette(root = null) {
+        const origin = AnnotationAdapter.viewerStageLaunchOrigin(root);
+        if (!origin) return false;
+        const doc = origin.doc;
+        let targetLeft = origin.left;
+        let targetTop = origin.top;
 
         let zStack = doc.getElementById("floating-zstack-palette");
         if (zStack && zStack.style.display !== "none" && zStack.style.visibility !== "hidden") {
@@ -4086,6 +4587,37 @@ class AnnotationAdapter {
 
         let measPalette = doc.getElementById("floating-measurement-palette")
             || AnnotationAdapter.measurementPaletteElement;
+        const bcPalette = doc.getElementById("floating-channel-palette")
+            || AnnotationAdapter.channelPaletteElement;
+        if (bcPalette && AnnotationAdapter.isFloatingPaletteVisible(bcPalette) && measPalette) {
+            const measBox = {
+                left: targetLeft,
+                top: targetTop,
+                width: Number(measPalette.offsetWidth) || parseFloat(measPalette.style?.width) || 380,
+                height: Number(measPalette.offsetHeight) || parseFloat(measPalette.style?.height) || 200
+            };
+            const bcBox = AnnotationAdapter.floatingPaletteBox(bcPalette, 340, 400);
+            if (AnnotationAdapter.palettesOverlap(measBox, bcBox)) {
+                // Overlap Collide Detected! Cascade Saved Measurements cleanly below B&C.
+                targetTop = bcBox.top + bcBox.height + 15;
+                targetLeft = bcBox.left;
+            }
+        }
+        if (measPalette) {
+            const width = Number(measPalette.offsetWidth) || parseFloat(measPalette.style?.width) || 380;
+            const height = Number(measPalette.offsetHeight) || parseFloat(measPalette.style?.height) || 200;
+            const cascaded = AnnotationAdapter.getAntiOverlapPosition(
+                targetLeft,
+                targetTop,
+                width,
+                height,
+                measPalette.id || "floating-measurement-palette",
+                doc
+            );
+            targetLeft = cascaded.left;
+            targetTop = cascaded.top;
+        }
+
         if (!measPalette?.style) return false;
         measPalette.style.left = targetLeft + "px";
         measPalette.style.top = targetTop + "px";
@@ -4173,20 +4705,23 @@ class AnnotationAdapter {
         if (body && typeof body.replaceChildren === "function") {
             const owner = palette.ownerDocument || doc;
             const rows = channels.map((channel, index) => {
-                const row = owner.createElement("tr");
-                row.className = index === AnnotationAdapter.channelPaletteSelectedIndex ? "is-selected" : "";
+                const row = owner.createElement("div");
+                row.className = index === AnnotationAdapter.channelPaletteSelectedIndex
+                    ? "bc-channel-cell is-selected"
+                    : "bc-channel-cell";
                 row.dataset.channelIndex = String(channel.index ?? index);
                 const color = AnnotationAdapter.channelPaletteColor(channel);
-                const name = AnnotationAdapter.escapePaletteHtml(AnnotationAdapter.compactChannelName(channel));
+                const name = AnnotationAdapter.escapePaletteHtml(
+                    AnnotationAdapter.formatChannelPaletteLabel(channel)
+                );
                 row.innerHTML = `
-                    <td><input type="checkbox" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}"></td>
-                    <td><span class="fcp-swatch" style="background:${color}"></span></td>
-                    <td>${name}</td>
-                    <td>${AnnotationAdapter.formatChannelLevel(channel.black)}</td>
-                    <td>${AnnotationAdapter.formatChannelLevel(channel.white)}</td>
+                    <input type="checkbox" class="floating-channel-cb" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}">
+                    <span class="fcp-swatch" style="background:${color}"></span>
+                    <span class="bc-channel-name" style="color:${color}">${name}</span>
+                    <span class="bc-channel-range">${AnnotationAdapter.formatChannelLevel(channel.black)} – ${AnnotationAdapter.formatChannelLevel(channel.white)}</span>
                 `;
                 row.addEventListener("click", event => {
-                    if (event.target?.closest?.("input")) return;
+                    if (event.target?.closest?.("input, .floating-channel-cb")) return;
                     AnnotationAdapter.channelPaletteSelectedIndex = index;
                     AnnotationAdapter.syncFloatingChannelPalette(doc);
                     AnnotationAdapter.refreshChannelPaletteHistogram(doc);
@@ -4638,9 +5173,271 @@ class AnnotationAdapter {
                 viewer.setMouseNavEnabled(true);
             }
             AnnotationAdapter.escapeMeasurementMultipleMode(e);
+            AnnotationAdapter.activateImageJTool("pan");
+            return true;
+        }
+        if (e.key === "Escape" || e.key === "Esc") {
+            const tag = String(e.target?.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "textarea" || Boolean(e.target?.isContentEditable)) return false;
+            if (typeof e.preventDefault === "function") e.preventDefault();
+            AnnotationAdapter.releaseMeasurementDrawingAfterExport();
+            AnnotationAdapter.activateImageJTool("pan");
+            return true;
+        }
+        const drawingTool = AnnotationAdapter.activeImageJTool;
+        if ((e.key === "Enter" || e.key === "Return")
+            && (drawingTool === "polygon" || drawingTool === "multipoint" || drawingTool === "wand" || drawingTool === "text")) {
+            if (typeof e.preventDefault === "function") e.preventDefault();
+            AnnotationAdapter.releaseMeasurementPointerLock(e);
+            AnnotationAdapter.activateImageJTool("pan");
             return true;
         }
         return false;
+    }
+
+    static bindSecondaryAnnotationToolbar(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        if (!doc?.getElementById) return false;
+        const toggle = doc.getElementById("toggle-secondary-annotation-toolbar");
+        if (toggle && toggle.dataset?.ijToggleBound !== "1") {
+            toggle.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.toggleSecondaryAnnotationToolbar(doc);
+            });
+            if (toggle.dataset) toggle.dataset.ijToggleBound = "1";
+        }
+        const bar = doc.getElementById("secondary-annotation-toolbar");
+        if (bar && bar.dataset?.ijBarBound !== "1") {
+            bar.addEventListener("click", event => {
+                const btn = event.target?.closest?.(".ij-tool");
+                if (!btn) return;
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.activateImageJTool(btn.getAttribute("data-ij-tool"), {
+                    button: btn,
+                    event
+                });
+            });
+            if (bar.dataset) bar.dataset.ijBarBound = "1";
+        }
+        AnnotationAdapter.bindImageJViewerClicks();
+        return true;
+    }
+
+    static toggleSecondaryAnnotationToolbar(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const bar = doc?.getElementById?.("secondary-annotation-toolbar");
+        const toggle = doc?.getElementById?.("toggle-secondary-annotation-toolbar");
+        if (!bar) return false;
+        const opening = bar.style.display === "none"
+            || bar.hidden
+            || !bar.classList?.contains?.("is-open");
+        if (opening) {
+            bar.hidden = false;
+            bar.removeAttribute?.("hidden");
+            bar.classList?.add?.("is-open");
+            if (bar.style) bar.style.display = "flex";
+        } else {
+            bar.classList?.remove?.("is-open");
+            bar.hidden = true;
+            bar.setAttribute?.("hidden", "");
+            if (bar.style) bar.style.display = "none";
+        }
+        if (toggle?.setAttribute) toggle.setAttribute("aria-pressed", String(opening));
+        AnnotationAdapter.relayoutViewerAfterToolbarChange();
+        return opening;
+    }
+
+    static relayoutViewerAfterToolbarChange() {
+        const viewer = AnnotationAdapter.viewer;
+        if (viewer?.viewport && typeof viewer.viewport.resize === "function") {
+            try { viewer.viewport.resize(); } catch (_error) { /* ignore */ }
+        }
+        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+            try { window.dispatchEvent(new Event("resize")); } catch (_error) { /* ignore */ }
+        }
+        return true;
+    }
+
+    static bindImageJViewerClicks() {
+        if (typeof document === "undefined" || document._wsiImageJClicksBound) return false;
+        document.addEventListener("click", event => {
+            const tool = AnnotationAdapter.activeImageJTool;
+            if (!tool || tool === "pan" || tool === "ruler" || tool === "rectangle"
+                || tool === "oval" || tool === "polygon") {
+                return;
+            }
+            if (event.target?.closest?.("#secondary-annotation-toolbar, header, aside")) return;
+            const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
+            if (!host || (typeof host.contains === "function" && !host.contains(event.target))) return;
+            if (tool === "zoom") AnnotationAdapter.handleImageJZoomClick(event);
+            else if (tool === "text") AnnotationAdapter.handleImageJTextClick(event);
+            else if (tool === "multipoint") AnnotationAdapter.handleImageJMultiPointClick(event);
+            else if (tool === "wand") AnnotationAdapter.handleImageJWandClick(event);
+        }, true);
+        document._wsiImageJClicksBound = true;
+        return true;
+    }
+
+    static syncImageJToolChrome(tool) {
+        const doc = typeof document !== "undefined" ? document : null;
+        const buttons = doc?.querySelectorAll?.("#secondary-annotation-toolbar .ij-tool");
+        if (!buttons) return false;
+        for (const btn of buttons) {
+            const id = btn.getAttribute("data-ij-tool");
+            if (id === "overlay" || id === "invert") continue;
+            btn.setAttribute("aria-pressed", String(id === tool));
+        }
+        return true;
+    }
+
+    static activateImageJTool(tool, options = {}) {
+        const name = String(tool || "").toLowerCase();
+        if (!name) return false;
+        if (AnnotationAdapter.IMAGEJ_PENDING_TOOLS[name]) {
+            console.info("Pending...", name);
+            return false;
+        }
+        if (name === "overlay") return AnnotationAdapter.toggleImageJOverlay();
+        if (name === "invert") return AnnotationAdapter.toggleImageJInvert();
+
+        const spike = options.annotationSpike || AnnotationAdapter.annotationSpike;
+        const viewer = AnnotationAdapter.viewer;
+        AnnotationAdapter.activeImageJTool = name;
+        AnnotationAdapter.syncImageJToolChrome(name);
+        AnnotationAdapter.setMeasurementEntryMode(name === "ruler" ? "multiple" : "single");
+
+        if (name === "ruler") {
+            try { spike?.setDrawingEnabled?.(false); } catch (_error) { /* ignore */ }
+            if (!AnnotationAdapter.isMeasurementModeActive) {
+                AnnotationAdapter.onMeasureModeButtonClick(options.event, { annotationSpike: spike });
+            }
+            return true;
+        }
+
+        if (name !== "pan") {
+            AnnotationAdapter.releaseMeasurementPointerLock(options.event || {});
+        } else if (AnnotationAdapter.isMeasurementModeActive || AnnotationAdapter.isDrawing) {
+            AnnotationAdapter.releaseMeasurementPointerLock(options.event || {});
+        }
+
+        try { spike?.setDrawingEnabled?.(false); } catch (_error) { /* ignore */ }
+
+        if (name === "pan") {
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(true);
+            }
+            AnnotationAdapter.setMeasureTracking(false);
+            return true;
+        }
+
+        if (name === "rectangle" || name === "oval" || name === "polygon") {
+            const drawingTool = name === "oval" ? "ellipse" : name;
+            try { spike?.annotator?.setDrawingTool?.(drawingTool); } catch (_error) {
+                try { spike?.annotator?.setDrawingTool?.("rectangle"); } catch (_ignored) { /* ignore */ }
+            }
+            try { spike?.setDrawingEnabled?.(true); } catch (_error) { /* ignore */ }
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(false);
+            }
+            return true;
+        }
+
+        if (name === "zoom" || name === "wand" || name === "text" || name === "multipoint") {
+            if (name === "multipoint") AnnotationAdapter.imageJMultiPoints = [];
+            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(false);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    static toggleImageJOverlay() {
+        const doc = typeof document !== "undefined" ? document : null;
+        const vis = doc?.getElementById?.("annotation-visibility");
+        const spike = AnnotationAdapter.annotationSpike;
+        if (vis && typeof vis.click === "function" && !vis.disabled) vis.click();
+        else if (spike && typeof spike.setAnnotationsVisible === "function") {
+            spike.setAnnotationsVisible(!spike.annotationsVisible);
+        }
+        const overlayBtn = doc?.getElementById?.("ij-tool-13");
+        const hidden = Boolean(spike && spike.annotationsVisible === false)
+            || vis?.getAttribute?.("aria-pressed") === "false";
+        if (overlayBtn?.setAttribute) overlayBtn.setAttribute("aria-pressed", String(!hidden));
+        return true;
+    }
+
+    static toggleImageJInvert() {
+        AnnotationAdapter.imageJLookupInverted = !AnnotationAdapter.imageJLookupInverted;
+        const doc = typeof document !== "undefined" ? document : null;
+        const host = doc?.getElementById?.("viewer")
+            || AnnotationAdapter.viewer?.element;
+        host?.classList?.toggle?.("ij-lookup-inverted", AnnotationAdapter.imageJLookupInverted);
+        const btn = doc?.getElementById?.("ij-tool-19");
+        if (btn?.setAttribute) {
+            btn.setAttribute("aria-pressed", String(AnnotationAdapter.imageJLookupInverted));
+        }
+        return AnnotationAdapter.imageJLookupInverted;
+    }
+
+    static handleImageJZoomClick(event) {
+        const viewer = AnnotationAdapter.viewer;
+        if (!viewer?.viewport) return false;
+        const host = viewer.element || viewer.canvas;
+        const rect = host?.getBoundingClientRect?.();
+        if (!rect) return false;
+        const x = Number(event.clientX) - rect.left;
+        const y = Number(event.clientY) - rect.top;
+        let viewportPoint = null;
+        try {
+            const OSD = AnnotationAdapter._openSeadragon();
+            const pt = OSD?.Point ? new OSD.Point(x, y) : { x, y };
+            if (typeof viewer.viewport.pointFromPixel === "function") {
+                viewportPoint = viewer.viewport.pointFromPixel(pt, true);
+            }
+        } catch (_error) { /* ignore */ }
+        const factor = event.altKey || event.shiftKey ? 0.8 : 1.25;
+        if (typeof viewer.viewport.zoomBy === "function") {
+            viewer.viewport.zoomBy(factor, viewportPoint);
+        }
+        if (typeof viewer.viewport.applyConstraints === "function") {
+            viewer.viewport.applyConstraints();
+        }
+        return true;
+    }
+
+    static handleImageJTextClick(event) {
+        const popup = AnnotationAdapter.ensureAnnotationEditorPopup();
+        if (!popup) return false;
+        popup.hidden = false;
+        popup.removeAttribute?.("hidden");
+        if (popup.style) {
+            popup.style.display = "block";
+            popup.style.left = `${Number(event.clientX) + 12}px`;
+            popup.style.top = `${Number(event.clientY) + 12}px`;
+        }
+        const input = popup.querySelector?.("#annotation-name-input");
+        try { input?.focus?.(); } catch (_error) { /* ignore */ }
+        return true;
+    }
+
+    static handleImageJMultiPointClick(event) {
+        AnnotationAdapter.imageJMultiPoints = Array.isArray(AnnotationAdapter.imageJMultiPoints)
+            ? AnnotationAdapter.imageJMultiPoints
+            : [];
+        AnnotationAdapter.imageJMultiPoints.push({
+            x: Number(event.clientX),
+            y: Number(event.clientY)
+        });
+        return AnnotationAdapter.imageJMultiPoints.length;
+    }
+
+    static handleImageJWandClick(event) {
+        console.info("Wand sample", Number(event.clientX), Number(event.clientY));
+        return true;
     }
 
     /**
