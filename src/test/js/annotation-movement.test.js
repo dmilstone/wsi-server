@@ -5,192 +5,152 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const eventHandlers = new Map();
-const pointerHandlers = new Map();
-const animationFrames = [];
-let persistenceUpdates = 0;
-let setSelectedCalls = 0;
+const staticRoot = path.join(__dirname, "../../main/resources/static");
+const adapterSource = fs.readFileSync(path.join(staticRoot, "annotation-adapter.js"), "utf8");
+const storeSource = fs.readFileSync(path.join(staticRoot, "annotation-store.js"), "utf8");
 
-const annotator = {
-    annotations: [],
-    selected: [],
-    setDrawingTool() {},
-    setDrawingEnabled() {},
-    setSelected() { setSelectedCalls += 1; },
-    on(event, handler) { eventHandlers.set(event, handler); },
-    getAnnotations() { return this.annotations; },
-    getSelected() { return this.selected; }
-};
-
-class FakeAdapter {
-    constructor() { this.store = { setSelectedAnnotationId() {} }; }
-    annotationUpdated() { persistenceUpdates += 1; }
-    annotationCreated() {}
-    annotationDeleted() {}
-    getAnnotationName() { return "Moved"; }
-}
-
-class FakeLabelLayer {
-    constructor() {
-        this.namesVisible = true;
-        this.displacements = new Map();
-        this.synced = [];
-        this.positionUpdates = 0;
-    }
-    syncAnnotation(annotation) { this.synced.push(annotation); }
-    setTemporaryDisplacement(id, x, y) { this.displacements.set(id, { x, y }); }
-    getTemporaryDisplacement(id) { return this.displacements.get(id) || { x: 0, y: 0 }; }
-    clearTemporaryDisplacement(id) { this.displacements.delete(id); }
-    clearTemporaryDisplacements() { this.displacements.clear(); }
-    updatePositions() { this.positionUpdates += 1; }
-    beginImage() { this.displacements.clear(); }
-    remove(id) { this.displacements.delete(id); }
-    setAnnotationsVisible() {}
-}
-
-class FakeNameEditor { setSelection() {} }
-const button = () => ({ disabled: true, addEventListener() {}, setAttribute() {} });
 const context = vm.createContext({
-    console,
-    queueMicrotask,
-    document: { addEventListener() {} },
+    console: { info() {}, warn() {}, error() {} },
     window: {
-        AnnotoriousOSD: { createOSDAnnotator: () => annotator },
-        requestAnimationFrame(callback) { animationFrames.push(callback); }
+        setTimeout,
+        clearTimeout,
+        addEventListener() {},
+        removeEventListener() {},
+        currentActiveTool: "selection"
     },
-    OpenSeadragon: { Point: class Point { constructor(x, y) { this.x = x; this.y = y; } } },
-    AnnotationAdapter: FakeAdapter,
-    AnnotationLabelLayer: FakeLabelLayer,
-    AnnotationNameEditor: FakeNameEditor
+    document: { getElementById() { return null; }, querySelectorAll() { return []; }, addEventListener() {} },
+    fetch: null,
+    WsiCsrf: { csrfFetch: async () => { throw new Error("unexpected save"); } }
 });
-const source = fs.readFileSync(
-    path.join(__dirname, "../../main/resources/static/annotorious-spike.js"), "utf8");
-vm.runInContext(`${source}\nthis.AnnotoriousSpike = AnnotoriousSpike;`, context);
+vm.runInContext(`${storeSource}\nthis.AnnotationStore = AnnotationStore;`, context);
+vm.runInContext(`${adapterSource}\nthis.AnnotationAdapter = AnnotationAdapter;`, context);
+const { AnnotationAdapter } = context;
 
-const spike = Object.create(context.AnnotoriousSpike.prototype);
-let viewportScale = 1;
-spike.viewer = {
-    element: {
-        addEventListener(event, handler) { pointerHandlers.set(event, handler); },
-        getBoundingClientRect() { return { left: 0, top: 0 }; },
-        classList: { toggle() {} }
-    },
-    viewport: {
-        pointFromPixel(point) { return point; },
-        viewerElementToImageCoordinates() {
-            throw new Error("viewport.viewerElementToImageCoordinates must not run");
-        }
-    },
-    world: {
-        getItemCount: () => 2,
-        getItemAt: () => ({
-            viewportToImageCoordinates(point) {
-                return { x: point.x / viewportScale, y: point.y / viewportScale };
-            }
-        })
+assert.match(adapterSource, /new OSD\.MouseTracker\(/);
+assert.match(adapterSource, /window\.currentActiveTool !== "selection"/);
+assert.match(adapterSource, /deltaPointsFromPixels\(event\.delta\)/);
+assert.match(adapterSource, /static updateShapeGeometryPosition\(/);
+
+const attrs = {};
+const moved = AnnotationAdapter.updateShapeGeometryPosition({
+    type: "ellipse",
+    start: { overlayX: 10, overlayY: 20, viewportX: 0.1, viewportY: 0.2, image: { x: 1, y: 2 } },
+    current: { overlayX: 30, overlayY: 50, viewportX: 0.3, viewportY: 0.5, image: { x: 5, y: 8 } },
+    vertices: [],
+    node: { setAttribute(name, value) { attrs[name] = value; } }
+}, { x: 0.05, y: -0.02 }, { x: 4, y: 6 });
+
+assert.equal(moved.start.overlayX, 14);
+assert.equal(moved.start.overlayY, 26);
+assert.equal(Number(moved.start.viewportX.toFixed(4)), 0.15);
+assert.equal(moved.current.overlayX, 34);
+assert.equal(Number(moved.current.viewportY.toFixed(4)), 0.48);
+
+// Regression check: dragging an existing shape must actually reposition it while the
+// default "move" tool is active, not only while the dedicated "selection" tool is active.
+// (A prior version silently ignored drags whenever the tool wasn't exactly "selection".)
+let capturedDragHandler = null;
+context.window.OpenSeadragon = {
+    MouseTracker: function(options) {
+        capturedDragHandler = options.dragHandler;
     }
 };
-spike.toggleButton = button();
-spike.visibilityButton = button();
-spike.namesButton = button();
-spike.nameInput = {};
-spike.timingCallbacks = {};
-spike.annotationsVisible = true;
-spike.drawingEnabled = false;
-spike.getCurrentImageId = () => "image-one";
-spike.labelGeneration = 0;
-spike.labelRefreshVersions = new Map();
-spike.installKeyboardShortcuts = () => {};
-spike.createAnnotator();
+AnnotationAdapter.viewer = {
+    viewport: {
+        deltaPointsFromPixels(px) { return { x: (px.x || 0) / 100, y: (px.y || 0) / 100 }; }
+    }
+};
+const draggedShape = {
+    type: "rectangle",
+    start: { overlayX: 10, overlayY: 20, viewportX: 0.1, viewportY: 0.2 },
+    current: { overlayX: 30, overlayY: 50, viewportX: 0.3, viewportY: 0.5 },
+    vertices: [],
+    node: { setAttribute() {} }
+};
+AnnotationAdapter.bindQuPathShapeDragTracker({}, draggedShape);
+assert.equal(typeof capturedDragHandler, "function");
 
-const at = (id, x, y) => ({ id, target: { selector: { geometry: {
-    x, y, w: 20, h: 30,
-    bounds: { minX: x, minY: y, maxX: x + 20, maxY: y + 30 }
-} } } });
-const moved = at("moved", 10, 20);
-const other = at("other", 160, 170);
-annotator.annotations = [moved, other];
-annotator.selected = [moved];
+context.window.currentActiveTool = "move";
+capturedDragHandler({ delta: { x: 5, y: 5 } });
+assert.equal(draggedShape.start.overlayX, 15, "drag must move the shape while the move tool is active");
 
-// Match the browser lifecycle: dragging and releasing emits no update event.
-// The label follows a presentation-only image-coordinate displacement and the
-// integration never asks Annotorious to alter or finalize its selection.
-pointerHandlers.get("pointerdown")({ button: 0, pointerId: 7, clientX: 15, clientY: 25 });
-pointerHandlers.get("pointermove")({ pointerId: 7, clientX: 45, clientY: 55 });
-assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 30, y: 30 });
-pointerHandlers.get("pointerup")({ pointerId: 7, clientX: 45, clientY: 55 });
-assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 30, y: 30 },
-    "release retains the visual move until the native commit");
-assert.equal(setSelectedCalls, 0, "label movement never manipulates selection");
-assert.equal(persistenceUpdates, 0, "presentation movement never persists");
-assert.deepEqual(annotator.selected, [moved], "native selection state is untouched");
+context.window.currentActiveTool = "selection";
+capturedDragHandler({ delta: { x: 5, y: 5 } });
+assert.equal(draggedShape.start.overlayX, 20, "drag must also move the shape while the selection tool is active");
 
-// A later native commit follows the one existing persistence path. Its guarded
-// post-commit read reconciles the label and removes the temporary displacement.
-const committed = at("moved", 40, 50);
-annotator.annotations = [committed, other];
-eventHandlers.get("updateAnnotation")(committed, moved);
-assert.equal(persistenceUpdates, 1);
-assert.equal(animationFrames.length, 1);
-animationFrames.shift()();
-assert.equal(spike.labelLayer.displacements.has("moved"), false);
-assert.equal(spike.labelLayer.synced.at(-1), committed);
-assert.equal(annotator.annotations.length, 2, "annotations are neither replaced nor duplicated");
+context.window.currentActiveTool = "rectangle";
+capturedDragHandler({ delta: { x: 5, y: 5 } });
+assert.equal(draggedShape.start.overlayX, 20, "drag must not move the shape while an unrelated drawing tool is active");
 
-// Native selection remains entirely usable after movement. This models clicks
-// performed by Annotorious itself; no integration setSelected call is involved.
-annotator.selected = [other];
-eventHandlers.get("selectionChanged")();
-assert.deepEqual(annotator.selected, [other]);
-annotator.selected = [committed];
-eventHandlers.get("selectionChanged")();
-assert.deepEqual(annotator.selected, [committed]);
-assert.equal(setSelectedCalls, 0);
+// Regression check: a single click/mousedown on an existing shape only selects it; the
+// name popup must only open on double-click. (A prior version opened the popup on every click.)
+let panelOpenedFor = null;
+const previousOpenPanel = AnnotationAdapter.openAnnotationNamePanelForShape;
+AnnotationAdapter.openAnnotationNamePanelForShape = function(id) { panelOpenedFor = id; return true; };
+AnnotationAdapter.currentActiveTool = "move";
+AnnotationAdapter.selectedNativeAnnotationId = null;
 
-// Repeated moves accumulate from the retained displacement and respect current
-// viewport conversion (e.g. after zoom), while producing no extra saves.
-viewportScale = 2;
-pointerHandlers.get("pointerdown")({ button: 0, pointerId: 8, clientX: 85, clientY: 105 });
-pointerHandlers.get("pointermove")({ pointerId: 8, clientX: 105, clientY: 125 });
-pointerHandlers.get("pointerup")({ pointerId: 8, clientX: 105, clientY: 125 });
-assert.deepEqual(spike.labelLayer.displacements.get("moved"), { x: 10, y: 10 });
-assert.equal(persistenceUpdates, 1);
-assert.equal(setSelectedCalls, 0);
+const shapeNodeStub = { getAttribute: () => "shape-1", classList: { add() {}, remove() {} } };
+const fakeShapeEvent = {
+    target: { closest: sel => (sel.includes("osd-annotation-shape") ? shapeNodeStub : null) },
+    button: 0
+};
 
-// Pointer cancellation, drawing, and an outside-image pan do not retain label
-// motion or invoke persistence/selection APIs.
-pointerHandlers.get("pointerdown")({ button: 0, pointerId: 9, clientX: 85, clientY: 105 });
-pointerHandlers.get("pointermove")({ pointerId: 9, clientX: 125, clientY: 145 });
-pointerHandlers.get("pointercancel")({ pointerId: 9 });
-assert.equal(spike.labelLayer.displacements.has("moved"), false);
-assert.equal(spike.labelLayer.positionUpdates, 1);
-spike.drawingEnabled = true;
-pointerHandlers.get("pointerdown")({ button: 0, pointerId: 10, clientX: 85, clientY: 105 });
-pointerHandlers.get("pointermove")({ pointerId: 10, clientX: 125, clientY: 145 });
-pointerHandlers.get("pointerup")({ pointerId: 10 });
-spike.drawingEnabled = false;
-pointerHandlers.get("pointerdown")({ button: 0, pointerId: 11, clientX: 2, clientY: 2 });
-pointerHandlers.get("pointermove")({ pointerId: 11, clientX: 20, clientY: 20 });
-pointerHandlers.get("pointerup")({ pointerId: 11 });
-assert.equal(spike.labelLayer.displacements.size, 0);
-assert.equal(persistenceUpdates, 1);
-assert.equal(setSelectedCalls, 0);
+const mousedownResult = AnnotationAdapter.onQuPathPointerDown(fakeShapeEvent);
+assert.equal(mousedownResult, true);
+assert.equal(AnnotationAdapter.selectedNativeAnnotationId, "shape-1", "mousedown on a shape must select it");
+assert.equal(panelOpenedFor, null, "single click/mousedown must NOT open the name popup");
 
-// Deletion, visibility changes, and image switches clear transient presentation
-// state; stale deferred commits cannot restore a label on another image.
-spike.labelLayer.setTemporaryDisplacement("moved", 4, 5);
-eventHandlers.get("deleteAnnotation")(committed);
-assert.equal(spike.labelLayer.displacements.size, 0);
-eventHandlers.get("updateAnnotation")(committed, moved);
-spike.beginLabelImage("image-two");
-animationFrames.shift()();
-assert.equal(spike.labelLayer.synced.length, 1);
-spike.labelLayer.setTemporaryDisplacement("other", 2, 3);
-spike.setAnnotationsVisible(false);
-assert.equal(spike.labelLayer.displacements.size, 0);
-assert.equal(setSelectedCalls, 0);
+const dblclickResult = AnnotationAdapter.onQuPathDoubleClick(fakeShapeEvent);
+assert.equal(dblclickResult, true);
+assert.equal(panelOpenedFor, "shape-1", "double-click on a shape must open the name popup");
 
-assert(!source.includes("viewerElementToImageCoordinates"));
-assert(!source.includes("finalizeAnnotationPointerEdit"));
-assert(!/setSelected\s*\(/.test(source), "movement integration contains no setSelected call");
-console.log("annotation presentation-only movement checks passed");
+AnnotationAdapter.openAnnotationNamePanelForShape = previousOpenPanel;
+
+// Regression check: bindAnnotationShapeEditorLoop used to attach a "pointerup" listener that
+// reopened the name popup on every mouse-up as long as any shape was selected, undoing the
+// select-vs-double-click split above (popup would pop back open the instant a shape was
+// selected, and again on every later click). It must no longer listen for pointerup at all.
+const pointerupListeners = [];
+const fakeHost = {
+    addEventListener(type, handler) { pointerupListeners.push(type); }
+};
+const fakeViewerForLoop = { element: fakeHost, viewport: {} };
+AnnotationAdapter.bindAnnotationShapeEditorLoop(fakeViewerForLoop);
+assert.ok(!pointerupListeners.includes("pointerup"),
+    "the popup must not auto-reopen on pointerup based on current selection");
+
+// Regression check: clicking away in the viewer (but not on any shape) must revert the
+// selection highlight — unless the "click" is really the mouseup tail end of a pan/drag.
+const listenersByType = {};
+context.document.addEventListener = function(type, handler) { (listenersByType[type] ||= []).push(handler); };
+const shapeNodesById = {
+    "shape-1": { classList: { added: [], removed: [], add(c) { this.added.push(c); }, remove(c) { this.removed.push(c); } } }
+};
+context.document.querySelector = selector => {
+    const match = /data-annotation-id="([^"]+)"/.exec(selector);
+    return (match && shapeNodesById[match[1]]) || null;
+};
+context.document._wsiQuPathPointersBound = false;
+AnnotationAdapter.bindQuPathToolPointers();
+const clickListener = listenersByType.click?.[listenersByType.click.length - 1];
+assert.equal(typeof clickListener, "function");
+
+AnnotationAdapter.currentActiveTool = "move";
+AnnotationAdapter.viewer = { element: { contains: () => true }, viewport: {} };
+
+AnnotationAdapter.selectedNativeAnnotationId = "shape-1";
+AnnotationAdapter._qpMouseDownPoint = { x: 100, y: 100 };
+clickListener({ target: { closest: () => null }, clientX: 101, clientY: 101, preventDefault() {}, stopPropagation() {} });
+assert.equal(AnnotationAdapter.selectedNativeAnnotationId, null,
+    "a clean click away from any shape must clear the selection");
+assert.ok(shapeNodesById["shape-1"].classList.removed.includes("is-annotation-selected"),
+    "clicking away must remove the highlight class from the previously selected shape");
+
+AnnotationAdapter.selectedNativeAnnotationId = "shape-1";
+AnnotationAdapter._qpMouseDownPoint = { x: 100, y: 100 };
+clickListener({ target: { closest: () => null }, clientX: 250, clientY: 100, preventDefault() {}, stopPropagation() {} });
+assert.equal(AnnotationAdapter.selectedNativeAnnotationId, "shape-1",
+    "releasing the mouse far from where it went down (a pan/drag) must not clear the selection");
+
+console.log("annotation movement checks passed");

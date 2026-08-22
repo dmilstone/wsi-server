@@ -72,17 +72,113 @@ assert.doesNotMatch(html, /❓ Help/);
 assert.doesNotMatch(html, /💬 Feedback/);
 assert.match(html, /id="help-directory-link"[^>]*>\?</);
 assert.match(html, />Feedback</);
-assert.match(html, />Reset<\/button>[\s\S]*?>Auto<\/button>[\s\S]*?>🔬 AI Labs<\/button>[\s\S]*?>\?<\/button>[\s\S]*?>🛠️ Tools<\/button>[\s\S]*?>Feedback</);
+assert.match(html, />Reset<\/button>[\s\S]*?>Auto<\/button>[\s\S]*?>Delete All<\/button>[\s\S]*?>🔬 AI Labs<\/button>[\s\S]*?>\?<\/button>[\s\S]*?>🛠️ Tools<\/button>[\s\S]*?>Feedback</);
+assert.match(html, /id="toggle-annotations-visibility-btn"[^>]*>👁️ Vec</);
+assert.match(html, /id="toggle-labels-visibility-btn"[^>]*>👁️ Lbl</);
+assert.match(html, /id="clear-all-annotations-btn"[^>]*>Delete All</);
+assert.match(html, /id="home-view"[^>]*>🏠[\s\S]*?id="show-advanced-channel-palette"[\s\S]*?id="toggle-annotations-visibility-btn"[\s\S]*?id="toggle-labels-visibility-btn"/);
+assert.match(adapterSource, /static bindLayerVisibilityAndSanitizeControls\(/);
+assert.match(adapterSource, /static toggleVectorOutlineVisibility\(/);
+assert.match(adapterSource, /static toggleAnnotationLabelVisibility\(/);
+assert.match(adapterSource, /style\.opacity = opacity/);
+assert.match(adapterSource, /display = AnnotationAdapter\.annotationLabelsVisible \? "block" : "none"/);
+assert.match(adapterSource, /WARNING: This deletion is completely irreversible/);
+assert.match(adapterSource, /Canvas successfully sanitized\./);
+assert.match(adapterSource, /savedAnnotationsArray = \[\]/);
+assert.match(adapterSource, /viewer\.clearOverlays\(\)/);
+assert.match(adapterSource, /static bindQuPathKeyboardShortcuts\(/);
+assert.match(adapterSource, /active\.tagName === "INPUT" \|\| active\.tagName === "TEXTAREA"/);
+assert.match(adapterSource, /case "a": \/\/ QuPath: Toggle annotations visibility/);
+assert.match(adapterSource, /case "n": \/\/ QuPath: Toggle annotation names\/labels visibility/);
+assert.match(adapterSource, /case "h": \/\/ QuPath: Hide\/Show left side browser panel panel space/);
+assert.match(adapterSource, /case "m": \/\/ Move \/ pan/);
+assert.match(adapterSource, /setViewerTool\("move"\)/);
+assert.match(adapterSource, /case "r": \/\/ QuPath: Rectangle/);
+assert.match(adapterSource, /case "o": \/\/ QuPath: Ellipse/);
+assert.match(adapterSource, /case "l": \/\/ QuPath: Line/);
+assert.match(adapterSource, /case "p": \/\/ QuPath: Polygon/);
+assert.match(adapterSource, /case "v": \/\/ QuPath: Polyline/);
+assert.match(adapterSource, /case "b": \/\/ Brightness & Contrast palette/);
+assert.match(adapterSource, /case "w": \/\/ QuPath: Wand/);
+assert.match(adapterSource, /case "s": \/\/ QuPath: Selection/);
+assert.match(adapterSource, /window\.currentActiveTool/);
+assert.match(adapterSource, /static activateQuPathTool\(/);
+assert.match(adapterSource, /static onQuPathPointerDown\(/);
+assert.match(adapterSource, /static finishQuPathClickPath\(/);
+assert.match(adapterSource, /getElementById\("toggle-annotations-visibility-btn"\)/);
+assert.match(adapterSource, /getElementById\("toggle-labels-visibility-btn"\)/);
+assert.match(adapterSource, /getElementById\("toggle-left"\)/);
+assert.match(adapterSource, /static bindGlobalUiTooltip\(/);
+assert.match(adapterSource, /id = "global-ui-tooltip"/);
+assert.match(adapterSource, /closest\?\.\("\[data-tooltip\]"\)/);
+assert.match(adapterSource, /clientY - height - 25/);
+assert.match(adapterSource, /hideAnnotationEditorPopup\(null, \{ commit: false \}\)/);
+assert.doesNotMatch(adapterSource, /static bindImageJViewerClicks\(/);
+assert.doesNotMatch(adapterSource, /static handleImageJWandClick\(/);
+assert.match(adapterSource, /static bindOpenSeadragonCanvasKeyIntercept\(/);
+assert.match(adapterSource, /addHandler\("canvas-key"/);
+assert.match(adapterSource, /preventDefaultAction = true/);
+assert.match(adapterSource, /active\.id === "annotation-name-input"/);
+assert.match(adapterSource, /static commitAnnotationNameFromInput\(/);
+assert.match(adapterSource, /static applyCommittedAnnotationName\(/);
+assert.match(adapterSource, /savedAnnotationsArray/);
+assert.equal((html.match(/id="annotation-name-input"/g) || []).length, 1);
+assert.match(html, /<input type="text" id="annotation-name-input"/);
+assert.doesNotMatch(html, /id="annotation-name"/);
 assert.match(html, /id="toggle-secondary-annotation-toolbar"/);
 assert.match(html, /id="secondary-annotation-toolbar"/);
-assert.match(html, /id="ij-tool-1"/);
-assert.match(html, /id="ij-tool-20"/);
-assert.match(html, /title="Pending\.\.\."/);
-assert.match(html, /title="Ruler — Click and drag to measure length in microns"/);
+assert.match(html, /id="qp-tool-browser"/);
+assert.match(html, /id="qp-tool-move"/);
+assert.match(html, /id="qp-tool-rectangle"/);
+assert.match(html, /id="qp-tool-ellipse"/);
+assert.match(html, /id="qp-tool-line"/);
+assert.match(html, /id="qp-tool-polygon"/);
+assert.match(html, /id="qp-tool-polyline"/);
+assert.match(html, /id="qp-tool-brush"/);
+assert.match(html, /id="qp-tool-wand"/);
+assert.match(html, /id="qp-tool-points"/);
+assert.match(html, /id="qp-tool-selection"/);
+assert.match(html, /id="qp-tool-contrast"/);
+assert.match(html, /id="qp-tool-zoom"/);
+assert.equal((html.match(/class="qp-tool"/g) || []).length, 13);
+assert.match(html, /data-tooltip="\(_\^A\) Toggle Image Browser"/);
+assert.match(html, /data-tooltip="\(M\) Move Tool"/);
+assert.match(html, /data-tooltip="\(R\) Rectangle Tool: Hold down &quot;Shift&quot; to constrain shape to a square."/);
+assert.match(html, /data-tooltip="\(O\) Ellipse Tool: Hold down &quot;Shift&quot; to constrain shape to a circle."/);
+assert.match(html, /data-tooltip="\(L\) Line Tool"/);
+assert.match(html, /data-tooltip="\(P\) Polygon Tool"/);
+assert.match(html, /data-tooltip="\(V\) Polyline Tool"/);
+assert.match(html, /data-tooltip="\(B\) Brush Tool"/);
+assert.match(html, /data-tooltip="\(W\) Wand Tool: Click structure to auto-detect boundary edges."/);
+assert.match(html, /id="wand-config-dropdown"/);
+assert.match(html, /Default \(Nuclear Spot\)/);
+assert.match(html, /Boundary: Tissue Wall/);
+assert.match(html, /Custom Configuration\.\.\./);
+assert.match(html, /data-tooltip="\(\.\) Points Tool"/);
+assert.match(html, /data-tooltip="\(S\) Selection Tool"/);
+assert.match(html, /data-tooltip="\(C\) Brightness &amp; Contrast Tool"/);
+assert.match(html, /data-tooltip="\(Z\) Zoom Tool"/);
+assert.match(html, /data-tooltip="\(A\) Show\/Hide All Annotations"/);
+assert.match(html, /data-tooltip="\(N\) Show\/Hide All Annotation Names"/);
+assert.match(html, /#global-ui-tooltip/);
+assert.doesNotMatch(html, /\.toolbar-btn::after/);
+assert.doesNotMatch(html, /\.qp-tool::after/);
+assert.doesNotMatch(html, /\.toolbar-btn:hover::after/);
+assert.doesNotMatch(html, /content: attr\(data-tooltip\)/);
+assert.doesNotMatch(html, /bottom: 140% !important;/);
+assert.match(adapterSource, /static applyQuPathShiftConstraint\(/);
+assert.match(adapterSource, /event\.originalEvent\?\.shiftKey/);
+assert.match(adapterSource, /let side = Math\.max\(deltaX, deltaY\)/);
+assert.match(adapterSource, /deltaX = side/);
+assert.match(adapterSource, /deltaY = side/);
+assert.match(adapterSource, /annotation-shape-overlay/);
+assert.match(adapterSource, /static openAnnotationNamePanelForShape\(/);
+assert.match(adapterSource, /static buildUnifiedAnnotationRecord\(/);
+assert.doesNotMatch(html, /id="ij-tool-20"/);
+assert.doesNotMatch(html, /title="Pending\.\.\."/);
 assert.match(adapterSource, /static bindSecondaryAnnotationToolbar\(/);
 assert.match(adapterSource, /static toggleSecondaryAnnotationToolbar\(/);
 assert.match(adapterSource, /static activateImageJTool\(/);
-assert.match(adapterSource, /console\.info\("Pending\.\.\."/);
 assert.match(adapterSource, /style\.display = "flex"/);
 assert.match(html, /id="help-directory-link"/);
 assert.match(html, /window\.open\("\/help\/help-directory\.html", "_blank"\)/);
@@ -228,6 +324,36 @@ assert.match(adapterSource, /safetyCounter < 15/);
 assert.match(adapterSource, /r\.bottom \+ 12/);
 assert.match(html, /id="floating-measurement-palette"[^>]*class="floating-palette"/);
 assert.match(adapterSource, /static resetImageControllerState\(/);
+assert.match(adapterSource, /static purgeAlternativeAnnotationLayers\(/);
+assert.match(adapterSource, /viewer\.clearOverlays\(\)/);
+assert.match(adapterSource, /static updateShapeGeometryPosition\(/);
+assert.match(adapterSource, /new OSD\.MouseTracker\(/);
+assert.match(adapterSource, /window\.currentActiveTool !== "selection"/);
+assert.match(adapterSource, /deltaPointsFromPixels\(event\.delta\)/);
+assert.match(adapterSource, /osd-annotation-shape/);
+assert.match(adapterSource, /svgOverlay\(\)/);
+assert.match(adapterSource, /static installNativeOsdAnnotationEngine\(/);
+assert.match(adapterSource, /window\.savedAnnotationsArray/);
+assert.match(adapterSource, /static setViewerTool\(/);
+assert.match(adapterSource, /window\.setViewerTool = fn/);
+assert.match(adapterSource, /static bindWandConfigDropdown\(/);
+assert.match(adapterSource, /static traceWandContour\(/);
+assert.match(adapterSource, /WAND_DEFAULT_RADIUS = 30/);
+assert.match(adapterSource, /WAND_DEFAULT_DELTA = 15/);
+assert.match(adapterSource, /static appendPolygonTraceVertex\(/);
+assert.match(adapterSource, /static buildPolygonTracePreview\(/);
+assert.match(adapterSource, /static handleQuPathClickPathInput\(/);
+assert.match(adapterSource, /static onQuPathDoubleClick\(/);
+assert.match(adapterSource, /static polygonVerticesTooClose\(/);
+assert.match(adapterSource, /addEventListener\("dblclick"/);
+assert.match(adapterSource, /AnnotationAdapter\.toggleFloatingChannelPalette\(/);
+assert.match(adapterSource, /static launchBrightnessContrastPalette\(/);
+assert.match(adapterSource, /static bindBrightnessContrastLaunchers\(/);
+assert.match(adapterSource, /static syncBrightnessContrastButtons\(/);
+assert.match(adapterSource, /\["show-advanced-channel-palette", "qp-tool-contrast"\]/);
+assert.doesNotMatch(html, /annotorious-openseadragon/);
+assert.doesNotMatch(html, /annotorious-spike\.js/);
+assert.doesNotMatch(html, /new AnnotoriousSpike/);
 assert.match(adapterSource, /static resetBrightnessContrastSettings\(/);
 assert.match(adapterSource, /controllersToHide/);
 assert.match(adapterSource, /savedMeasurementsArray = \[\]/);
@@ -236,6 +362,24 @@ assert.match(adapterSource, /measurement-results-body/);
 assert.match(adapterSource, /static palettesOverlap\(/);
 assert.match(adapterSource, /Overlap Collide Detected/);
 assert.match(adapterSource, /static viewerStageLaunchOrigin\(/);
+assert.match(adapterSource, /static viewerClientLaunchOrigin\(/);
+assert.match(adapterSource, /viewerRect\.left\) \+ 10/);
+assert.match(adapterSource, /static beginWandDrawSession\(/);
+assert.match(adapterSource, /static growWandDrawSession\(/);
+assert.match(adapterSource, /static finishWandDrawSession\(/);
+assert.match(adapterSource, /static bindFloatingWandPalette\(/);
+assert.match(adapterSource, /static positionFloatingWandPalette\(/);
+assert.match(adapterSource, /wsi\.wand\.config/);
+assert.match(adapterSource, /vertices/);
+assert.doesNotMatch(adapterSource, /window\.prompt\("Wand lookup radius/);
+assert.match(html, /id="floating-wand-palette"/);
+assert.match(html, /id="wand-radius"/);
+assert.match(html, /id="wand-delta"/);
+assert.match(html, /id="wand-min-fill"/);
+assert.match(html, /id="wand-connectivity"/);
+assert.match(html, /id="wand-color-metric"/);
+assert.match(html, /id="wand-max-vertices"/);
+assert.match(html, /id="wand-fallback-vertices"/);
 assert.match(adapterSource, /dataset\.fcpUserMoved = "1"/);
 assert.match(adapterSource, /palette\.style\.display = "block"/);
 assert.match(adapterSource, /viewerEl\.offsetLeft \+ 15/);
@@ -501,7 +645,14 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     const previousGet = context.document.getElementById;
     const measPalette = { style: { display: "none", visibility: "" } };
     const parent = { offsetLeft: 200, offsetTop: 48, offsetParent: null };
-    const viewerEl = { offsetLeft: 80, offsetTop: 16, offsetParent: parent };
+    const viewerEl = {
+        offsetLeft: 80,
+        offsetTop: 16,
+        offsetParent: parent,
+        getBoundingClientRect() {
+            return { left: 100, top: 50, right: 900, bottom: 700, width: 800, height: 650 };
+        }
+    };
     const zStack = {
         style: { display: "none", visibility: "" },
         hidden: true,
@@ -566,8 +717,8 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
         return null;
     };
     assert.equal(AnnotationAdapter.positionFloatingChannelPalette(), true);
-    assert.equal(AnnotationAdapter.channelPaletteElement.style.left, "295px");
-    assert.equal(AnnotationAdapter.channelPaletteElement.style.top, "79px");
+    assert.equal(AnnotationAdapter.channelPaletteElement.style.left, "110px");
+    assert.equal(AnnotationAdapter.channelPaletteElement.style.top, "60px");
     const overlapZ = {
         id: "floating-zstack-palette",
         style: { display: "block", visibility: "" },
@@ -668,6 +819,129 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
 }
 
 {
+    let cleared = false;
+    AnnotationAdapter.viewer = { clearOverlays() { cleared = true; } };
+    AnnotationAdapter.savedAnnotationsArray = [{ id: "leak" }];
+    const slideDoc = {
+        getElementById() { return null; },
+        querySelector() { return null; }
+    };
+    AnnotationAdapter.onSlideClicked({ id: "next" }, slideDoc);
+    assert.equal(cleared, true);
+    assert.equal(AnnotationAdapter.savedAnnotationsArray.length, 0);
+    const moved = AnnotationAdapter.updateShapeGeometryPosition({
+        type: "line",
+        start: { overlayX: 10, overlayY: 20, image: { x: 1, y: 2 } },
+        current: { overlayX: 30, overlayY: 40, image: { x: 3, y: 4 } },
+        vertices: [],
+        node: { setAttribute() {} }
+    }, { x: 0, y: 0 }, { x: 5, y: -3 });
+    assert.equal(moved.start.overlayX, 15);
+    assert.equal(moved.start.overlayY, 17);
+    assert.equal(moved.current.overlayX, 35);
+}
+
+{
+    AnnotationAdapter.qpDrawSession = null;
+    AnnotationAdapter.appendPolygonTraceVertex({ overlayX: 10, overlayY: 20, viewportX: 0.1, viewportY: 0.2 }, "polygon");
+    AnnotationAdapter.appendPolygonTraceVertex({ overlayX: 40, overlayY: 60, viewportX: 0.4, viewportY: 0.6 }, "polygon");
+    AnnotationAdapter.appendPolygonTraceVertex({ overlayX: 80, overlayY: 30, viewportX: 0.8, viewportY: 0.3 }, "polygon");
+    assert.equal(AnnotationAdapter.qpDrawSession.vertices.length, 3);
+    const previewVertices = AnnotationAdapter.qpDrawSession.vertices.slice();
+    let committed = null;
+    const previousCommit = AnnotationAdapter.commitQuPathShape;
+    AnnotationAdapter.commitQuPathShape = (shape) => {
+        committed = shape;
+        return shape;
+    };
+    assert.equal(AnnotationAdapter.finishQuPathClickPath({ type: "dblclick" }), true);
+    assert.equal(committed?.type, "polygon");
+    assert.equal(committed?.vertices?.length, 3);
+    assert.equal(AnnotationAdapter.qpDrawSession, null);
+    AnnotationAdapter.commitQuPathShape = previousCommit;
+    const preview = AnnotationAdapter.buildPolygonTracePreview(
+        "polygon",
+        previewVertices,
+        { overlayX: 90, overlayY: 40, viewportX: 0.9, viewportY: 0.4 }
+    );
+    assert.equal(preview.tagName, "g");
+    const defaults = AnnotationAdapter.wandPresetValues("default");
+    assert.equal(defaults.radius, 30);
+    assert.equal(defaults.delta, 15);
+    const tissue = AnnotationAdapter.wandPresetValues("tissue");
+    assert.ok(tissue.radius > defaults.radius);
+    const contour = AnnotationAdapter.wandFallbackContour(
+        { clientX: 40, clientY: 50 },
+        { radius: 30, delta: 15 }
+    );
+    assert.ok(contour.length >= 8);
+    const spanX = Math.max(...contour.map(p => p.overlayX)) - Math.min(...contour.map(p => p.overlayX));
+    assert.ok(spanX <= 62);
+}
+
+{
+    AnnotationAdapter.qpDrawSession = null;
+    const verts = [
+        { overlayX: 10, overlayY: 20, image: { x: 1, y: 2 } },
+        { overlayX: 40, overlayY: 60, image: { x: 8, y: 9 } },
+        { overlayX: 80, overlayY: 30, image: { x: 12, y: 4 } }
+    ];
+    const previousTrace = AnnotationAdapter.traceWandContour;
+    const previousOnViewer = AnnotationAdapter.quPathEventOnViewer;
+    AnnotationAdapter.traceWandContour = () => verts.slice();
+    AnnotationAdapter.quPathEventOnViewer = () => true;
+    const started = AnnotationAdapter.beginWandDrawSession({
+        clientX: 40,
+        clientY: 50,
+        button: 0,
+        target: { closest() { return null; } }
+    });
+    assert.equal(started, true);
+    assert.equal(AnnotationAdapter.qpDrawSession.tool, "wand");
+    assert.equal(AnnotationAdapter.qpDrawSession.dragging, true);
+    let committed = null;
+    const previousCommit = AnnotationAdapter.commitQuPathShape;
+    AnnotationAdapter.commitQuPathShape = (shape) => {
+        committed = shape;
+        return shape;
+    };
+    assert.equal(AnnotationAdapter.finishWandDrawSession({ clientX: 40, clientY: 50 }), true);
+    assert.equal(committed?.type, "wand");
+    assert.equal(committed?.vertices?.length, 3);
+    assert.equal(AnnotationAdapter.qpDrawSession, null);
+    AnnotationAdapter.commitQuPathShape = previousCommit;
+    AnnotationAdapter.traceWandContour = previousTrace;
+    AnnotationAdapter.quPathEventOnViewer = previousOnViewer;
+}
+
+{
+    const w3c = AnnotationAdapter.unifiedRecordToW3c({
+        id: "00000000-0000-4000-8000-000000000099",
+        type: "wand",
+        name: "Cell",
+        x: 1,
+        y: 2,
+        width: 10,
+        height: 12,
+        vertices: [
+            { image: { x: 1, y: 2 } },
+            { image: { x: 4, y: 8 } },
+            { image: { x: 3, y: 5 } }
+        ]
+    });
+    const inst = new AnnotationAdapter({ getAnnotations() { return []; } });
+    inst.metadataById.set(w3c.id, { name: "Cell" });
+    const backend = inst.toBackend(w3c);
+    assert.equal(backend.type, "wand");
+    assert.equal(backend.vertices.length, 3);
+    assert.equal(backend.vertices[1][0], 4);
+    const display = inst.toAnnotorious(backend);
+    assert.equal(display.type, "wand");
+    assert.equal(display.target.selector.type, "POLYGON");
+    assert.equal(display.target.selector.geometry.points.length, 3);
+}
+
+{
     let navEnabled = false;
     let tracking = true;
     let released = null;
@@ -715,9 +989,11 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
 }
 
 {
-    assert.equal(AnnotationAdapter.activateImageJTool("brush"), false);
+    assert.equal(AnnotationAdapter.activateImageJTool("brush"), true);
+    assert.equal(AnnotationAdapter.currentActiveTool, "brush");
     assert.equal(AnnotationAdapter.activateImageJTool("pan"), true);
     assert.equal(AnnotationAdapter.activeImageJTool, "pan");
+    assert.equal(AnnotationAdapter.currentActiveTool, "move");
     AnnotationAdapter.viewer = {
         element: { classList: { toggle() {} } },
         setMouseNavEnabled() {},
@@ -725,6 +1001,22 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     };
     assert.equal(AnnotationAdapter.activateImageJTool("zoom"), true);
     assert.equal(AnnotationAdapter.activeImageJTool, "zoom");
+    assert.equal(AnnotationAdapter.activateQuPathTool("rectangle"), true);
+    assert.equal(AnnotationAdapter.currentActiveTool, "rectangle");
+    const squared = AnnotationAdapter.applyQuPathShiftConstraint(
+        { overlayX: 10, overlayY: 20, image: { x: 10, y: 20 } },
+        { overlayX: 40, overlayY: 30, image: { x: 40, y: 30 } },
+        "rectangle",
+        true
+    );
+    assert.equal(squared.overlayX - 10, squared.overlayY - 20);
+    const circled = AnnotationAdapter.applyQuPathShiftConstraint(
+        { overlayX: 0, overlayY: 0 },
+        { overlayX: 10, overlayY: 4 },
+        "ellipse",
+        true
+    );
+    assert.equal(Math.abs(circled.overlayX), Math.abs(circled.overlayY));
 }
 
 {

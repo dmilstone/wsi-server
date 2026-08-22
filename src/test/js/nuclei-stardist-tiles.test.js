@@ -8,7 +8,6 @@ const vm = require("node:vm");
 const staticRoot = path.join(__dirname, "../../main/resources/static");
 const adapterSource = fs.readFileSync(path.join(staticRoot, "annotation-adapter.js"), "utf8");
 const html = fs.readFileSync(path.join(staticRoot, "index.html"), "utf8");
-const spikeSource = fs.readFileSync(path.join(staticRoot, "annotorious-spike.js"), "utf8");
 
 const context = vm.createContext({
     console: { info() {}, warn() {}, error() {} },
@@ -229,7 +228,7 @@ assert.match(adapterSource, /button\.textContent = label/);
 assert.match(adapterSource, /showing \? "Hide" : "Show"/);
 assert.doesNotMatch(html, /Hide Segmented Nuclei/);
 assert.doesNotMatch(html, />Nuclei</);
-assert.match(spikeSource, /setDrawingTool\("rectangle"\)/);
-assert.match(spikeSource, /setMeasureTracking\(false\)/);
+assert.match(adapterSource, /activateQuPathTool\("rectangle"\)/);
+assert.match(adapterSource, /setMeasureTracking\(false\)/);
 
 console.log("nuclei-stardist-tiles.test.js: ok");

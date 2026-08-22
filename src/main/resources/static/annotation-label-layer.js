@@ -97,7 +97,9 @@ class AnnotationLabelLayer {
 
     sync(imageId) {
         if (imageId !== this.currentImageId) return false;
-        const annotations = this.annotator?.getAnnotations?.() || [];
+        const annotations = this.annotator?.getAnnotations?.()
+            || (typeof this.getAnnotations === "function" ? this.getAnnotations() : [])
+            || [];
         const liveIds = new Set();
         annotations.forEach(annotation => {
             if (!annotation?.id) return;
@@ -121,7 +123,7 @@ class AnnotationLabelLayer {
         let entry = this.labels.get(annotation.id);
         if (!entry) {
             const element = document.createElement("span");
-            element.className = "annotation-name-label";
+            element.className = "annotation-name-label annotation-text-label";
             element.style.pointerEvents = "none";
             element.style.background = "rgba(0,0,0,0.85)";
             element.style.zIndex = "100";
@@ -140,9 +142,6 @@ class AnnotationLabelLayer {
 
     position(entry) {
         const geometry = entry.annotation?.target?.selector?.geometry;
-        // Annotorious updates x/y as the live shape moves. In the committed
-        // updateAnnotation payload, bounds can briefly retain the pre-drag
-        // values, so prefer the same canonical x/y fields used for persistence.
         const displacement = this.temporaryDisplacements.get(entry.annotation.id) || { x: 0, y: 0 };
         const anchor = AnnotationLabelLayer.annotationLabelAnchor(geometry, displacement);
         if (!anchor) {

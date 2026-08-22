@@ -1,13 +1,7 @@
 /**
- * Bridges Annotorious and the WSI server annotation document API.
- *
- * The backend stores one complete AnnotationCollection per image/user. Browser
- * edits are therefore debounced and persisted with PUT rather than individual
- * create/update/delete requests.
- *
- * Workstation isolation: this adapter reads `wsi.workstation.id` from
- * localStorage and injects `X-WSI-User` on every annotation GET/PUT it drives
- * through AnnotationStore (cookie mirror remains AnnotationStore's job).
+ * Bridges the WSI server annotation document API to a native OpenSeadragon
+ * SVG overlay (`viewer.svgOverlay()`). Geometry is stored in
+ * {@code window.savedAnnotationsArray}.
  */
 
 /** Session-scoped clinical OCR markers — each slide scanned at most once. */
@@ -2373,7 +2367,33 @@ class AnnotationAdapter {
         return true;
     }
 
+    /**
+     * Single authority for the `savedAnnotationsArray` mirrors kept on the class,
+     * `window`, and `globalThis`. Always go through this instead of assigning the
+     * three copies by hand, so they can never drift out of sync.
+     */
+    static setSavedAnnotations(list) {
+        const next = Array.isArray(list) ? list : [];
+        AnnotationAdapter.savedAnnotationsArray = next;
+        if (typeof window !== "undefined") window.savedAnnotationsArray = next;
+        if (typeof globalThis !== "undefined") globalThis.savedAnnotationsArray = next;
+        return next;
+    }
+
     static onSlideClicked(image, doc = null) {
+        const viewer = AnnotationAdapter.viewer
+            || (typeof globalThis !== "undefined" ? globalThis.viewer : undefined);
+        if (viewer) {
+            if (typeof viewer.clearOverlays === "function") {
+                viewer.clearOverlays(); // Sweeps all custom OpenSeadragon SVG overlay nodes clean
+            }
+        }
+        AnnotationAdapter.setSavedAnnotations([]);
+        let measurementBody = (doc && typeof doc.getElementById === "function" ? doc : null)
+            ?.getElementById?.("measurement-results-body")
+            || (typeof document !== "undefined" ? document.getElementById("measurement-results-body") : null);
+        if (measurementBody) measurementBody.innerHTML = "";
+        AnnotationAdapter.purgeAlternativeAnnotationLayers();
         const root = doc || (typeof document !== "undefined" ? document : null);
         AnnotationAdapter.resetImageControllerState(root);
         // Force reset and hide the floating Z-stack controller before evaluating the next image properties
@@ -2417,6 +2437,43 @@ class AnnotationAdapter {
         }
         if (stack) stack.hidden = false;
         AnnotationAdapter.setFloatingZStackPaletteVisible(true, root);
+        return true;
+    }
+
+    static purgeAlternativeAnnotationLayers() {
+        try { AnnotationAdapter.cancelQuPathDrawSession(); } catch (_error) { /* ignore */ }
+        const trackers = Array.isArray(AnnotationAdapter.qpShapeTrackers)
+            ? AnnotationAdapter.qpShapeTrackers
+            : [];
+        trackers.forEach(tracker => {
+            try { tracker.destroy?.(); } catch (_error) { /* ignore */ }
+        });
+        AnnotationAdapter.qpShapeTrackers = [];
+        const svg = AnnotationAdapter.qpDrawOverlayEl
+            || (typeof AnnotationAdapter.viewer?.svgOverlay === "function"
+                ? AnnotationAdapter.viewer.svgOverlay()?.node?.()
+                : null);
+        if (svg) {
+            const committed = svg.querySelector?.("[data-qp-committed]");
+            const preview = svg.querySelector?.("[data-qp-preview]");
+            if (committed) committed.innerHTML = "";
+            if (preview) preview.innerHTML = "";
+        }
+        const labels = typeof document !== "undefined"
+            ? document.querySelectorAll?.(".osd-annotation-shape, .annotation-shape-overlay, .annotation-text-label, .annotation-marker-node")
+            : [];
+        labels?.forEach?.(node => {
+            if (node?.closest?.("[data-qp-committed], [data-qp-preview]")) return;
+            node.remove?.();
+        });
+        const committedShapes = typeof document !== "undefined"
+            ? document.querySelectorAll?.("[data-qp-committed] .osd-annotation-shape")
+            : [];
+        committedShapes?.forEach?.(node => node.remove?.());
+        try {
+            (AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike)?.labelLayer?.clear?.();
+        } catch (_error) { /* ignore */ }
+        try { AnnotationAdapter.hideAnnotationEditorPopup(null, { commit: false }); } catch (_error) { /* ignore */ }
         return true;
     }
 
@@ -2993,7 +3050,7 @@ class AnnotationAdapter {
     }
 
     constructor(annotator, timingCallbacks = {}) {
-        this.annotator = annotator;
+        this.annotator = annotator || AnnotationAdapter.createNativeAnnotatorFacade();
         this.timingCallbacks = timingCallbacks;
         this.metadataById = new Map();
         this.backendIdByClientId = new Map();
@@ -3018,7 +3075,7 @@ class AnnotationAdapter {
                 this.metadataById.clear();
                 this.backendIdByClientId.clear();
                 this.nonDisplayedAnnotations = [];
-                await this.replaceAnnotoriousAnnotations([]);
+                await this.replaceDisplayedAnnotations([]);
             } else if (event.reason === "loaded") {
                 this.timingCallbacks.annotationsLoaded?.(event.collection.imageId);
                 await this.applyBackendCollection(event.collection);
@@ -3026,7 +3083,7 @@ class AnnotationAdapter {
                 console.info(`AnnotationAdapter: loaded ${event.collection.annotations?.length || 0} annotations`);
             } else if (event.reason === "saved") {
                 // A save changes canonical IDs/timestamps, not client geometry.
-                // Replacing here tears down a just-created Annotorious shape and
+                // Replacing here would tear down a just-created SVG shape.
                 // can leave its overlay stale until the next pointer event.
                 this.reconcileSavedMetadata(event.collection);
                 console.info(`AnnotationAdapter: saved ${event.collection.annotations?.length || 0} annotations`);
@@ -3127,18 +3184,46 @@ class AnnotationAdapter {
     static lastPointerId = null;
     /** Active ImageJ-style secondary toolbar tool (`pan`, `ruler`, …). */
     static activeImageJTool = "pan";
-    static imageJLookupInverted = false;
-    static imageJMultiPoints = [];
-    static IMAGEJ_PENDING_TOOLS = {
-        roundrect: true,
-        freehand: true,
-        angle: true,
-        arrow: true,
+    /** QuPath-style annotation matrix tool (`move`, `rectangle`, `ellipse`, …). */
+    static currentActiveTool = "move";
+    static qpDrawSession = null;
+    static qpDrawOverlayEl = null;
+    static qpShapeTrackers = [];
+    static vectorOutlinesVisible = true;
+    static annotationLabelsVisible = true;
+    static savedAnnotationsArray = [];
+    static selectedNativeAnnotationId = null;
+    static annotationEngine = null;
+    static OSD_ANNOTATION_STROKE = "#FFD700";
+    static OSD_ANNOTATION_FILL = "rgba(255, 215, 0, 0.22)";
+    static OSD_ANNOTATION_SHAPE_CLASS = "osd-annotation-shape";
+    static WAND_DEFAULT_RADIUS = 30;
+    static WAND_DEFAULT_DELTA = 15;
+    static WAND_DEFAULT_MIN_FILL = 8;
+    static WAND_DEFAULT_CONNECTIVITY = 4;
+    static WAND_DEFAULT_COLOR_METRIC = "chebyshev";
+    static WAND_DEFAULT_MAX_VERTICES = 32;
+    static WAND_DEFAULT_FALLBACK_VERTICES = 20;
+    static WAND_CONFIG_STORAGE_KEY = "wsi.wand.config";
+    static wandLookupRadiusPx = 30;
+    static wandColorDelta = 15;
+    static wandMinFillPixels = 8;
+    static wandConnectivity = 4;
+    static wandColorMetric = "chebyshev";
+    static wandMaxContourVertices = 32;
+    static wandFallbackVertices = 20;
+    static wandPreset = "default";
+    static FREEFORM_BACKEND_TYPES = {
+        rectangle: true,
+        square: true,
+        ellipse: true,
+        circle: true,
+        polygon: true,
+        polyline: true,
+        line: true,
+        wand: true,
         brush: true,
-        dropper: true,
-        fill: true,
-        spray: true,
-        options: true
+        points: true
     };
     /** `single` (one-shot) or `multiple` (stay in mode until icon/Enter escape). */
     static _measurementEntryMode = "single";
@@ -3336,6 +3421,352 @@ class AnnotationAdapter {
         return null;
     }
 
+    /**
+     * Install OpenSeadragon.Viewer.prototype.svgOverlay when the svg-overlay
+     * plugin is not already present. Coordinates on overlay.node() are viewport
+     * units so shapes pan and zoom with the slide.
+     */
+    static installSvgOverlayPlugin() {
+        const OSD = AnnotationAdapter._openSeadragon();
+        if (!OSD?.Viewer?.prototype) return OSD;
+        if (typeof OSD.Viewer.prototype.svgOverlay === "function") return OSD;
+        const svgNS = "http://www.w3.org/2000/svg";
+        function OsdSvgOverlay(viewer) {
+            this._viewer = viewer;
+            this._containerWidth = 0;
+            this._containerHeight = 0;
+            this._svg = (typeof document !== "undefined" && document.createElementNS)
+                ? document.createElementNS(svgNS, "svg")
+                : null;
+            if (!this._svg) return;
+            this._svg.setAttribute("class", "osd-svg-overlay");
+            this._svg.style.position = "absolute";
+            this._svg.style.left = "0";
+            this._svg.style.top = "0";
+            this._svg.style.width = "100%";
+            this._svg.style.height = "100%";
+            this._svg.style.pointerEvents = "none";
+            this._svg.style.overflow = "visible";
+            this._svg.style.zIndex = "20";
+            this._node = document.createElementNS(svgNS, "g");
+            this._svg.appendChild(this._node);
+            const host = viewer.canvas || viewer.container || viewer.element;
+            if (host && typeof host.appendChild === "function") host.appendChild(this._svg);
+            const resize = () => this.resize();
+            if (typeof viewer.addHandler === "function") {
+                viewer.addHandler("animation", resize);
+                viewer.addHandler("open", resize);
+                viewer.addHandler("rotate", resize);
+                viewer.addHandler("resize", resize);
+            }
+            this.resize();
+        }
+        OsdSvgOverlay.prototype.node = function() { return this._node; };
+        OsdSvgOverlay.prototype.resize = function() {
+            const viewer = this._viewer;
+            if (!this._svg || !viewer?.viewport) return;
+            const width = Number(viewer.container?.clientWidth || viewer.canvas?.clientWidth || 0);
+            const height = Number(viewer.container?.clientHeight || viewer.canvas?.clientHeight || 0);
+            if (width && width !== this._containerWidth) {
+                this._containerWidth = width;
+                this._svg.setAttribute("width", String(width));
+            }
+            if (height && height !== this._containerHeight) {
+                this._containerHeight = height;
+                this._svg.setAttribute("height", String(height));
+            }
+            try {
+                const origin = viewer.viewport.pixelFromPoint(new OSD.Point(0, 0), true);
+                const zoom = Number(viewer.viewport.getZoom(true)) || 1;
+                const rotation = Number(viewer.viewport.getRotation?.() || 0);
+                const svgWidth = Number(this._svg.clientWidth || this._containerWidth || 1);
+                const scaledZoom = svgWidth * zoom;
+                this._node.setAttribute(
+                    "transform",
+                    `translate(${origin.x},${origin.y}) scale(${scaledZoom}) rotate(${rotation})`
+                );
+            } catch (_error) { /* viewer not ready */ }
+        };
+        OSD.Viewer.prototype.svgOverlay = function() {
+            if (!this._svgOverlayInfo) this._svgOverlayInfo = new OsdSvgOverlay(this);
+            return this._svgOverlayInfo;
+        };
+        return OSD;
+    }
+
+    static createNativeAnnotatorFacade() {
+        return {
+            getAnnotations() {
+                const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+                    ? AnnotationAdapter.savedAnnotationsArray
+                    : [];
+                return list.map(entry => AnnotationAdapter.unifiedRecordToW3c(entry)).filter(Boolean);
+            },
+            async setAnnotations(values) {
+                AnnotationAdapter.mountW3cAnnotationsOnOverlay(values);
+            },
+            async clearAnnotations() {
+                AnnotationAdapter.mountW3cAnnotationsOnOverlay([]);
+            },
+            async addAnnotation(annotation) {
+                const next = this.getAnnotations().concat(annotation).filter(Boolean);
+                await this.setAnnotations(next);
+            },
+            getSelected() {
+                const id = AnnotationAdapter.selectedNativeAnnotationId;
+                if (!id) return [];
+                const found = this.getAnnotations().find(item => item?.id === id);
+                return found ? [found] : [];
+            },
+            setSelected(items) {
+                const first = Array.isArray(items) ? items[0] : items;
+                AnnotationAdapter.selectedNativeAnnotationId = first?.id || null;
+            },
+            setDrawingEnabled() {},
+            setDrawingTool() {},
+            setDrawingMode() {},
+            on() {},
+            removeAnnotation(annotation) {
+                AnnotationAdapter.removeNativeAnnotation(annotation?.id || annotation);
+            }
+        };
+    }
+
+    static installNativeOsdAnnotationEngine(viewer, options = {}) {
+        AnnotationAdapter.installSvgOverlayPlugin();
+        AnnotationAdapter.setViewer(viewer);
+        AnnotationAdapter.setSavedAnnotations(AnnotationAdapter.savedAnnotationsArray);
+        const facade = AnnotationAdapter.createNativeAnnotatorFacade();
+        const adapter = new AnnotationAdapter(facade, options.timingCallbacks || {});
+        AnnotationAdapter.ensureAnnotationEditorPopup();
+        const nameInput = options.nameInput
+            || (typeof document !== "undefined" ? document.getElementById("annotation-name-input") : null);
+        const labelLayer = (typeof AnnotationLabelLayer === "function" && viewer)
+            ? new AnnotationLabelLayer(viewer, facade, id => adapter.getAnnotationName(id))
+            : null;
+        const nameEditor = (nameInput && typeof AnnotationNameEditor === "function")
+            ? new AnnotationNameEditor(nameInput, adapter, id => {
+                const rec = facade.getAnnotations().find(item => item?.id === id);
+                if (rec) labelLayer?.syncAnnotation?.(rec);
+            })
+            : null;
+        const engine = new NativeOsdAnnotationEngine({
+            viewer,
+            adapter,
+            annotator: facade,
+            labelLayer,
+            nameEditor,
+            toggleButton: options.toggleButton,
+            visibilityButton: options.visibilityButton,
+            namesButton: options.namesButton,
+            getCurrentImageId: options.getCurrentImageId,
+            timingCallbacks: options.timingCallbacks || {}
+        });
+        AnnotationAdapter.annotationEngine = engine;
+        AnnotationAdapter.annotationSpike = engine;
+        if (typeof viewer?.addHandler === "function" && !viewer._wsiNativeAnnotationOpenBound) {
+            viewer._wsiNativeAnnotationOpenBound = true;
+            viewer.addHandler("open", () => {
+                void engine.handleViewerOpen().catch(error =>
+                    console.error("Native SVG annotation engine: unable to load annotations", error)
+                );
+            });
+        }
+        AnnotationAdapter.bindAnnotationShapeEditorLoop(viewer);
+        AnnotationAdapter.ensureQuPathDrawOverlay();
+        engine.bindChrome();
+        if (options.visibilityButton) options.visibilityButton.disabled = false;
+        if (options.namesButton) options.namesButton.disabled = false;
+        if (options.toggleButton) options.toggleButton.disabled = false;
+        return engine;
+    }
+
+    static shapeCoordX(pt) {
+        const value = Number(pt?.viewportX ?? pt?.overlayX);
+        return Number.isFinite(value) ? value : 0;
+    }
+
+    static shapeCoordY(pt) {
+        const value = Number(pt?.viewportY ?? pt?.overlayY);
+        return Number.isFinite(value) ? value : 0;
+    }
+
+    static applyOsdAnnotationStyle(node, { filled = true } = {}) {
+        if (!node || typeof node.setAttribute !== "function") return node;
+        const existing = String(node.getAttribute?.("class") || node.attrs?.class || "").trim();
+        const cls = AnnotationAdapter.OSD_ANNOTATION_SHAPE_CLASS;
+        if (!existing.includes(cls)) {
+            node.setAttribute("class", `${existing} ${cls} annotation-shape-overlay`.trim());
+        }
+        node.setAttribute("fill", filled ? AnnotationAdapter.OSD_ANNOTATION_FILL : "none");
+        node.setAttribute("stroke", AnnotationAdapter.OSD_ANNOTATION_STROKE);
+        node.setAttribute("stroke-width", "2");
+        node.setAttribute("stroke-opacity", "1");
+        node.setAttribute("vector-effect", "non-scaling-stroke");
+        if (node.style) {
+            node.style.pointerEvents = "auto";
+            node.style.cursor = "pointer";
+        }
+        return node;
+    }
+
+    static unifiedRecordToW3c(entry) {
+        if (!entry?.id) return null;
+        const x = Number(entry.x);
+        const y = Number(entry.y);
+        const width = Number(entry.width);
+        const height = Number(entry.height);
+        const type = String(entry.type || "rectangle").toLowerCase();
+        const selectorType = type === "ellipse" || type === "circle" ? "ELLIPSE"
+            : type === "polygon" || type === "wand" ? "POLYGON"
+            : type === "polyline" || type === "brush" ? "POLYLINE"
+            : type === "line" ? "LINE"
+            : "RECTANGLE";
+        const geometry = {
+            x: Number.isFinite(x) ? x : 0,
+            y: Number.isFinite(y) ? y : 0,
+            w: Number.isFinite(width) ? width : 0,
+            h: Number.isFinite(height) ? height : 0,
+            bounds: {
+                minX: Number.isFinite(x) ? x : 0,
+                minY: Number.isFinite(y) ? y : 0,
+                maxX: Number.isFinite(x) && Number.isFinite(width) ? x + width : 0,
+                maxY: Number.isFinite(y) && Number.isFinite(height) ? y + height : 0
+            }
+        };
+        if (Array.isArray(entry.vertices) && entry.vertices.length) {
+            geometry.points = entry.vertices.map(v => AnnotationAdapter.vertexToImagePair(v)).filter(pair =>
+                Number.isFinite(pair[0]) && Number.isFinite(pair[1])
+            );
+        }
+        return {
+            id: entry.id,
+            bodies: Array.isArray(entry.bodies) ? entry.bodies : [],
+            type: entry.type,
+            name: entry.name,
+            target: { selector: { type: selectorType, geometry } }
+        };
+    }
+
+    static w3cToUnifiedRecord(annotation) {
+        if (!annotation?.id) return null;
+        const geometry = annotation?.target?.selector?.geometry || {};
+        const selectorType = String(annotation?.target?.selector?.type || "RECTANGLE").toUpperCase();
+        const rawType = String(annotation?.type || "").toLowerCase();
+        const type = AnnotationAdapter.FREEFORM_BACKEND_TYPES[rawType]
+            ? rawType
+            : selectorType === "ELLIPSE" ? "ellipse"
+            : selectorType === "POLYGON" ? "polygon"
+            : selectorType === "POLYLINE" ? "polyline"
+            : selectorType === "LINE" ? "line"
+            : "rectangle";
+        const x = Number(geometry.x ?? geometry.bounds?.minX);
+        const y = Number(geometry.y ?? geometry.bounds?.minY);
+        const width = Number(geometry.w ?? (geometry.bounds?.maxX - geometry.bounds?.minX));
+        const height = Number(geometry.h ?? (geometry.bounds?.maxY - geometry.bounds?.minY));
+        const startImage = { x, y };
+        const currentImage = {
+            x: Number.isFinite(x) && Number.isFinite(width) ? x + width : x,
+            y: Number.isFinite(y) && Number.isFinite(height) ? y + height : y
+        };
+        const startVp = AnnotationAdapter.imagePointToShapePoint(startImage);
+        const currentVp = AnnotationAdapter.imagePointToShapePoint(currentImage);
+        return {
+            id: annotation.id,
+            type,
+            name: annotation.name || null,
+            visible: true,
+            x: Number.isFinite(x) ? x : null,
+            y: Number.isFinite(y) ? y : null,
+            width: Number.isFinite(width) ? width : null,
+            height: Number.isFinite(height) ? height : null,
+            start: startVp,
+            current: currentVp,
+            vertices: Array.isArray(geometry.points)
+                ? geometry.points.map(pt => AnnotationAdapter.imagePointToShapePoint({
+                    x: Number(Array.isArray(pt) ? pt[0] : pt?.x),
+                    y: Number(Array.isArray(pt) ? pt[1] : pt?.y)
+                }))
+                : [],
+            bodies: Array.isArray(annotation.bodies) ? annotation.bodies : [],
+            node: null
+        };
+    }
+
+    static vertexToImagePair(vertex) {
+        if (Array.isArray(vertex)) {
+            return [Number(vertex[0]), Number(vertex[1])];
+        }
+        return [
+            Number(vertex?.image?.x ?? vertex?.x),
+            Number(vertex?.image?.y ?? vertex?.y)
+        ];
+    }
+
+    static imagePointToShapePoint(image) {
+        const x = Number(image?.x);
+        const y = Number(image?.y);
+        const point = {
+            overlayX: x,
+            overlayY: y,
+            viewportX: x,
+            viewportY: y,
+            image: Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
+        };
+        try {
+            const viewer = AnnotationAdapter.viewer;
+            const tiled = AnnotationAdapter.primaryTiledImage?.(viewer);
+            if (tiled && Number.isFinite(x) && Number.isFinite(y)) {
+                const OSD = AnnotationAdapter._openSeadragon();
+                const imgPt = OSD ? new OSD.Point(x, y) : { x, y };
+                const vp = tiled.imageToViewportCoordinates(imgPt);
+                point.viewportX = Number(vp?.x);
+                point.viewportY = Number(vp?.y);
+                if (viewer?.viewport?.viewportToViewerElementCoordinates) {
+                    const el = viewer.viewport.viewportToViewerElementCoordinates(vp);
+                    point.overlayX = Number(el?.x);
+                    point.overlayY = Number(el?.y);
+                }
+            }
+        } catch (_error) { /* keep image-space fallback */ }
+        return point;
+    }
+
+    static mountW3cAnnotationsOnOverlay(annotations) {
+        const records = (Array.isArray(annotations) ? annotations : [])
+            .map(item => AnnotationAdapter.w3cToUnifiedRecord(item))
+            .filter(Boolean);
+        AnnotationAdapter.setSavedAnnotations(records);
+        const group = AnnotationAdapter.quPathCommittedGroup();
+        if (group) group.innerHTML = "";
+        records.forEach(entry => {
+            const node = AnnotationAdapter.buildQuPathSvgShape(entry.type, entry);
+            if (!node || !group) return;
+            AnnotationAdapter.attachAnnotationShapeOverlay(node, entry.id);
+            if (typeof group.appendChild === "function") group.appendChild(node);
+        });
+        try {
+            const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+            engine?.labelLayer?.sync?.(engine.getCurrentImageId?.());
+        } catch (_error) { /* labels optional */ }
+        return records;
+    }
+
+    static removeNativeAnnotation(id) {
+        if (!id) return false;
+        AnnotationAdapter.setSavedAnnotations(
+            (AnnotationAdapter.savedAnnotationsArray || []).filter(item => item?.id !== id)
+        );
+        if (AnnotationAdapter.selectedNativeAnnotationId === id) {
+            AnnotationAdapter.selectedNativeAnnotationId = null;
+        }
+        const node = typeof document !== "undefined"
+            ? document.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`)
+            : null;
+        try { node?.remove?.(); } catch (_error) { /* ignore */ }
+        return true;
+    }
+
     /** Remember the active OpenSeadragon viewer for mouse-nav + tracker binding. */
     /**
      * Rectangle fallback used to leave mouse-nav off. Nuclei overlays must not
@@ -3343,7 +3774,10 @@ class AnnotationAdapter {
      */
     static restoreViewerMouseNavUnlessModal(viewer) {
         const host = viewer || AnnotationAdapter.viewer;
-        const drawing = Boolean(AnnotationAdapter.annotationSpike?.drawingEnabled);
+        const drawing = Boolean(
+            AnnotationAdapter.annotationEngine?.drawingEnabled
+            || AnnotationAdapter.annotationSpike?.drawingEnabled
+        );
         const measuring = Boolean(AnnotationAdapter.isMeasurementModeActive);
         if (drawing || measuring) return false;
         if (host && typeof host.setMouseNavEnabled === "function") {
@@ -3364,9 +3798,15 @@ class AnnotationAdapter {
         if (AnnotationAdapter.viewer) {
             AnnotationAdapter.bindViewportHomeOnOpen(AnnotationAdapter.viewer);
             AnnotationAdapter.bindAiVectorOverlayHandlers(AnnotationAdapter.viewer);
+            AnnotationAdapter.bindOpenSeadragonCanvasKeyIntercept(AnnotationAdapter.viewer);
         }
         AnnotationAdapter.bindMeasurementKeyboardEscape();
         AnnotationAdapter.bindSecondaryAnnotationToolbar();
+        AnnotationAdapter.bindLayerVisibilityAndSanitizeControls();
+        AnnotationAdapter.bindQuPathKeyboardShortcuts();
+        AnnotationAdapter.ensureCurrentActiveTool(AnnotationAdapter.currentActiveTool || "move");
+        AnnotationAdapter.installViewerToolAlias();
+        AnnotationAdapter.bindGlobalUiTooltip();
         return AnnotationAdapter.viewer;
     }
 
@@ -3490,13 +3930,7 @@ class AnnotationAdapter {
             if (palette.parentNode) AnnotationAdapter.channelPaletteHost = palette.parentNode;
             AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
         }
-        if (button && button.dataset?.fcpToggleBound !== "1") {
-            button.addEventListener("click", event => {
-                event.preventDefault();
-                AnnotationAdapter.toggleFloatingChannelPalette(doc);
-            });
-            if (button.dataset) button.dataset.fcpToggleBound = "1";
-        }
+        AnnotationAdapter.bindBrightnessContrastLaunchers(doc);
         const closeBtn = palette?.querySelector?.("#floating-channel-palette-close")
             || doc.getElementById("floating-channel-palette-close");
         if (closeBtn && closeBtn.dataset?.fcpCloseBound !== "1") {
@@ -3929,6 +4363,52 @@ class AnnotationAdapter {
         return AnnotationAdapter.openFloatingChannelPalette(root);
     }
 
+    static launchBrightnessContrastPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const opened = AnnotationAdapter.toggleFloatingChannelPalette(doc);
+        if (AnnotationAdapter.isFloatingChannelPaletteOpen(doc)) {
+            AnnotationAdapter.positionFloatingChannelPalette(doc);
+        }
+        AnnotationAdapter.syncBrightnessContrastButtons(
+            AnnotationAdapter.isFloatingChannelPaletteOpen(doc),
+            doc
+        );
+        return opened;
+    }
+
+    static syncBrightnessContrastButtons(pressed, root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc?.getElementById) return false;
+        const on = pressed === true;
+        for (const id of ["show-advanced-channel-palette", "qp-tool-contrast"]) {
+            const button = doc.getElementById(id);
+            if (button?.setAttribute) button.setAttribute("aria-pressed", String(on));
+        }
+        return true;
+    }
+
+    static bindBrightnessContrastLaunchers(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        if (!doc?.getElementById) return false;
+        let bound = false;
+        for (const id of ["show-advanced-channel-palette", "qp-tool-contrast"]) {
+            const button = doc.getElementById(id);
+            if (!button || button.dataset?.fcpToggleBound === "1") {
+                if (button) bound = true;
+                continue;
+            }
+            button.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.launchBrightnessContrastPalette(doc);
+            });
+            if (button.dataset) button.dataset.fcpToggleBound = "1";
+            bound = true;
+        }
+        return bound;
+    }
+
     static snapshotChannelPaletteSidebar(root = null) {
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const channels = doc?.getElementById?.("channels");
@@ -3971,8 +4451,7 @@ class AnnotationAdapter {
         palette.setAttribute("aria-hidden", "false");
         AnnotationAdapter.channelPaletteElement = palette;
         AnnotationAdapter.channelPaletteHost = doc.body || palette.parentNode;
-        const toggle = doc.getElementById?.("show-advanced-channel-palette");
-        if (toggle) toggle.setAttribute("aria-pressed", "true");
+        AnnotationAdapter.syncBrightnessContrastButtons(true, doc);
         AnnotationAdapter.bindAdvancedChannelPalette(doc);
         AnnotationAdapter.syncFloatingChannelPalette(doc);
         AnnotationAdapter.refreshChannelPaletteHistogram(doc);
@@ -4004,8 +4483,7 @@ class AnnotationAdapter {
             AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer
         );
         AnnotationAdapter.restoreChannelPaletteSidebar(doc);
-        const toggle = doc?.getElementById?.("show-advanced-channel-palette");
-        if (toggle) toggle.setAttribute("aria-pressed", "false");
+        AnnotationAdapter.syncBrightnessContrastButtons(false, doc);
         return true;
     }
 
@@ -4346,6 +4824,33 @@ class AnnotationAdapter {
     }
 
     /**
+     * Viewer-fixed launch origin: getBoundingClientRect of the OSD host plus 10px.
+     * Same method as the Z-stack palette (not offsetParent cascade).
+     */
+    static viewerClientLaunchOrigin(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc?.getElementById) return null;
+        const viewerEl = doc.getElementById("openseadragon-viewer")
+            || (typeof document !== "undefined" ? document.getElementById("openseadragon-viewer") : null)
+            || doc.getElementById("viewer")
+            || AnnotationAdapter.viewer?.element
+            || AnnotationAdapter.viewer?.container
+            || null;
+        if (!viewerEl || typeof viewerEl.getBoundingClientRect !== "function") {
+            return { left: 10, top: 10, viewerEl, doc };
+        }
+        const viewerRect = viewerEl.getBoundingClientRect();
+        return {
+            left: Number(viewerRect.left) + 10,
+            top: Number(viewerRect.top) + 10,
+            viewerEl,
+            viewerRect,
+            doc
+        };
+    }
+
+    /**
      * Compact launch origin: upper-left of `#openseadragon-viewer` plus 15px,
      * using cascaded offsetParent geometry.
      */
@@ -4468,7 +4973,8 @@ class AnnotationAdapter {
                     "floating-ai-labs-palette",
                     "floating-admin-palette",
                     "floating-zstack-palette",
-                    "floating-measurement-palette"
+                    "floating-measurement-palette",
+                    "floating-wand-palette"
                 ];
                 activePanels = ids
                     .filter(id => id !== currentPanelId)
@@ -4539,7 +5045,7 @@ class AnnotationAdapter {
     }
 
     static positionFloatingChannelPalette(root = null) {
-        const origin = AnnotationAdapter.viewerStageLaunchOrigin(root);
+        const origin = AnnotationAdapter.viewerClientLaunchOrigin(root);
         if (!origin) return false;
         const palette = AnnotationAdapter.resolvePaletteNode(origin.doc);
         if (!palette?.style) return false;
@@ -5173,7 +5679,7 @@ class AnnotationAdapter {
                 viewer.setMouseNavEnabled(true);
             }
             AnnotationAdapter.escapeMeasurementMultipleMode(e);
-            AnnotationAdapter.activateImageJTool("pan");
+            AnnotationAdapter.activateQuPathTool("move");
             return true;
         }
         if (e.key === "Escape" || e.key === "Esc") {
@@ -5181,15 +5687,20 @@ class AnnotationAdapter {
             if (tag === "input" || tag === "textarea" || Boolean(e.target?.isContentEditable)) return false;
             if (typeof e.preventDefault === "function") e.preventDefault();
             AnnotationAdapter.releaseMeasurementDrawingAfterExport();
-            AnnotationAdapter.activateImageJTool("pan");
+            AnnotationAdapter.cancelQuPathDrawSession();
+            AnnotationAdapter.activateQuPathTool("move");
             return true;
         }
-        const drawingTool = AnnotationAdapter.activeImageJTool;
+        const drawingTool = AnnotationAdapter.currentActiveTool || AnnotationAdapter.activeImageJTool;
         if ((e.key === "Enter" || e.key === "Return")
-            && (drawingTool === "polygon" || drawingTool === "multipoint" || drawingTool === "wand" || drawingTool === "text")) {
+            && (drawingTool === "polygon" || drawingTool === "polyline" || drawingTool === "multipoint" || drawingTool === "wand" || drawingTool === "text" || drawingTool === "points")) {
+            if (AnnotationAdapter.finishQuPathClickPath(e)) {
+                if (typeof e.preventDefault === "function") e.preventDefault();
+                return true;
+            }
             if (typeof e.preventDefault === "function") e.preventDefault();
             AnnotationAdapter.releaseMeasurementPointerLock(e);
-            AnnotationAdapter.activateImageJTool("pan");
+            AnnotationAdapter.activateQuPathTool("move");
             return true;
         }
         return false;
@@ -5210,18 +5721,1310 @@ class AnnotationAdapter {
         const bar = doc.getElementById("secondary-annotation-toolbar");
         if (bar && bar.dataset?.ijBarBound !== "1") {
             bar.addEventListener("click", event => {
-                const btn = event.target?.closest?.(".ij-tool");
+                const btn = event.target?.closest?.(".qp-tool, .ij-tool");
                 if (!btn) return;
                 event.preventDefault();
                 event.stopPropagation();
-                AnnotationAdapter.activateImageJTool(btn.getAttribute("data-ij-tool"), {
+                const tool = btn.getAttribute("data-qp-tool") || btn.getAttribute("data-ij-tool");
+                if (String(tool || "").toLowerCase() === "contrast") {
+                    AnnotationAdapter.launchBrightnessContrastPalette(doc);
+                    return;
+                }
+                AnnotationAdapter.activateQuPathTool(tool, {
                     button: btn,
                     event
                 });
             });
             if (bar.dataset) bar.dataset.ijBarBound = "1";
         }
-        AnnotationAdapter.bindImageJViewerClicks();
+        AnnotationAdapter.ensureCurrentActiveTool("move");
+        AnnotationAdapter.bindQuPathToolPointers();
+        AnnotationAdapter.bindWandConfigDropdown(doc);
+        AnnotationAdapter.bindBrightnessContrastLaunchers(doc);
+        AnnotationAdapter.installViewerToolAlias();
+        AnnotationAdapter.bindGlobalUiTooltip(doc);
+        return true;
+    }
+
+    static bindQuPathKeyboardShortcuts(root = null) {
+        AnnotationAdapter.bindOpenSeadragonCanvasKeyIntercept(
+            AnnotationAdapter.viewer
+            || (typeof globalThis !== "undefined" ? globalThis.viewer : null)
+        );
+        if (typeof window === "undefined" || window._wsiQuPathShortcutsBound) return Boolean(window?._wsiQuPathShortcutsBound);
+        window.addEventListener("keydown", function(e) {
+            const active = typeof document !== "undefined" ? document.activeElement : null;
+            // Ignore shortcut tracking if a pathologist is typing an annotation title
+            // or any other form line text box.
+            if (active && (active.id === "annotation-name-input"
+                || (typeof active.closest === "function" && active.closest("#annotation-editor-popup")))) {
+                return;
+            }
+            if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+                return;
+            }
+            if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || !e.key) return;
+
+            // Enter/Return finishing an in-progress polygon/polyline/wand shape is handled by
+            // handleMeasurementKeyboardEscape's window keydown listener, which is registered with
+            // { capture: true } and always bound alongside this one (see bindSecondaryAnnotationToolbar).
+            // Capture-phase listeners on window fire before bubble-phase ones, so by the time this
+            // handler runs, Enter has already been handled — don't duplicate that check here.
+
+            let key = String(e.key || "").toLowerCase();
+            switch(key) {
+                case "a": // QuPath: Toggle annotations visibility (A / a)
+                    e.preventDefault();
+                    let vecBtn = document.getElementById("toggle-annotations-visibility-btn");
+                    if (vecBtn) vecBtn.click();
+                    break;
+
+                case "n": // QuPath: Toggle annotation names/labels visibility (N / n)
+                    e.preventDefault();
+                    let lblBtn = document.getElementById("toggle-labels-visibility-btn");
+                    if (lblBtn) lblBtn.click();
+                    break;
+
+                case "h": // QuPath: Hide/Show left side browser panel panel space
+                    e.preventDefault();
+                    let sideBtn = document.getElementById("toggle-sidebar-btn")
+                        || document.getElementById("toggle-left");
+                    if (sideBtn) sideBtn.click();
+                    break;
+
+                case "_": // QuPath: Browser
+                case "-":
+                    e.preventDefault();
+                    let browserBtn = document.getElementById("qp-tool-browser");
+                    if (browserBtn) browserBtn.click();
+                    break;
+
+                case "m": // Move / pan — restore native navigation on both toolbars
+                    e.preventDefault();
+                    if (typeof window.setViewerTool === "function") window.setViewerTool("move");
+                    else AnnotationAdapter.setViewerTool("move");
+                    break;
+
+                case "r": // QuPath: Rectangle
+                    e.preventDefault();
+                    let rectBtn = document.getElementById("qp-tool-rectangle");
+                    if (rectBtn) rectBtn.click();
+                    break;
+
+                case "o": // QuPath: Ellipse
+                    e.preventDefault();
+                    let ellipseBtn = document.getElementById("qp-tool-ellipse");
+                    if (ellipseBtn) ellipseBtn.click();
+                    break;
+
+                case "l": // QuPath: Line
+                    e.preventDefault();
+                    let lineBtn = document.getElementById("qp-tool-line");
+                    if (lineBtn) lineBtn.click();
+                    break;
+
+                case "p": // QuPath: Polygon
+                    e.preventDefault();
+                    let polygonBtn = document.getElementById("qp-tool-polygon");
+                    if (polygonBtn) polygonBtn.click();
+                    break;
+
+                case "v": // QuPath: Polyline
+                    e.preventDefault();
+                    let polylineBtn = document.getElementById("qp-tool-polyline");
+                    if (polylineBtn) polylineBtn.click();
+                    break;
+
+                case "b": // Brightness & Contrast palette
+                    e.preventDefault();
+                    AnnotationAdapter.launchBrightnessContrastPalette();
+                    break;
+
+                case "w": // QuPath: Wand
+                    e.preventDefault();
+                    let wandBtn = document.getElementById("qp-tool-wand");
+                    if (wandBtn) wandBtn.click();
+                    break;
+
+                case ".": // QuPath: Points
+                    e.preventDefault();
+                    let pointsBtn = document.getElementById("qp-tool-points");
+                    if (pointsBtn) pointsBtn.click();
+                    break;
+
+                case "s": // QuPath: Selection
+                    e.preventDefault();
+                    let selectionBtn = document.getElementById("qp-tool-selection");
+                    if (selectionBtn) selectionBtn.click();
+                    break;
+            }
+        });
+        window._wsiQuPathShortcutsBound = true;
+        return true;
+    }
+
+    static bindOpenSeadragonCanvasKeyIntercept(viewer) {
+        if (!viewer || typeof viewer.addHandler !== "function" || viewer._wsiQuPathCanvasKeyBound) {
+            return Boolean(viewer?._wsiQuPathCanvasKeyBound);
+        }
+        viewer.addHandler("canvas-key", function(event) {
+            let key = event.originalEvent?.key?.toLowerCase?.() || "";
+            if (["a", "n", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "_", "-", "."].includes(key)) {
+                event.preventDefaultAction = true; // Suppresses OSD's default pan/zoom behavior on these keys
+                if (typeof event.originalEvent?.preventDefault === "function") {
+                    event.originalEvent.preventDefault();
+                }
+            }
+        });
+        viewer._wsiQuPathCanvasKeyBound = true;
+        return true;
+    }
+
+    static QUPATH_TOOL_ALIASES = {
+        pan: "move",
+        oval: "ellipse",
+        multipoint: "points",
+        ruler: "line"
+    };
+
+    static QUPATH_NAV_TOOLS = {
+        move: true,
+        selection: true,
+        browser: true,
+        contrast: true
+    };
+
+    static ensureCurrentActiveTool(name = "move") {
+        const tool = String(name || "move").toLowerCase();
+        AnnotationAdapter.currentActiveTool = tool;
+        if (typeof window !== "undefined") window.currentActiveTool = tool;
+        if (typeof globalThis !== "undefined") globalThis.currentActiveTool = tool;
+        return tool;
+    }
+
+    static setViewerTool(tool, options = {}) {
+        return AnnotationAdapter.activateQuPathTool(tool, options);
+    }
+
+    static installViewerToolAlias() {
+        const fn = function(tool, options) {
+            return AnnotationAdapter.setViewerTool(tool, options);
+        };
+        if (typeof window !== "undefined") window.setViewerTool = fn;
+        if (typeof globalThis !== "undefined") globalThis.setViewerTool = fn;
+        return fn;
+    }
+
+    static bindGlobalUiTooltip(root = null) {
+        const doc = root && typeof root.createElement === "function"
+            ? root
+            : (typeof document !== "undefined" ? document : null);
+        const body = doc?.body;
+        if (!doc || !body || typeof body.appendChild !== "function") return false;
+        if (doc._wsiGlobalTooltipBound) return true;
+        let globalTooltip = doc.getElementById("global-ui-tooltip");
+        if (!globalTooltip) {
+            globalTooltip = doc.createElement("div");
+            globalTooltip.id = "global-ui-tooltip";
+            globalTooltip.style.cssText = "position: fixed; display: none; background: rgba(0, 0, 0, 0.95); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; pointer-events: none; z-index: 200000; box-shadow: 0 4px 12px rgba(0,0,0,0.6); border: 1px solid #444; font-family: sans-serif; white-space: pre-line;";
+            body.appendChild(globalTooltip);
+        }
+        AnnotationAdapter.globalUiTooltipEl = globalTooltip;
+        body.addEventListener("mouseover", function(e) {
+            let target = e.target?.closest?.("[data-tooltip]");
+            if (target) {
+                globalTooltip.innerHTML = target.getAttribute("data-tooltip") || "";
+                globalTooltip.style.display = "block";
+            }
+        });
+        body.addEventListener("mousemove", function(e) {
+            if (globalTooltip.style.display === "block") {
+                const width = Number(globalTooltip.offsetWidth) || 0;
+                const height = Number(globalTooltip.offsetHeight) || 0;
+                let left = e.clientX - (width / 2);
+                let top = e.clientY - height - 25;
+                const viewW = typeof window !== "undefined" ? window.innerWidth : 1024;
+                const viewH = typeof window !== "undefined" ? window.innerHeight : 768;
+                if (top < 8) top = e.clientY + 18;
+                if (top + height > viewH - 8) top = Math.max(8, e.clientY - height - 25);
+                left = Math.max(8, Math.min(left, viewW - width - 8));
+                globalTooltip.style.left = `${left}px`;
+                globalTooltip.style.top = `${top}px`;
+            }
+        });
+        body.addEventListener("mouseout", function(e) {
+            const from = e.target?.closest?.("[data-tooltip]");
+            const to = e.relatedTarget && typeof e.relatedTarget.closest === "function"
+                ? e.relatedTarget.closest("[data-tooltip]")
+                : null;
+            if (from && from !== to) globalTooltip.style.display = "none";
+        });
+        doc._wsiGlobalTooltipBound = true;
+        return true;
+    }
+
+    static activateQuPathTool(tool, options = {}) {
+        const raw = String(tool || "").toLowerCase();
+        const name = AnnotationAdapter.QUPATH_TOOL_ALIASES[raw] || raw;
+        if (!name) return false;
+        AnnotationAdapter.ensureCurrentActiveTool(name);
+        AnnotationAdapter.activeImageJTool = name === "move" ? "pan" : name;
+        AnnotationAdapter.syncQuPathToolChrome(name);
+        AnnotationAdapter.cancelQuPathDrawSession({ keepTool: true });
+        if (name === "wand") {
+            try { AnnotationAdapter.hideAnnotationEditorPopup(null, { commit: false }); } catch (_error) { /* ignore */ }
+            AnnotationAdapter.openFloatingWandPalette();
+        }
+
+        if (name === "browser") {
+            const side = (typeof document !== "undefined" && document.getElementById)
+                ? (document.getElementById("toggle-left") || document.getElementById("toggle-sidebar-btn"))
+                : null;
+            if (side && typeof side.click === "function") side.click();
+            return true;
+        }
+        if (name === "contrast") {
+            AnnotationAdapter.launchBrightnessContrastPalette();
+            return true;
+        }
+
+        const engine = options.annotationEngine
+            || options.annotationSpike
+            || AnnotationAdapter.annotationEngine
+            || AnnotationAdapter.annotationSpike;
+        const viewer = AnnotationAdapter.viewer;
+        if (name !== "line") {
+            try { AnnotationAdapter.releaseMeasurementPointerLock(options.event || {}); } catch (_error) { /* ignore */ }
+        }
+        if (engine) {
+            const drawing = !AnnotationAdapter.QUPATH_NAV_TOOLS[name]
+                && name !== "selection" && name !== "browser" && name !== "contrast" && name !== "zoom";
+            engine.drawingEnabled = drawing;
+            engine.toggleButton?.setAttribute?.("aria-pressed", String(name === "rectangle"));
+        }
+
+        const navOn = Boolean(AnnotationAdapter.QUPATH_NAV_TOOLS[name]);
+        if (viewer && typeof viewer.setMouseNavEnabled === "function") {
+            viewer.setMouseNavEnabled(navOn);
+        }
+        if (navOn) AnnotationAdapter.setMeasureTracking(false);
+        return true;
+    }
+
+    static activateImageJTool(tool, options = {}) {
+        return AnnotationAdapter.activateQuPathTool(tool, options);
+    }
+
+    static syncQuPathToolChrome(tool) {
+        const doc = typeof document !== "undefined" ? document : null;
+        const buttons = doc?.querySelectorAll?.("#secondary-annotation-toolbar .qp-tool, #secondary-annotation-toolbar .ij-tool");
+        if (!buttons) return false;
+        for (const btn of buttons) {
+            const id = btn.getAttribute("data-qp-tool") || btn.getAttribute("data-ij-tool");
+            const mapped = AnnotationAdapter.QUPATH_TOOL_ALIASES[id] || id;
+            if (mapped === "contrast" || mapped === "browser") {
+                btn.setAttribute("aria-pressed", "false");
+                continue;
+            }
+            btn.setAttribute("aria-pressed", String(mapped === tool));
+        }
+        return true;
+    }
+
+    static bindQuPathToolPointers() {
+        if (typeof document === "undefined" || document._wsiQuPathPointersBound) return false;
+        document.addEventListener("mousedown", event => {
+            AnnotationAdapter.onQuPathPointerDown(event);
+        }, true);
+        document.addEventListener("mousemove", event => {
+            AnnotationAdapter.onQuPathPointerMove(event);
+        }, true);
+        document.addEventListener("mouseup", event => {
+            AnnotationAdapter.onQuPathPointerUp(event);
+        }, true);
+        document.addEventListener("click", event => {
+            const tool = AnnotationAdapter.currentActiveTool || "move";
+            if (tool === "polygon" || tool === "polyline") return;
+            const hit = event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay");
+            if (hit) {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"));
+                return;
+            }
+            // Clicking away (in the viewer, but not on a shape) reverts the selection highlight,
+            // as long as this was a genuine click and not the mouseup end of a pan/drag.
+            if (AnnotationAdapter.selectedNativeAnnotationId
+                && AnnotationAdapter.quPathEventOnViewer(event)
+                && !AnnotationAdapter.wasQuPathClickADrag(event)) {
+                AnnotationAdapter.deselectNativeAnnotationShape();
+            }
+        }, true);
+        document.addEventListener("dblclick", event => {
+            AnnotationAdapter.onQuPathDoubleClick(event);
+        }, true);
+        document._wsiQuPathPointersBound = true;
+        return true;
+    }
+
+    static quPathEventOnViewer(event) {
+        if (!event) return false;
+        if (event.target?.closest?.("#secondary-annotation-toolbar, header, aside, #annotation-editor-popup, #floating-wand-palette, input, textarea, select, button")) {
+            return false;
+        }
+        const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
+        if (!host) return false;
+        if (typeof host.contains === "function" && event.target && !host.contains(event.target)
+            && !event.target?.closest?.(".osd-annotation-shape, .osd-svg-overlay")) {
+            return false;
+        }
+        return true;
+    }
+
+    static quPathClientPoint(event) {
+        const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
+        const rect = host?.getBoundingClientRect?.();
+        const x = Number(event?.clientX);
+        const y = Number(event?.clientY);
+        if (!rect || !Number.isFinite(x) || !Number.isFinite(y)) {
+            return { overlayX: x, overlayY: y, image: null };
+        }
+        const overlayX = x - rect.left;
+        const overlayY = y - rect.top;
+        let image = null;
+        let viewportX = overlayX;
+        let viewportY = overlayY;
+        try {
+            const viewer = AnnotationAdapter.viewer;
+            if (viewer?.viewport) {
+                const OSD = AnnotationAdapter._openSeadragon();
+                const pixel = OSD ? new OSD.Point(overlayX, overlayY) : { x: overlayX, y: overlayY };
+                const vp = viewer.viewport.pointFromPixel(pixel, true);
+                viewportX = Number(vp?.x);
+                viewportY = Number(vp?.y);
+            }
+            image = AnnotationAdapter.screenPixelToImagePoint(AnnotationAdapter.viewer, overlayX, overlayY);
+        } catch (_error) { /* keep overlay point */ }
+        return { overlayX, overlayY, viewportX, viewportY, image };
+    }
+
+    /**
+     * Single click on an existing shape only selects it (sets selectedNativeAnnotationId and
+     * applies a highlight class); it does NOT open the name popup. Double-click
+     * (onQuPathDoubleClick) is what opens the name popup.
+     */
+    static selectNativeAnnotationShape(id) {
+        if (!id) return false;
+        const doc = typeof document !== "undefined" ? document : null;
+        const previousId = AnnotationAdapter.selectedNativeAnnotationId;
+        if (previousId && previousId !== id) {
+            const prevNode = doc?.querySelector?.(`[data-annotation-id="${previousId}"]`);
+            prevNode?.classList?.remove?.("is-annotation-selected");
+        }
+        AnnotationAdapter.selectedNativeAnnotationId = id;
+        const node = doc?.querySelector?.(`[data-annotation-id="${id}"]`);
+        node?.classList?.add?.("is-annotation-selected");
+        return true;
+    }
+
+    /** Reverts the selection highlight and clears selectedNativeAnnotationId. */
+    static deselectNativeAnnotationShape() {
+        const previousId = AnnotationAdapter.selectedNativeAnnotationId;
+        if (!previousId) return false;
+        const doc = typeof document !== "undefined" ? document : null;
+        const prevNode = doc?.querySelector?.(`[data-annotation-id="${previousId}"]`);
+        prevNode?.classList?.remove?.("is-annotation-selected");
+        AnnotationAdapter.selectedNativeAnnotationId = null;
+        return true;
+    }
+
+    /** True if the pointer moved more than a small threshold between mousedown and this click
+     *  (i.e. this "click" is really the tail end of a pan/drag, not a deliberate click). */
+    static wasQuPathClickADrag(event, thresholdPx = 6) {
+        const start = AnnotationAdapter._qpMouseDownPoint;
+        if (!start) return false;
+        const dx = Number(event?.clientX) - start.x;
+        const dy = Number(event?.clientY) - start.y;
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
+        return ((dx * dx) + (dy * dy)) > (thresholdPx * thresholdPx);
+    }
+
+    static onQuPathPointerDown(event) {
+        AnnotationAdapter._qpMouseDownPoint = { x: Number(event?.clientX), y: Number(event?.clientY) };
+        const tool = AnnotationAdapter.currentActiveTool || "move";
+        if (tool === "polygon" || tool === "polyline") {
+            return AnnotationAdapter.handleQuPathClickPathInput(event, {
+                finish: Number(event.detail) >= 2
+            });
+        }
+        const hit = event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay");
+        if (hit) {
+            AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"));
+            return true;
+        }
+        if (tool === "move" || tool === "selection" || tool === "browser" || tool === "contrast") {
+            return false;
+        }
+        if (!AnnotationAdapter.quPathEventOnViewer(event) || event.button !== 0) return false;
+        const point = AnnotationAdapter.quPathClientPoint(event);
+        const shiftKey = Boolean(event.shiftKey || event.originalEvent?.shiftKey);
+        if (tool === "rectangle" || tool === "ellipse" || tool === "line" || tool === "brush") {
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            AnnotationAdapter.qpDrawSession = {
+                tool,
+                dragging: true,
+                shiftKey,
+                start: point,
+                current: AnnotationAdapter.applyQuPathShiftConstraint(point, point, tool, shiftKey),
+                vertices: [{ ...point }]
+            };
+            AnnotationAdapter.redrawQuPathPreview();
+            return true;
+        }
+        if (tool === "points") {
+            AnnotationAdapter.commitQuPathShape({
+                type: "points",
+                vertices: [point],
+                start: point,
+                current: point
+            }, event);
+            return true;
+        }
+        if (tool === "wand") {
+            if (event.target?.closest?.("#qp-tool-wand, #wand-config-dropdown, #floating-wand-palette, #secondary-annotation-toolbar, header, aside, button, select")) {
+                return false;
+            }
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            return AnnotationAdapter.beginWandDrawSession(event);
+        }
+        if (tool === "zoom") {
+            AnnotationAdapter.handleImageJZoomClick(event);
+            return true;
+        }
+        return false;
+    }
+
+    static onQuPathPointerMove(event) {
+        const session = AnnotationAdapter.qpDrawSession;
+        if (!session) return false;
+        const shiftKey = Boolean(event.shiftKey || event.originalEvent?.shiftKey);
+        session.shiftKey = shiftKey;
+        const point = AnnotationAdapter.quPathClientPoint(event);
+        if (session.tool === "polygon" || session.tool === "polyline") {
+            session.current = point;
+            session.dragging = false;
+            AnnotationAdapter.redrawQuPathPreview();
+            return true;
+        }
+        if (session.tool === "wand") {
+            return AnnotationAdapter.growWandDrawSession(event);
+        }
+        session.current = AnnotationAdapter.applyQuPathShiftConstraint(
+            session.start,
+            point,
+            session.tool,
+            shiftKey
+        );
+        if (session.tool === "brush" && session.dragging) {
+            session.vertices.push(session.current);
+        }
+        AnnotationAdapter.redrawQuPathPreview();
+        return true;
+    }
+
+    static polygonVerticesTooClose(a, b) {
+        if (!a || !b) return false;
+        const overlayDx = Number(a.overlayX) - Number(b.overlayX);
+        const overlayDy = Number(a.overlayY) - Number(b.overlayY);
+        if (Number.isFinite(overlayDx) && Number.isFinite(overlayDy)) {
+            return ((overlayDx * overlayDx) + (overlayDy * overlayDy)) < 64;
+        }
+        const dx = AnnotationAdapter.shapeCoordX(a) - AnnotationAdapter.shapeCoordX(b);
+        const dy = AnnotationAdapter.shapeCoordY(a) - AnnotationAdapter.shapeCoordY(b);
+        return ((dx * dx) + (dy * dy)) < 1e-6;
+    }
+
+    static handleQuPathClickPathInput(event, options = {}) {
+        const tool = AnnotationAdapter.currentActiveTool || "move";
+        if (tool !== "polygon" && tool !== "polyline") return false;
+        if (!AnnotationAdapter.quPathEventOnViewer(event)) return false;
+        if (event.button != null && event.button !== 0) return false;
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        const point = AnnotationAdapter.quPathClientPoint(event);
+        const finish = Boolean(options.finish) || Number(event.detail) >= 2;
+        AnnotationAdapter.appendPolygonTraceVertex(point, tool);
+        if (finish) return AnnotationAdapter.finishQuPathClickPath(event);
+        return true;
+    }
+
+    static onQuPathDoubleClick(event) {
+        const hit = event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay");
+        if (hit) {
+            AnnotationAdapter.openAnnotationNamePanelForShape(
+                hit.getAttribute("data-annotation-id"),
+                event
+            );
+            return true;
+        }
+        const tool = AnnotationAdapter.currentActiveTool || "move";
+        if (tool !== "polygon" && tool !== "polyline") return false;
+        return AnnotationAdapter.handleQuPathClickPathInput(event, { finish: true });
+    }
+
+    static appendPolygonTraceVertex(point, tool) {
+        const name = tool || "polygon";
+        const session = AnnotationAdapter.qpDrawSession?.tool === name
+            ? AnnotationAdapter.qpDrawSession
+            : { tool: name, dragging: false, start: point, current: point, vertices: [] };
+        const last = session.vertices[session.vertices.length - 1];
+        if (last && AnnotationAdapter.polygonVerticesTooClose(last, point)) {
+            AnnotationAdapter.qpDrawSession = session;
+            AnnotationAdapter.redrawQuPathPreview();
+            return true;
+        }
+        session.vertices.push(point);
+        session.start = session.vertices[0];
+        session.current = point;
+        session.dragging = false;
+        AnnotationAdapter.qpDrawSession = session;
+        AnnotationAdapter.redrawQuPathPreview();
+        return true;
+    }
+
+    static onQuPathPointerUp(event) {
+        const session = AnnotationAdapter.qpDrawSession;
+        if (!session || !session.dragging) return false;
+        const shiftKey = Boolean(event.shiftKey || event.originalEvent?.shiftKey);
+        session.shiftKey = shiftKey;
+        session.current = AnnotationAdapter.applyQuPathShiftConstraint(
+            session.start,
+            AnnotationAdapter.quPathClientPoint(event),
+            session.tool,
+            shiftKey
+        );
+        session.dragging = false;
+        if (session.tool === "rectangle" || session.tool === "ellipse" || session.tool === "line" || session.tool === "brush") {
+            AnnotationAdapter.commitQuPathShape({
+                type: session.tool,
+                start: session.start,
+                current: session.current,
+                vertices: session.vertices,
+                shiftKey
+            }, event);
+            AnnotationAdapter.qpDrawSession = null;
+            AnnotationAdapter.clearQuPathPreview();
+        }
+        if (session.tool === "wand") {
+            return AnnotationAdapter.finishWandDrawSession(event);
+        }
+        return true;
+    }
+
+    static finishQuPathClickPath(event = null) {
+        const session = AnnotationAdapter.qpDrawSession;
+        if (!session || (session.tool !== "polygon" && session.tool !== "polyline")) return false;
+        const min = session.tool === "polygon" ? 3 : 2;
+        if (!Array.isArray(session.vertices) || session.vertices.length < min) return false;
+        AnnotationAdapter.commitQuPathShape({
+            type: session.tool,
+            vertices: session.vertices.slice(),
+            start: session.vertices[0],
+            current: session.vertices[session.vertices.length - 1]
+        }, event);
+        AnnotationAdapter.qpDrawSession = null;
+        AnnotationAdapter.clearQuPathPreview();
+        return true;
+    }
+
+    static applyQuPathShiftConstraint(start, current, tool, shiftKey) {
+        if (!shiftKey || !start || !current || (tool !== "rectangle" && tool !== "ellipse")) {
+            return current;
+        }
+        let deltaX = Math.abs(AnnotationAdapter.shapeCoordX(current) - AnnotationAdapter.shapeCoordX(start));
+        let deltaY = Math.abs(AnnotationAdapter.shapeCoordY(current) - AnnotationAdapter.shapeCoordY(start));
+        const signX = AnnotationAdapter.shapeCoordX(current) >= AnnotationAdapter.shapeCoordX(start) ? 1 : -1;
+        const signY = AnnotationAdapter.shapeCoordY(current) >= AnnotationAdapter.shapeCoordY(start) ? 1 : -1;
+        if (tool === "rectangle") {
+            let side = Math.max(deltaX, deltaY);
+            deltaX = side;
+            deltaY = side;
+        } else {
+            // Ellipse: force rx and ry identical from the maximum pointer displacement.
+            let side = Math.max(deltaX, deltaY);
+            deltaX = side;
+            deltaY = side;
+        }
+        const next = {
+            ...current,
+            overlayX: Number(start.overlayX) + signX * Math.max(
+                Math.abs(Number(current.overlayX) - Number(start.overlayX)),
+                Math.abs(Number(current.overlayY) - Number(start.overlayY))
+            ),
+            overlayY: Number(start.overlayY) + signY * Math.max(
+                Math.abs(Number(current.overlayX) - Number(start.overlayX)),
+                Math.abs(Number(current.overlayY) - Number(start.overlayY))
+            ),
+            viewportX: AnnotationAdapter.shapeCoordX(start) + signX * deltaX,
+            viewportY: AnnotationAdapter.shapeCoordY(start) + signY * deltaY
+        };
+        if (start.image && current.image) {
+            let imgDx = Math.abs(Number(current.image.x) - Number(start.image.x));
+            let imgDy = Math.abs(Number(current.image.y) - Number(start.image.y));
+            const imgSignX = Number(current.image.x) >= Number(start.image.x) ? 1 : -1;
+            const imgSignY = Number(current.image.y) >= Number(start.image.y) ? 1 : -1;
+            const imgSide = Math.max(imgDx, imgDy);
+            next.image = {
+                ...current.image,
+                x: Number(start.image.x) + imgSignX * imgSide,
+                y: Number(start.image.y) + imgSignY * imgSide
+            };
+        }
+        return next;
+    }
+
+    static cancelQuPathDrawSession(options = {}) {
+        AnnotationAdapter.qpDrawSession = null;
+        AnnotationAdapter.clearQuPathPreview();
+        if (!options.keepTool) return true;
+        return true;
+    }
+
+    static ensureQuPathDrawOverlay() {
+        const viewer = AnnotationAdapter.viewer;
+        AnnotationAdapter.installSvgOverlayPlugin();
+        let root = null;
+        try {
+            if (viewer && typeof viewer.svgOverlay === "function") {
+                root = viewer.svgOverlay()?.node?.();
+            }
+        } catch (_error) { /* fall through */ }
+        if (!root) {
+            const doc = typeof document !== "undefined" ? document : null;
+            const container = viewer?.element || viewer?.container || viewer?.canvas
+                || doc?.getElementById?.("viewer");
+            if (!doc || !container) return AnnotationAdapter.qpDrawOverlayEl;
+            root = AnnotationAdapter.qpDrawOverlayEl;
+            if (!root) {
+                root = AnnotationAdapter._svgEl("svg");
+                root.setAttribute("class", "osd-svg-overlay wsi-qp-draw-overlay");
+                root.setAttribute("aria-hidden", "true");
+                if (root.style) {
+                    root.style.position = "absolute";
+                    root.style.left = "0";
+                    root.style.top = "0";
+                    root.style.width = "100%";
+                    root.style.height = "100%";
+                    root.style.pointerEvents = "none";
+                    root.style.overflow = "visible";
+                }
+            }
+            if (root.parentElement !== container && typeof container.appendChild === "function") {
+                container.appendChild(root);
+            }
+        }
+        if (root && !root.querySelector?.("[data-qp-committed]")) {
+            const committed = AnnotationAdapter._svgEl("g");
+            committed.setAttribute("data-qp-committed", "1");
+            const preview = AnnotationAdapter._svgEl("g");
+            preview.setAttribute("data-qp-preview", "1");
+            preview.style.pointerEvents = "none";
+            if (typeof root.appendChild === "function") {
+                root.appendChild(committed);
+                root.appendChild(preview);
+            }
+        }
+        AnnotationAdapter.qpDrawOverlayEl = root;
+        return root;
+    }
+
+    static quPathPreviewGroup() {
+        const svg = AnnotationAdapter.ensureQuPathDrawOverlay();
+        return svg?.querySelector?.("[data-qp-preview]") || null;
+    }
+
+    static quPathCommittedGroup() {
+        const svg = AnnotationAdapter.ensureQuPathDrawOverlay();
+        return svg?.querySelector?.("[data-qp-committed]") || null;
+    }
+
+    static clearQuPathPreview() {
+        const group = AnnotationAdapter.quPathPreviewGroup();
+        if (group) group.innerHTML = "";
+        return true;
+    }
+
+    static redrawQuPathPreview() {
+        const session = AnnotationAdapter.qpDrawSession;
+        const group = AnnotationAdapter.quPathPreviewGroup();
+        if (!session || !group) return false;
+        group.innerHTML = "";
+        const node = AnnotationAdapter.buildQuPathSvgShape(session.tool, session);
+        if (node) {
+            if (node.style) node.style.pointerEvents = "none";
+            node.setAttribute?.("pointer-events", "none");
+            group.appendChild(node);
+        }
+        return true;
+    }
+
+    static buildPolygonTracePreview(type, vertices, current) {
+        const xOf = pt => AnnotationAdapter.shapeCoordX(pt);
+        const yOf = pt => AnnotationAdapter.shapeCoordY(pt);
+        const list = Array.isArray(vertices) ? vertices : [];
+        const g = AnnotationAdapter._svgEl("g");
+        if (!list.length) return AnnotationAdapter.applyOsdAnnotationStyle(g, { filled: false });
+        let d = "";
+        list.forEach((vertex, index) => {
+            d += `${index === 0 ? "M" : "L"}${xOf(vertex)} ${yOf(vertex)}`;
+        });
+        if (type === "polygon" && list.length > 2 && !current) d += "Z";
+        const path = AnnotationAdapter._svgEl("path");
+        path.setAttribute("d", d);
+        AnnotationAdapter.applyOsdAnnotationStyle(path, { filled: type === "polygon" && list.length > 2 && !current });
+        if (type !== "polygon" || current || list.length < 3) path.setAttribute("fill", "none");
+        g.appendChild(path);
+        const last = list[list.length - 1];
+        if (current && last) {
+            const guide = AnnotationAdapter._svgEl("line");
+            guide.setAttribute("x1", String(xOf(last)));
+            guide.setAttribute("y1", String(yOf(last)));
+            guide.setAttribute("x2", String(xOf(current)));
+            guide.setAttribute("y2", String(yOf(current)));
+            AnnotationAdapter.applyOsdAnnotationStyle(guide, { filled: false });
+            guide.setAttribute("stroke-dasharray", "4 3");
+            g.appendChild(guide);
+        }
+        return AnnotationAdapter.applyOsdAnnotationStyle(g, { filled: false });
+    }
+
+    static buildQuPathSvgShape(type, payload) {
+        const start = payload?.start || payload?.vertices?.[0];
+        const current = payload?.current || payload?.vertices?.[payload?.vertices?.length - 1];
+        const vertices = Array.isArray(payload?.vertices) ? payload.vertices : [];
+        const xOf = pt => AnnotationAdapter.shapeCoordX(pt);
+        const yOf = pt => AnnotationAdapter.shapeCoordY(pt);
+        if (type === "rectangle" && start && current) {
+            const constrained = AnnotationAdapter.applyQuPathShiftConstraint(
+                start, current, "rectangle", Boolean(payload?.shiftKey)
+            );
+            const x = Math.min(xOf(start), xOf(constrained));
+            const y = Math.min(yOf(start), yOf(constrained));
+            const width = Math.abs(xOf(constrained) - xOf(start));
+            const height = Math.abs(yOf(constrained) - yOf(start));
+            const rect = AnnotationAdapter._svgEl("rect");
+            rect.setAttribute("x", String(x));
+            rect.setAttribute("y", String(y));
+            rect.setAttribute("width", String(width));
+            rect.setAttribute("height", String(height));
+            return AnnotationAdapter.applyOsdAnnotationStyle(rect);
+        }
+        if (type === "ellipse" && start && current) {
+            const constrained = AnnotationAdapter.applyQuPathShiftConstraint(
+                start, current, "ellipse", Boolean(payload?.shiftKey)
+            );
+            let rx = Math.abs(xOf(constrained) - xOf(start)) / 2;
+            let ry = Math.abs(yOf(constrained) - yOf(start)) / 2;
+            if (payload?.shiftKey) {
+                const r = Math.max(rx, ry);
+                rx = r;
+                ry = r;
+            }
+            const ellipse = AnnotationAdapter._svgEl("ellipse");
+            ellipse.setAttribute("cx", String((xOf(start) + xOf(constrained)) / 2));
+            ellipse.setAttribute("cy", String((yOf(start) + yOf(constrained)) / 2));
+            ellipse.setAttribute("rx", String(rx));
+            ellipse.setAttribute("ry", String(ry));
+            return AnnotationAdapter.applyOsdAnnotationStyle(ellipse);
+        }
+        if (type === "line" && start && current) {
+            const line = AnnotationAdapter._svgEl("line");
+            line.setAttribute("x1", String(xOf(start)));
+            line.setAttribute("y1", String(yOf(start)));
+            line.setAttribute("x2", String(xOf(current)));
+            line.setAttribute("y2", String(yOf(current)));
+            return AnnotationAdapter.applyOsdAnnotationStyle(line, { filled: false });
+        }
+        if ((type === "polygon" || type === "polyline" || type === "brush") && vertices.length) {
+            return AnnotationAdapter.buildPolygonTracePreview(type, vertices, current);
+        }
+        if (type === "points" && vertices.length) {
+            const g = AnnotationAdapter._svgEl("g");
+            AnnotationAdapter.applyOsdAnnotationStyle(g);
+            vertices.forEach(v => {
+                const c = AnnotationAdapter._svgEl("circle");
+                c.setAttribute("cx", String(xOf(v)));
+                c.setAttribute("cy", String(yOf(v)));
+                c.setAttribute("r", "4");
+                AnnotationAdapter.applyOsdAnnotationStyle(c);
+                g.appendChild(c);
+            });
+            return g;
+        }
+        if (type === "wand" && vertices.length >= 3) {
+            return AnnotationAdapter.buildPolygonTracePreview("polygon", vertices, null);
+        }
+        if (type === "wand" && start) {
+            const c = AnnotationAdapter._svgEl("circle");
+            c.setAttribute("cx", String(xOf(start)));
+            c.setAttribute("cy", String(yOf(start)));
+            c.setAttribute("r", "6");
+            return AnnotationAdapter.applyOsdAnnotationStyle(c);
+        }
+        return null;
+    }
+
+    static commitQuPathShape(shape, event = null) {
+        if (!shape?.type) return false;
+        if (String(shape.type).toLowerCase() === "wand" && !AnnotationAdapter.quPathEventOnViewer(event)) {
+            return false;
+        }
+        const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : `qp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const entry = AnnotationAdapter.buildUnifiedAnnotationRecord(shape, id);
+        const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        list.push(entry);
+        AnnotationAdapter.setSavedAnnotations(list);
+        const adapter = AnnotationAdapter.annotationEngine?.adapter
+            || AnnotationAdapter.annotationSpike?.adapter;
+        if (adapter?.metadataById && typeof adapter.metadataById.set === "function") {
+            adapter.metadataById.set(id, { ...entry });
+        }
+        const group = AnnotationAdapter.quPathCommittedGroup();
+        const node = AnnotationAdapter.buildQuPathSvgShape(shape.type, shape);
+        if (group && node) {
+            AnnotationAdapter.attachAnnotationShapeOverlay(node, id);
+            if (typeof group.appendChild === "function") group.appendChild(node);
+        }
+        try {
+            if (adapter && typeof adapter.annotationCreated === "function") {
+                adapter.annotationCreated(AnnotationAdapter.unifiedRecordToW3c(entry));
+            }
+        } catch (_error) { /* overlay already stored */ }
+        AnnotationAdapter.selectedNativeAnnotationId = id;
+        const fromToolbar = Boolean(event?.target?.closest?.(
+            "#secondary-annotation-toolbar, header, #qp-tool-wand, #wand-config-dropdown, #floating-wand-palette, button.qp-tool, button.toolbar-btn"
+        ));
+        if (!fromToolbar) AnnotationAdapter.openAnnotationNamePanelForShape(id, event);
+        return entry;
+    }
+
+    static buildUnifiedAnnotationRecord(shape, id) {
+        const start = shape.start || shape.vertices?.[0] || null;
+        const current = shape.current || shape.vertices?.[shape.vertices?.length - 1] || start;
+        const vertices = Array.isArray(shape.vertices) ? shape.vertices : [];
+        let x = null;
+        let y = null;
+        let width = null;
+        let height = null;
+        const ax = start?.image?.x;
+        const ay = start?.image?.y;
+        const bx = current?.image?.x;
+        const by = current?.image?.y;
+        if ([ax, ay, bx, by].every(Number.isFinite)) {
+            x = Math.min(ax, bx);
+            y = Math.min(ay, by);
+            width = Math.abs(bx - ax);
+            height = Math.abs(by - ay);
+        } else if (vertices.length) {
+            const xs = vertices.map(v => Number(v?.image?.x ?? v?.x ?? v?.[0])).filter(Number.isFinite);
+            const ys = vertices.map(v => Number(v?.image?.y ?? v?.y ?? v?.[1])).filter(Number.isFinite);
+            if (xs.length && ys.length) {
+                x = Math.min(...xs);
+                y = Math.min(...ys);
+                width = Math.max(...xs) - x;
+                height = Math.max(...ys) - y;
+            }
+        }
+        if ((!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) && vertices.length) {
+            const xs = vertices.map(v => Number(v?.overlayX ?? v?.viewportX)).filter(Number.isFinite);
+            const ys = vertices.map(v => Number(v?.overlayY ?? v?.viewportY)).filter(Number.isFinite);
+            if (xs.length && ys.length) {
+                x = Math.min(...xs);
+                y = Math.min(...ys);
+                width = Math.max(1, Math.max(...xs) - x);
+                height = Math.max(1, Math.max(...ys) - y);
+            }
+        }
+        return {
+            id,
+            type: shape.type,
+            name: null,
+            visible: true,
+            x,
+            y,
+            width,
+            height,
+            start: start || null,
+            current: current || null,
+            vertices,
+            shiftKey: Boolean(shape.shiftKey)
+        };
+    }
+
+    static attachAnnotationShapeOverlay(node, id) {
+        if (!node) return node;
+        node.setAttribute("data-annotation-id", id);
+        AnnotationAdapter.applyOsdAnnotationStyle(node, {
+            filled: String(node.getAttribute("fill") || "") !== "none"
+        });
+        if (node.classList && typeof node.classList.add === "function") {
+            node.classList.add("annotation-shape-overlay");
+            node.classList.add("osd-annotation-shape");
+        }
+        if (node.style) {
+            node.style.pointerEvents = "auto";
+            node.style.cursor = "pointer";
+        }
+        if (typeof node.addEventListener === "function") {
+            node.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.selectNativeAnnotationShape(id);
+            });
+        }
+        const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        const shapeObject = list.find(item => item && item.id === id) || { id, type: "rectangle" };
+        shapeObject.node = node;
+        AnnotationAdapter.bindQuPathShapeDragTracker(node, shapeObject);
+        return node;
+    }
+
+    static bindQuPathShapeDragTracker(elementNode, shapeObject) {
+        const viewer = AnnotationAdapter.viewer
+            || (typeof globalThis !== "undefined" ? globalThis.viewer : null);
+        const OSD = AnnotationAdapter._openSeadragon();
+        if (!elementNode || !viewer?.viewport || typeof OSD?.MouseTracker !== "function") return null;
+        const type = String(shapeObject?.type || "").toLowerCase();
+        if (!["ellipse", "polygon", "polyline", "line", "rectangle", "brush", "points", "wand"].includes(type)) {
+            return null;
+        }
+        const tracker = new OSD.MouseTracker({
+            element: elementNode,
+            dragHandler: function(event) {
+                // "move" is the default/most commonly active tool, and clicking directly on an
+                // existing shape never starts a new drawing (onQuPathPointerDown always intercepts
+                // shape hits first), so dragging a shape is safe to allow in both "move" and the
+                // dedicated "selection" tool — not "selection" only.
+                if (window.currentActiveTool !== "selection" && window.currentActiveTool !== "move") return;
+                let delta = viewer.viewport.deltaPointsFromPixels(event.delta);
+                AnnotationAdapter.updateShapeGeometryPosition(shapeObject, delta, event.delta);
+            }
+        });
+        if (!Array.isArray(AnnotationAdapter.qpShapeTrackers)) AnnotationAdapter.qpShapeTrackers = [];
+        AnnotationAdapter.qpShapeTrackers.push(tracker);
+        return tracker;
+    }
+
+    static viewportDeltaToImageDelta(delta) {
+        const viewer = AnnotationAdapter.viewer;
+        const tiled = AnnotationAdapter.primaryTiledImage?.(viewer);
+        if (!tiled || !delta) return { x: 0, y: 0 };
+        try {
+            const origin = tiled.viewportToImageCoordinates(0, 0);
+            const moved = tiled.viewportToImageCoordinates(Number(delta.x) || 0, Number(delta.y) || 0);
+            return {
+                x: Number(moved?.x) - Number(origin?.x) || 0,
+                y: Number(moved?.y) - Number(origin?.y) || 0
+            };
+        } catch (_error) {
+            return { x: 0, y: 0 };
+        }
+    }
+
+    static updateShapeGeometryPosition(shapeObject, delta, pixelDelta) {
+        if (!shapeObject) return null;
+        const dx = Number(pixelDelta?.x ?? 0);
+        const dy = Number(pixelDelta?.y ?? 0);
+        const dvpX = Number(delta?.x ?? 0);
+        const dvpY = Number(delta?.y ?? 0);
+        const img = AnnotationAdapter.viewportDeltaToImageDelta(delta);
+        const shiftPt = (pt) => {
+            if (!pt) return pt;
+            const next = {
+                ...pt,
+                overlayX: Number(pt.overlayX) + dx,
+                overlayY: Number(pt.overlayY) + dy,
+                viewportX: Number(pt.viewportX ?? pt.overlayX) + dvpX,
+                viewportY: Number(pt.viewportY ?? pt.overlayY) + dvpY
+            };
+            if (pt.image && Number.isFinite(Number(pt.image.x))) {
+                next.image = {
+                    ...pt.image,
+                    x: Number(pt.image.x) + img.x,
+                    y: Number(pt.image.y) + img.y
+                };
+            }
+            return next;
+        };
+        shapeObject.start = shiftPt(shapeObject.start);
+        shapeObject.current = shiftPt(shapeObject.current);
+        if (Array.isArray(shapeObject.vertices)) {
+            shapeObject.vertices = shapeObject.vertices.map(shiftPt);
+        }
+        if (Number.isFinite(Number(shapeObject.x))) shapeObject.x = Number(shapeObject.x) + img.x;
+        if (Number.isFinite(Number(shapeObject.y))) shapeObject.y = Number(shapeObject.y) + img.y;
+        AnnotationAdapter.syncQuPathShapeNode(shapeObject);
+        return shapeObject;
+    }
+
+    static syncQuPathShapeNode(shapeObject) {
+        const node = shapeObject?.node;
+        if (!node || typeof node.setAttribute !== "function") return false;
+        const type = String(shapeObject.type || "").toLowerCase();
+        const start = shapeObject.start;
+        const current = shapeObject.current;
+        const vertices = Array.isArray(shapeObject.vertices) ? shapeObject.vertices : [];
+        const xOf = pt => AnnotationAdapter.shapeCoordX(pt);
+        const yOf = pt => AnnotationAdapter.shapeCoordY(pt);
+        if ((type === "rectangle") && start && current) {
+            node.setAttribute("x", String(Math.min(xOf(start), xOf(current))));
+            node.setAttribute("y", String(Math.min(yOf(start), yOf(current))));
+            node.setAttribute("width", String(Math.abs(xOf(current) - xOf(start))));
+            node.setAttribute("height", String(Math.abs(yOf(current) - yOf(start))));
+            return true;
+        }
+        if (type === "ellipse" && start && current) {
+            node.setAttribute("cx", String((xOf(start) + xOf(current)) / 2));
+            node.setAttribute("cy", String((yOf(start) + yOf(current)) / 2));
+            node.setAttribute("rx", String(Math.abs(xOf(current) - xOf(start)) / 2));
+            node.setAttribute("ry", String(Math.abs(yOf(current) - yOf(start)) / 2));
+            return true;
+        }
+        if (type === "line" && start && current) {
+            node.setAttribute("x1", String(xOf(start)));
+            node.setAttribute("y1", String(yOf(start)));
+            node.setAttribute("x2", String(xOf(current)));
+            node.setAttribute("y2", String(yOf(current)));
+            return true;
+        }
+        if ((type === "polygon" || type === "polyline" || type === "brush" || type === "wand") && vertices.length) {
+            if (node.tagName === "g" || node.children?.length) {
+                const path = node.querySelector?.("path") || node;
+                let d = "";
+                vertices.forEach((vertex, index) => {
+                    d += `${index === 0 ? "M" : "L"}${xOf(vertex)} ${yOf(vertex)}`;
+                });
+                if (type === "polygon" || type === "wand") d += "Z";
+                if (path.setAttribute) path.setAttribute("d", d);
+                else node.setAttribute("points", vertices.map(v => `${xOf(v)},${yOf(v)}`).join(" "));
+                return true;
+            }
+            node.setAttribute("points", vertices.map(v => `${xOf(v)},${yOf(v)}`).join(" "));
+            return true;
+        }
+        if (type === "points" && vertices.length && node.children) {
+            for (let i = 0; i < vertices.length && i < node.children.length; i += 1) {
+                const child = node.children[i];
+                child.setAttribute?.("cx", String(xOf(vertices[i])));
+                child.setAttribute?.("cy", String(yOf(vertices[i])));
+            }
+            return true;
+        }
+        return false;
+    }
+
+    static openAnnotationNamePanelForShape(id, event = null) {
+        if (!id) return false;
+        const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        const entry = list.find(item => item && item.id === id) || { id, type: "rectangle", name: null };
+        AnnotationAdapter.selectedNativeAnnotationId = id;
+        const annotation = AnnotationAdapter.quPathEntryToAnnotationStub(entry);
+        const editor = AnnotationAdapter.annotationEngine?.nameEditor
+            || AnnotationAdapter.annotationSpike?.nameEditor;
+        if (editor) {
+            try { editor.setSelection([annotation], true); } catch (_error) { /* keep popup usable */ }
+        }
+        const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
+        const rect = host?.getBoundingClientRect?.();
+        const overlayX = Number(entry.current?.overlayX ?? entry.start?.overlayX);
+        const overlayY = Number(entry.current?.overlayY ?? entry.start?.overlayY);
+        const clientX = Number.isFinite(Number(event?.clientX))
+            ? Number(event.clientX)
+            : (rect && Number.isFinite(overlayX) ? rect.left + overlayX : null);
+        const clientY = Number.isFinite(Number(event?.clientY))
+            ? Number(event.clientY)
+            : (rect && Number.isFinite(overlayY) ? rect.top + overlayY : null);
+        return AnnotationAdapter.showAnnotationEditorForShape(annotation, AnnotationAdapter.viewer, {
+            clientX,
+            clientY
+        });
+    }
+
+    static quPathEntryToAnnotationStub(entry) {
+        const x = Number(entry?.x);
+        const y = Number(entry?.y);
+        const width = Number(entry?.width);
+        const height = Number(entry?.height);
+        const hasBox = [x, y, width, height].every(Number.isFinite);
+        return {
+            id: entry?.id,
+            type: entry?.type || "rectangle",
+            name: entry?.name || null,
+            target: {
+                selector: {
+                    type: entry?.type === "ellipse" ? "ELLIPSE" : "RECTANGLE",
+                    geometry: hasBox
+                        ? {
+                            x,
+                            y,
+                            w: width,
+                            h: height,
+                            bounds: { minX: x, minY: y, maxX: x + width, maxY: y + height }
+                        }
+                        : (entry?.start?.image
+                            ? {
+                                x: Number(entry.start.image.x),
+                                y: Number(entry.start.image.y),
+                                w: 1,
+                                h: 1,
+                                bounds: {
+                                    minX: Number(entry.start.image.x),
+                                    minY: Number(entry.start.image.y),
+                                    maxX: Number(entry.start.image.x) + 1,
+                                    maxY: Number(entry.start.image.y) + 1
+                                }
+                            }
+                            : null)
+                }
+            }
+        };
+    }
+
+    static tryCommitQuPathToAnnotorious(_shape, _id) {
+        return false;
+    }
+
+    static bindLayerVisibilityAndSanitizeControls(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        if (!doc?.getElementById) return false;
+        const vecBtn = doc.getElementById("toggle-annotations-visibility-btn");
+        if (vecBtn && vecBtn.dataset?.vecVisBound !== "1") {
+            vecBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.toggleVectorOutlineVisibility(doc);
+            });
+            if (vecBtn.dataset) vecBtn.dataset.vecVisBound = "1";
+        }
+        const lblBtn = doc.getElementById("toggle-labels-visibility-btn");
+        if (lblBtn && lblBtn.dataset?.lblVisBound !== "1") {
+            lblBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.toggleAnnotationLabelVisibility(doc);
+            });
+            if (lblBtn.dataset) lblBtn.dataset.lblVisBound = "1";
+        }
+        const clearBtn = doc.getElementById("clear-all-annotations-btn");
+        if (clearBtn && clearBtn.dataset?.sanitizeBound !== "1") {
+            clearBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                let proceed = confirm("WARNING: This deletion is completely irreversible. Proceeding will permanently wipe all active shapes and annotation names from the current image session. Do you want to proceed?");
+                if (proceed) {
+                    // Forceful data clearing sequence
+                    if (typeof viewer !== "undefined" && viewer.clearOverlays) {
+                        viewer.clearOverlays(); // Wipes SVG overlays off the active canvas area
+                    }
+                    let labels = document.querySelectorAll(".annotation-text-label, .annotation-marker-node");
+                    labels.forEach(l => l.remove()); // Wipes floating name tags entirely
+
+                    // Flush local memory tracking arrays and update tables
+                    AnnotationAdapter.setSavedAnnotations([]);
+                    let tableBody = document.getElementById("measurement-results-body");
+                    if (tableBody) tableBody.innerHTML = "";
+
+                    AnnotationAdapter.sanitizeCanvasAnnotations(doc);
+                    alert("Canvas successfully sanitized.");
+                }
+            });
+            if (clearBtn.dataset) clearBtn.dataset.sanitizeBound = "1";
+        }
+        return true;
+    }
+
+    static toggleVectorOutlineVisibility(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.vectorOutlinesVisible = !AnnotationAdapter.vectorOutlinesVisible;
+        const opacity = AnnotationAdapter.vectorOutlinesVisible ? "1" : "0";
+        const outlines = doc?.querySelectorAll?.(
+            ".osd-annotation-shape, .osd-svg-overlay .osd-annotation-shape"
+        ) || [];
+        outlines.forEach(el => {
+            if (el?.style) el.style.opacity = opacity;
+        });
+        const viewerEl = doc?.getElementById?.("viewer")
+            || AnnotationAdapter.viewer?.element;
+        viewerEl?.classList?.toggle?.("annotations-hidden", !AnnotationAdapter.vectorOutlinesVisible);
+        const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        if (engine) engine.annotationsVisible = AnnotationAdapter.vectorOutlinesVisible;
+        const btn = doc?.getElementById?.("toggle-annotations-visibility-btn");
+        btn?.setAttribute?.("aria-pressed", String(AnnotationAdapter.vectorOutlinesVisible));
+        return AnnotationAdapter.vectorOutlinesVisible;
+    }
+
+    static toggleAnnotationLabelVisibility(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.annotationLabelsVisible = !AnnotationAdapter.annotationLabelsVisible;
+        const display = AnnotationAdapter.annotationLabelsVisible ? "block" : "none";
+        const labels = doc?.querySelectorAll?.(
+            ".annotation-text-label, .annotation-marker-node, .annotation-name-label, .annotation-name-layer"
+        ) || [];
+        labels.forEach(el => {
+            if (el?.style) el.style.display = display;
+            if (typeof el?.removeAttribute === "function" && display === "block") {
+                el.removeAttribute("hidden");
+            } else if (display === "none" && el) {
+                el.hidden = true;
+            }
+        });
+        try {
+            const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+            engine?.labelLayer?.setNamesVisible?.(
+                AnnotationAdapter.annotationLabelsVisible
+            );
+        } catch (_error) { /* ignore */ }
+        const btn = doc?.getElementById?.("toggle-labels-visibility-btn");
+        btn?.setAttribute?.("aria-pressed", String(AnnotationAdapter.annotationLabelsVisible));
+        return AnnotationAdapter.annotationLabelsVisible;
+    }
+
+    static sanitizeCanvasAnnotations(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        const viewer = AnnotationAdapter.viewer
+            || (typeof globalThis !== "undefined" ? globalThis.viewer : undefined);
+        // Forceful data clearing sequence
+        if (typeof viewer !== "undefined" && viewer && viewer.clearOverlays) {
+            viewer.clearOverlays(); // Wipes SVG overlays off the active canvas area
+        }
+        let labels = doc?.querySelectorAll?.(".annotation-text-label, .annotation-marker-node, .annotation-name-label") || [];
+        labels.forEach(l => l.remove()); // Wipes floating name tags entirely
+
+        try { (AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike)?.labelLayer?.clear?.(); } catch (_error) { /* ignore */ }
+        const annotator = (AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike)?.annotator;
+        if (annotator && typeof annotator.clearAnnotations === "function") {
+            try { annotator.clearAnnotations(); } catch (_error) { /* ignore */ }
+        }
+
+        // Flush local memory tracking arrays and update tables
+        const store = AnnotationAdapter.annotationSpike?.adapter?.store;
+        if (store && store.currentCollection) {
+            store.updateCollection({
+                ...store.currentCollection,
+                annotations: []
+            });
+        }
+        AnnotationAdapter.measurementSessionList = [];
+        AnnotationAdapter.setSavedAnnotations([]);
+        let tableBody = doc?.getElementById?.("measurement-results-body");
+        if (tableBody) tableBody.innerHTML = "";
+        AnnotationAdapter.clearMeasurementResultsTable(doc);
         return true;
     }
 
@@ -5261,128 +7064,6 @@ class AnnotationAdapter {
         return true;
     }
 
-    static bindImageJViewerClicks() {
-        if (typeof document === "undefined" || document._wsiImageJClicksBound) return false;
-        document.addEventListener("click", event => {
-            const tool = AnnotationAdapter.activeImageJTool;
-            if (!tool || tool === "pan" || tool === "ruler" || tool === "rectangle"
-                || tool === "oval" || tool === "polygon") {
-                return;
-            }
-            if (event.target?.closest?.("#secondary-annotation-toolbar, header, aside")) return;
-            const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
-            if (!host || (typeof host.contains === "function" && !host.contains(event.target))) return;
-            if (tool === "zoom") AnnotationAdapter.handleImageJZoomClick(event);
-            else if (tool === "text") AnnotationAdapter.handleImageJTextClick(event);
-            else if (tool === "multipoint") AnnotationAdapter.handleImageJMultiPointClick(event);
-            else if (tool === "wand") AnnotationAdapter.handleImageJWandClick(event);
-        }, true);
-        document._wsiImageJClicksBound = true;
-        return true;
-    }
-
-    static syncImageJToolChrome(tool) {
-        const doc = typeof document !== "undefined" ? document : null;
-        const buttons = doc?.querySelectorAll?.("#secondary-annotation-toolbar .ij-tool");
-        if (!buttons) return false;
-        for (const btn of buttons) {
-            const id = btn.getAttribute("data-ij-tool");
-            if (id === "overlay" || id === "invert") continue;
-            btn.setAttribute("aria-pressed", String(id === tool));
-        }
-        return true;
-    }
-
-    static activateImageJTool(tool, options = {}) {
-        const name = String(tool || "").toLowerCase();
-        if (!name) return false;
-        if (AnnotationAdapter.IMAGEJ_PENDING_TOOLS[name]) {
-            console.info("Pending...", name);
-            return false;
-        }
-        if (name === "overlay") return AnnotationAdapter.toggleImageJOverlay();
-        if (name === "invert") return AnnotationAdapter.toggleImageJInvert();
-
-        const spike = options.annotationSpike || AnnotationAdapter.annotationSpike;
-        const viewer = AnnotationAdapter.viewer;
-        AnnotationAdapter.activeImageJTool = name;
-        AnnotationAdapter.syncImageJToolChrome(name);
-        AnnotationAdapter.setMeasurementEntryMode(name === "ruler" ? "multiple" : "single");
-
-        if (name === "ruler") {
-            try { spike?.setDrawingEnabled?.(false); } catch (_error) { /* ignore */ }
-            if (!AnnotationAdapter.isMeasurementModeActive) {
-                AnnotationAdapter.onMeasureModeButtonClick(options.event, { annotationSpike: spike });
-            }
-            return true;
-        }
-
-        if (name !== "pan") {
-            AnnotationAdapter.releaseMeasurementPointerLock(options.event || {});
-        } else if (AnnotationAdapter.isMeasurementModeActive || AnnotationAdapter.isDrawing) {
-            AnnotationAdapter.releaseMeasurementPointerLock(options.event || {});
-        }
-
-        try { spike?.setDrawingEnabled?.(false); } catch (_error) { /* ignore */ }
-
-        if (name === "pan") {
-            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
-                viewer.setMouseNavEnabled(true);
-            }
-            AnnotationAdapter.setMeasureTracking(false);
-            return true;
-        }
-
-        if (name === "rectangle" || name === "oval" || name === "polygon") {
-            const drawingTool = name === "oval" ? "ellipse" : name;
-            try { spike?.annotator?.setDrawingTool?.(drawingTool); } catch (_error) {
-                try { spike?.annotator?.setDrawingTool?.("rectangle"); } catch (_ignored) { /* ignore */ }
-            }
-            try { spike?.setDrawingEnabled?.(true); } catch (_error) { /* ignore */ }
-            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
-                viewer.setMouseNavEnabled(false);
-            }
-            return true;
-        }
-
-        if (name === "zoom" || name === "wand" || name === "text" || name === "multipoint") {
-            if (name === "multipoint") AnnotationAdapter.imageJMultiPoints = [];
-            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
-                viewer.setMouseNavEnabled(false);
-            }
-            return true;
-        }
-        return false;
-    }
-
-    static toggleImageJOverlay() {
-        const doc = typeof document !== "undefined" ? document : null;
-        const vis = doc?.getElementById?.("annotation-visibility");
-        const spike = AnnotationAdapter.annotationSpike;
-        if (vis && typeof vis.click === "function" && !vis.disabled) vis.click();
-        else if (spike && typeof spike.setAnnotationsVisible === "function") {
-            spike.setAnnotationsVisible(!spike.annotationsVisible);
-        }
-        const overlayBtn = doc?.getElementById?.("ij-tool-13");
-        const hidden = Boolean(spike && spike.annotationsVisible === false)
-            || vis?.getAttribute?.("aria-pressed") === "false";
-        if (overlayBtn?.setAttribute) overlayBtn.setAttribute("aria-pressed", String(!hidden));
-        return true;
-    }
-
-    static toggleImageJInvert() {
-        AnnotationAdapter.imageJLookupInverted = !AnnotationAdapter.imageJLookupInverted;
-        const doc = typeof document !== "undefined" ? document : null;
-        const host = doc?.getElementById?.("viewer")
-            || AnnotationAdapter.viewer?.element;
-        host?.classList?.toggle?.("ij-lookup-inverted", AnnotationAdapter.imageJLookupInverted);
-        const btn = doc?.getElementById?.("ij-tool-19");
-        if (btn?.setAttribute) {
-            btn.setAttribute("aria-pressed", String(AnnotationAdapter.imageJLookupInverted));
-        }
-        return AnnotationAdapter.imageJLookupInverted;
-    }
-
     static handleImageJZoomClick(event) {
         const viewer = AnnotationAdapter.viewer;
         if (!viewer?.viewport) return false;
@@ -5409,35 +7090,508 @@ class AnnotationAdapter {
         return true;
     }
 
-    static handleImageJTextClick(event) {
-        const popup = AnnotationAdapter.ensureAnnotationEditorPopup();
-        if (!popup) return false;
-        popup.hidden = false;
-        popup.removeAttribute?.("hidden");
-        if (popup.style) {
-            popup.style.display = "block";
-            popup.style.left = `${Number(event.clientX) + 12}px`;
-            popup.style.top = `${Number(event.clientY) + 12}px`;
+    static defaultWandConfig() {
+        return {
+            preset: "default",
+            radius: AnnotationAdapter.WAND_DEFAULT_RADIUS,
+            delta: AnnotationAdapter.WAND_DEFAULT_DELTA,
+            minFillPixels: AnnotationAdapter.WAND_DEFAULT_MIN_FILL,
+            connectivity: AnnotationAdapter.WAND_DEFAULT_CONNECTIVITY,
+            colorMetric: AnnotationAdapter.WAND_DEFAULT_COLOR_METRIC,
+            maxContourVertices: AnnotationAdapter.WAND_DEFAULT_MAX_VERTICES,
+            fallbackVertices: AnnotationAdapter.WAND_DEFAULT_FALLBACK_VERTICES
+        };
+    }
+
+    static loadWandConfig() {
+        let stored = null;
+        try {
+            const raw = typeof localStorage !== "undefined"
+                ? localStorage.getItem(AnnotationAdapter.WAND_CONFIG_STORAGE_KEY)
+                : null;
+            stored = raw ? JSON.parse(raw) : null;
+        } catch (_error) {
+            stored = null;
         }
-        const input = popup.querySelector?.("#annotation-name-input");
-        try { input?.focus?.(); } catch (_error) { /* ignore */ }
+        const defaults = AnnotationAdapter.defaultWandConfig();
+        const cfg = { ...defaults, ...(stored && typeof stored === "object" ? stored : {}) };
+        return AnnotationAdapter.normalizeWandConfig(cfg);
+    }
+
+    static normalizeWandConfig(raw = {}) {
+        const preset = String(raw.preset || "default").toLowerCase();
+        return {
+            preset: preset === "tissue" || preset === "custom" ? preset : "default",
+            radius: Math.max(4, Math.min(80, Number(raw.radius) || AnnotationAdapter.WAND_DEFAULT_RADIUS)),
+            delta: Math.max(1, Math.min(80, Number(raw.delta) || AnnotationAdapter.WAND_DEFAULT_DELTA)),
+            minFillPixels: Math.max(1, Math.min(400, Number(raw.minFillPixels) || AnnotationAdapter.WAND_DEFAULT_MIN_FILL)),
+            connectivity: Number(raw.connectivity) === 8 ? 8 : 4,
+            colorMetric: String(raw.colorMetric || "").toLowerCase() === "euclidean" ? "euclidean" : "chebyshev",
+            maxContourVertices: Math.max(8, Math.min(128, Number(raw.maxContourVertices) || AnnotationAdapter.WAND_DEFAULT_MAX_VERTICES)),
+            fallbackVertices: Math.max(8, Math.min(64, Number(raw.fallbackVertices) || AnnotationAdapter.WAND_DEFAULT_FALLBACK_VERTICES))
+        };
+    }
+
+    static saveWandConfig(cfg) {
+        const next = AnnotationAdapter.normalizeWandConfig(cfg || AnnotationAdapter.readWandThresholds());
+        AnnotationAdapter.wandPreset = next.preset;
+        AnnotationAdapter.wandLookupRadiusPx = next.radius;
+        AnnotationAdapter.wandColorDelta = next.delta;
+        AnnotationAdapter.wandMinFillPixels = next.minFillPixels;
+        AnnotationAdapter.wandConnectivity = next.connectivity;
+        AnnotationAdapter.wandColorMetric = next.colorMetric;
+        AnnotationAdapter.wandMaxContourVertices = next.maxContourVertices;
+        AnnotationAdapter.wandFallbackVertices = next.fallbackVertices;
+        try {
+            if (typeof localStorage !== "undefined") {
+                localStorage.setItem(AnnotationAdapter.WAND_CONFIG_STORAGE_KEY, JSON.stringify(next));
+            }
+        } catch (_error) { /* ignore quota */ }
+        return next;
+    }
+
+    static beginWandDrawSession(event) {
+        if (!AnnotationAdapter.quPathEventOnViewer(event)) return false;
+        const cfg = AnnotationAdapter.readWandThresholds();
+        const seed = AnnotationAdapter.quPathClientPoint(event);
+        seed.clientX = Number(event?.clientX);
+        seed.clientY = Number(event?.clientY);
+        const vertices = AnnotationAdapter.traceWandContour(seed, cfg) || [];
+        AnnotationAdapter.qpDrawSession = {
+            tool: "wand",
+            dragging: true,
+            seed,
+            start: vertices[0] || seed,
+            current: vertices[vertices.length - 1] || seed,
+            vertices,
+            cfg,
+            baseRadius: cfg.radius
+        };
+        AnnotationAdapter.redrawQuPathPreview();
         return true;
     }
 
-    static handleImageJMultiPointClick(event) {
-        AnnotationAdapter.imageJMultiPoints = Array.isArray(AnnotationAdapter.imageJMultiPoints)
-            ? AnnotationAdapter.imageJMultiPoints
-            : [];
-        AnnotationAdapter.imageJMultiPoints.push({
-            x: Number(event.clientX),
-            y: Number(event.clientY)
+    static growWandDrawSession(event) {
+        const session = AnnotationAdapter.qpDrawSession;
+        if (!session || session.tool !== "wand" || !session.dragging) return false;
+        const point = AnnotationAdapter.quPathClientPoint(event);
+        const dx = Number(point.overlayX) - Number(session.seed?.overlayX);
+        const dy = Number(point.overlayY) - Number(session.seed?.overlayY);
+        const dragPx = Number.isFinite(dx) && Number.isFinite(dy) ? Math.sqrt((dx * dx) + (dy * dy)) : 0;
+        const radius = Math.max(4, Math.min(80, Number(session.baseRadius) + dragPx));
+        const cfg = { ...session.cfg, radius };
+        const apply = () => {
+            session._wandRaf = 0;
+            const vertices = AnnotationAdapter.traceWandContour(session.seed, cfg) || [];
+            session.cfg = cfg;
+            session.vertices = vertices;
+            session.current = vertices[vertices.length - 1] || session.seed;
+            AnnotationAdapter.redrawQuPathPreview();
+        };
+        if (typeof requestAnimationFrame === "function") {
+            if (session._wandRaf) return true;
+            session._wandRaf = requestAnimationFrame(apply);
+            return true;
+        }
+        apply();
+        return true;
+    }
+
+    static finishWandDrawSession(event = null) {
+        const session = AnnotationAdapter.qpDrawSession;
+        if (!session || session.tool !== "wand") return false;
+        if (session._wandRaf && typeof cancelAnimationFrame === "function") {
+            try { cancelAnimationFrame(session._wandRaf); } catch (_error) { /* ignore */ }
+        }
+        session.dragging = false;
+        const vertices = Array.isArray(session.vertices) ? session.vertices : [];
+        AnnotationAdapter.qpDrawSession = null;
+        AnnotationAdapter.clearQuPathPreview();
+        if (vertices.length < 3) return false;
+        AnnotationAdapter.commitQuPathShape({
+            type: "wand",
+            vertices,
+            start: vertices[0],
+            current: vertices[vertices.length - 1]
+        }, event);
+        return true;
+    }
+
+    static wandPresetValues(preset) {
+        const name = String(preset || "default").toLowerCase();
+        if (name === "tissue") return { radius: 48, delta: 28 };
+        if (name === "custom") {
+            return {
+                radius: Number(AnnotationAdapter.wandLookupRadiusPx) || AnnotationAdapter.WAND_DEFAULT_RADIUS,
+                delta: Number(AnnotationAdapter.wandColorDelta) || AnnotationAdapter.WAND_DEFAULT_DELTA
+            };
+        }
+        return {
+            radius: AnnotationAdapter.WAND_DEFAULT_RADIUS,
+            delta: AnnotationAdapter.WAND_DEFAULT_DELTA
+        };
+    }
+
+    static readWandThresholds(root = null) {
+        const stored = AnnotationAdapter.loadWandConfig();
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const select = doc?.getElementById?.("wand-config-dropdown");
+        const preset = String(select?.value || stored.preset || AnnotationAdapter.wandPreset || "default");
+        const mapped = AnnotationAdapter.wandPresetValues(preset);
+        const next = AnnotationAdapter.normalizeWandConfig({
+            ...stored,
+            preset,
+            radius: Number(AnnotationAdapter.wandLookupRadiusPx) || mapped.radius || stored.radius,
+            delta: Number(AnnotationAdapter.wandColorDelta) || mapped.delta || stored.delta
         });
-        return AnnotationAdapter.imageJMultiPoints.length;
+        AnnotationAdapter.saveWandConfig(next);
+        return next;
     }
 
-    static handleImageJWandClick(event) {
-        console.info("Wand sample", Number(event.clientX), Number(event.clientY));
+    static applyWandPreset(preset, root = null) {
+        const name = String(preset || "default").toLowerCase();
+        const current = AnnotationAdapter.loadWandConfig();
+        const mapped = AnnotationAdapter.wandPresetValues(name);
+        const next = AnnotationAdapter.saveWandConfig({
+            ...current,
+            preset: name,
+            radius: name === "custom" ? current.radius : mapped.radius,
+            delta: name === "custom" ? current.delta : mapped.delta
+        });
+        AnnotationAdapter.syncFloatingWandPalette(root);
+        AnnotationAdapter.openFloatingWandPalette(root);
+        return next;
+    }
+
+    static bindWandConfigDropdown(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.bindFloatingWandPalette(doc);
+        const select = doc?.getElementById?.("wand-config-dropdown");
+        if (!select || select.dataset?.wandConfigBound === "1") return Boolean(select);
+        const stop = event => event.stopPropagation();
+        select.addEventListener("mousedown", stop);
+        select.addEventListener("click", stop);
+        select.addEventListener("change", event => {
+            event.stopPropagation();
+            AnnotationAdapter.applyWandPreset(select.value, doc);
+        });
+        if (select.dataset) select.dataset.wandConfigBound = "1";
+        const cfg = AnnotationAdapter.loadWandConfig();
+        select.value = cfg.preset || "default";
+        AnnotationAdapter.saveWandConfig(cfg);
+        AnnotationAdapter.syncFloatingWandPalette(doc);
         return true;
+    }
+
+    static resolveWandPaletteNode(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        return doc?.getElementById?.("floating-wand-palette") || AnnotationAdapter.wandPaletteElement || null;
+    }
+
+    static bindFloatingWandPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc?.getElementById) return null;
+        const palette = AnnotationAdapter.resolveWandPaletteNode(doc);
+        if (palette) AnnotationAdapter.wandPaletteElement = palette;
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
+        const closeBtn = palette?.querySelector?.("#floating-wand-close")
+            || doc.getElementById("floating-wand-close");
+        if (closeBtn && closeBtn.dataset?.fcpCloseBound !== "1") {
+            closeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.closeFloatingWandPalette(doc);
+            });
+            if (closeBtn.dataset) closeBtn.dataset.fcpCloseBound = "1";
+        }
+        const handle = palette?.querySelector?.("#floating-wand-handle")
+            || doc.getElementById("floating-wand-handle");
+        if (palette && handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        const preset = palette?.querySelector?.("#wand-preset-select") || doc.getElementById("wand-preset-select");
+        if (preset && preset.dataset?.wandControlBound !== "1") {
+            preset.addEventListener("change", () => AnnotationAdapter.applyWandPreset(preset.value, doc));
+            if (preset.dataset) preset.dataset.wandControlBound = "1";
+        }
+        const ids = [
+            "wand-radius", "wand-delta", "wand-min-fill",
+            "wand-connectivity", "wand-color-metric", "wand-max-vertices", "wand-fallback-vertices"
+        ];
+        ids.forEach(id => {
+            const control = palette?.querySelector?.(`#${id}`) || doc.getElementById(id);
+            if (!control || control.dataset?.wandControlBound === "1") return;
+            control.addEventListener("change", () => AnnotationAdapter.readWandPaletteControls(doc));
+            control.addEventListener("input", () => AnnotationAdapter.readWandPaletteControls(doc));
+            if (control.dataset) control.dataset.wandControlBound = "1";
+        });
+        return palette || null;
+    }
+
+    static readWandPaletteControls(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const valueOf = id => doc?.getElementById?.(id)?.value;
+        const next = AnnotationAdapter.saveWandConfig({
+            preset: "custom",
+            radius: valueOf("wand-radius"),
+            delta: valueOf("wand-delta"),
+            minFillPixels: valueOf("wand-min-fill"),
+            connectivity: valueOf("wand-connectivity"),
+            colorMetric: valueOf("wand-color-metric"),
+            maxContourVertices: valueOf("wand-max-vertices"),
+            fallbackVertices: valueOf("wand-fallback-vertices")
+        });
+        const select = doc?.getElementById?.("wand-config-dropdown");
+        if (select) select.value = next.preset;
+        AnnotationAdapter.syncFloatingWandPalette(doc);
+        return next;
+    }
+
+    static syncFloatingWandPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const cfg = AnnotationAdapter.loadWandConfig();
+        const setVal = (id, value) => {
+            const el = doc?.getElementById?.(id);
+            if (el && String(el.value) !== String(value)) el.value = String(value);
+        };
+        const setOut = (id, value) => {
+            const el = doc?.getElementById?.(id);
+            if (el) el.textContent = String(value);
+        };
+        setVal("wand-preset-select", cfg.preset);
+        setVal("wand-config-dropdown", cfg.preset);
+        setVal("wand-radius", cfg.radius);
+        setOut("wand-radius-value", cfg.radius);
+        setVal("wand-delta", cfg.delta);
+        setOut("wand-delta-value", cfg.delta);
+        setVal("wand-min-fill", cfg.minFillPixels);
+        setOut("wand-min-fill-value", cfg.minFillPixels);
+        setVal("wand-connectivity", cfg.connectivity);
+        setVal("wand-color-metric", cfg.colorMetric);
+        setVal("wand-max-vertices", cfg.maxContourVertices);
+        setOut("wand-max-vertices-value", cfg.maxContourVertices);
+        setVal("wand-fallback-vertices", cfg.fallbackVertices);
+        setOut("wand-fallback-vertices-value", cfg.fallbackVertices);
+        return cfg;
+    }
+
+    static openFloatingWandPalette(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolveWandPaletteNode(doc);
+        if (!doc || !palette) return false;
+        AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "17.5rem", minHeight: "12rem" });
+        palette.hidden = false;
+        palette.removeAttribute?.("hidden");
+        if (palette.style) palette.style.display = "flex";
+        palette.setAttribute("aria-hidden", "false");
+        AnnotationAdapter.wandPaletteElement = palette;
+        AnnotationAdapter.bindFloatingWandPalette(doc);
+        AnnotationAdapter.syncFloatingWandPalette(doc);
+        AnnotationAdapter.positionFloatingWandPalette(doc);
+        return true;
+    }
+
+    static closeFloatingWandPalette(root = null) {
+        const palette = AnnotationAdapter.resolveWandPaletteNode(root);
+        if (!palette) return false;
+        palette.hidden = true;
+        palette.setAttribute("aria-hidden", "true");
+        if (palette.style) palette.style.display = "none";
+        return true;
+    }
+
+    static positionFloatingWandPalette(root = null) {
+        const origin = AnnotationAdapter.viewerClientLaunchOrigin(root);
+        if (!origin) return false;
+        const palette = AnnotationAdapter.resolveWandPaletteNode(origin.doc);
+        if (!palette?.style) return false;
+        const width = Number(palette.offsetWidth) || parseFloat(palette.style?.width) || 280;
+        const height = Number(palette.offsetHeight) || parseFloat(palette.style?.height) || 360;
+        const cascaded = AnnotationAdapter.getAntiOverlapPosition(
+            origin.left,
+            origin.top,
+            width,
+            height,
+            palette.id || "floating-wand-palette",
+            origin.doc
+        );
+        palette.style.left = `${cascaded.left}px`;
+        palette.style.top = `${cascaded.top}px`;
+        palette.style.right = "auto";
+        palette.style.bottom = "auto";
+        return true;
+    }
+
+    static viewerDrawingCanvas(viewer = AnnotationAdapter.viewer) {
+        if (viewer?.drawer?.canvas) return viewer.drawer.canvas;
+        const host = viewer?.canvas;
+        if (host && String(host.tagName || "").toLowerCase() === "canvas") return host;
+        return host?.querySelector?.("canvas") || null;
+    }
+
+    static overlayOffsetPoint(base, dx, dy) {
+        const overlayX = Number(base?.overlayX) + Number(dx || 0);
+        const overlayY = Number(base?.overlayY) + Number(dy || 0);
+        const viewer = AnnotationAdapter.viewer;
+        let viewportX = Number(base?.viewportX);
+        let viewportY = Number(base?.viewportY);
+        let image = null;
+        try {
+            if (viewer?.viewport) {
+                const OSD = AnnotationAdapter._openSeadragon();
+                const pixel = OSD ? new OSD.Point(overlayX, overlayY) : { x: overlayX, y: overlayY };
+                const vp = viewer.viewport.pointFromPixel(pixel, true);
+                viewportX = Number(vp?.x);
+                viewportY = Number(vp?.y);
+            }
+            image = AnnotationAdapter.screenPixelToImagePoint(viewer, overlayX, overlayY);
+        } catch (_error) { /* keep overlay offset */ }
+        return { overlayX, overlayY, viewportX, viewportY, image };
+    }
+
+    static wandSeedClientXY(seedOrEvent, rect) {
+        const clientX = Number(seedOrEvent?.clientX);
+        const clientY = Number(seedOrEvent?.clientY);
+        if (Number.isFinite(clientX) && Number.isFinite(clientY)) return { clientX, clientY };
+        const overlayX = Number(seedOrEvent?.overlayX);
+        const overlayY = Number(seedOrEvent?.overlayY);
+        if (rect && Number.isFinite(overlayX) && Number.isFinite(overlayY)) {
+            return { clientX: rect.left + overlayX, clientY: rect.top + overlayY };
+        }
+        return { clientX, clientY };
+    }
+
+    static wandFallbackContour(seedOrEvent, cfg) {
+        const origin = seedOrEvent?.overlayX != null
+            ? seedOrEvent
+            : AnnotationAdapter.quPathClientPoint(seedOrEvent);
+        const radius = Math.max(4, Number(cfg?.radius) || AnnotationAdapter.WAND_DEFAULT_RADIUS);
+        const steps = Math.max(8, Number(cfg?.fallbackVertices) || AnnotationAdapter.WAND_DEFAULT_FALLBACK_VERTICES);
+        const vertices = [];
+        for (let i = 0; i < steps; i += 1) {
+            const angle = (i / steps) * Math.PI * 2;
+            vertices.push(AnnotationAdapter.overlayOffsetPoint(
+                origin,
+                Math.cos(angle) * radius,
+                Math.sin(angle) * radius
+            ));
+        }
+        return vertices;
+    }
+
+    static wandColorWithinDelta(dr, dg, db, delta, metric) {
+        if (metric === "euclidean") {
+            return Math.sqrt((dr * dr) + (dg * dg) + (db * db)) <= delta;
+        }
+        return Math.max(Math.abs(dr), Math.abs(dg), Math.abs(db)) <= delta;
+    }
+
+    static traceWandContour(seedOrEvent, cfg) {
+        const radius = Math.max(4, Math.min(80, Number(cfg?.radius) || AnnotationAdapter.WAND_DEFAULT_RADIUS));
+        const delta = Math.max(1, Math.min(80, Number(cfg?.delta) || AnnotationAdapter.WAND_DEFAULT_DELTA));
+        const minFill = Math.max(1, Number(cfg?.minFillPixels) || AnnotationAdapter.WAND_DEFAULT_MIN_FILL);
+        const connectivity = Number(cfg?.connectivity) === 8 ? 8 : 4;
+        const metric = String(cfg?.colorMetric || AnnotationAdapter.WAND_DEFAULT_COLOR_METRIC).toLowerCase();
+        const maxVerts = Math.max(8, Number(cfg?.maxContourVertices) || AnnotationAdapter.WAND_DEFAULT_MAX_VERTICES);
+        const canvas = AnnotationAdapter.viewerDrawingCanvas();
+        const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
+        const rect = host?.getBoundingClientRect?.();
+        if (!canvas || typeof canvas.getContext !== "function" || !rect) {
+            return AnnotationAdapter.wandFallbackContour(seedOrEvent, { ...cfg, radius, delta });
+        }
+        const { clientX, clientY } = AnnotationAdapter.wandSeedClientXY(seedOrEvent, rect);
+        const scaleX = (Number(canvas.width) || rect.width) / Math.max(1, rect.width);
+        const scaleY = (Number(canvas.height) || rect.height) / Math.max(1, rect.height);
+        const sx = Math.round((clientX - rect.left) * scaleX);
+        const sy = Math.round((clientY - rect.top) * scaleY);
+        const radiusCanvas = Math.max(4, Math.round(radius * Math.max(scaleX, scaleY)));
+        const x0 = Math.max(0, sx - radiusCanvas);
+        const y0 = Math.max(0, sy - radiusCanvas);
+        const width = Math.max(1, Math.min(canvas.width - x0, (sx + radiusCanvas) - x0));
+        const height = Math.max(1, Math.min(canvas.height - y0, (sy + radiusCanvas) - y0));
+        let data;
+        try {
+            data = canvas.getContext("2d", { willReadFrequently: true }).getImageData(x0, y0, width, height);
+        } catch (_error) {
+            return AnnotationAdapter.wandFallbackContour(seedOrEvent, { ...cfg, radius, delta });
+        }
+        const pixels = data.data;
+        const seedIndex = ((sy - y0) * width + (sx - x0)) * 4;
+        if (seedIndex < 0 || seedIndex + 3 >= pixels.length) {
+            return AnnotationAdapter.wandFallbackContour(seedOrEvent, { ...cfg, radius, delta });
+        }
+        const seed = [pixels[seedIndex], pixels[seedIndex + 1], pixels[seedIndex + 2]];
+        const filled = new Uint8Array(width * height);
+        const queue = [sx - x0, sy - y0];
+        filled[(sy - y0) * width + (sx - x0)] = 1;
+        let count = 1;
+        const maxPixels = Math.floor(Math.PI * radiusCanvas * radiusCanvas);
+        const radius2 = radiusCanvas * radiusCanvas;
+        const neighbors4 = [1, 0, -1, 0, 0, 1, 0, -1];
+        const neighbors8 = [1, 0, -1, 0, 0, 1, 0, -1, 1, 1, 1, -1, -1, 1, -1, -1];
+        const neighbors = connectivity === 8 ? neighbors8 : neighbors4;
+        while (queue.length) {
+            const x = queue.shift();
+            const y = queue.shift();
+            for (let i = 0; i < neighbors.length; i += 2) {
+                const nx = x + neighbors[i];
+                const ny = y + neighbors[i + 1];
+                if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                const dx = (nx + x0) - sx;
+                const dy = (ny + y0) - sy;
+                if ((dx * dx) + (dy * dy) > radius2) continue;
+                const idx = ny * width + nx;
+                if (filled[idx]) continue;
+                const pi = idx * 4;
+                const dr = pixels[pi] - seed[0];
+                const dg = pixels[pi + 1] - seed[1];
+                const db = pixels[pi + 2] - seed[2];
+                if (!AnnotationAdapter.wandColorWithinDelta(dr, dg, db, delta, metric)) continue;
+                filled[idx] = 1;
+                count += 1;
+                if (count >= maxPixels) break;
+                queue.push(nx, ny);
+            }
+            if (count >= maxPixels) break;
+        }
+        if (count < minFill) return AnnotationAdapter.wandFallbackContour(seedOrEvent, { ...cfg, radius, delta });
+        const edge = [];
+        for (let y = 0; y < height; y += 1) {
+            for (let x = 0; x < width; x += 1) {
+                if (!filled[y * width + x]) continue;
+                const border = x === 0 || y === 0 || x === width - 1 || y === height - 1
+                    || !filled[y * width + x + 1]
+                    || !filled[y * width + x - 1]
+                    || !filled[(y + 1) * width + x]
+                    || !filled[(y - 1) * width + x];
+                if (border) edge.push({ x, y });
+            }
+        }
+        if (edge.length < 3) return AnnotationAdapter.wandFallbackContour(seedOrEvent, { ...cfg, radius, delta });
+        const cx = edge.reduce((sum, p) => sum + p.x, 0) / edge.length;
+        const cy = edge.reduce((sum, p) => sum + p.y, 0) / edge.length;
+        edge.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, a.x - cx));
+        const step = Math.max(1, Math.floor(edge.length / maxVerts));
+        const origin = seedOrEvent?.overlayX != null
+            ? seedOrEvent
+            : AnnotationAdapter.quPathClientPoint(seedOrEvent);
+        const vertices = [];
+        for (let i = 0; i < edge.length; i += step) {
+            const px = x0 + edge[i].x;
+            const py = y0 + edge[i].y;
+            vertices.push(AnnotationAdapter.overlayOffsetPoint(
+                origin,
+                (px / scaleX) - (clientX - rect.left),
+                (py / scaleY) - (clientY - rect.top)
+            ));
+        }
+        return vertices.length >= 3
+            ? vertices
+            : AnnotationAdapter.wandFallbackContour(seedOrEvent, { ...cfg, radius, delta });
     }
 
     /**
@@ -5474,9 +7628,15 @@ class AnnotationAdapter {
             }
         }
         const next = !AnnotationAdapter.isMeasurementModeActive;
-        const spike = options.annotationSpike || AnnotationAdapter.annotationSpike;
-        if (next && spike?.setDrawingEnabled) {
-            try { spike.setDrawingEnabled(false); } catch (_error) { /* optional API */ }
+        const engine = options.annotationEngine || options.annotationSpike
+            || AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        if (next && engine) {
+            engine.drawingEnabled = false;
+            engine.toggleButton?.setAttribute?.("aria-pressed", "false");
+            if (AnnotationAdapter.currentActiveTool === "rectangle"
+                || AnnotationAdapter.currentActiveTool === "ellipse") {
+                AnnotationAdapter.activateQuPathTool("move");
+            }
         }
         if (next) {
             const doc = typeof document !== "undefined" ? document : null;
@@ -5676,12 +7836,20 @@ class AnnotationAdapter {
         popup.addEventListener("wheel", stop);
         const save = popup.querySelector?.("#annotation-editor-save");
         const cancel = popup.querySelector?.("#annotation-editor-cancel");
+        const input = popup.querySelector?.("#annotation-name-input");
         cancel?.addEventListener("mousedown", event => event.preventDefault());
+        input?.addEventListener("keydown", event => {
+            if (event.key !== "Enter" || event.isComposing) return;
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.commitAnnotationNameFromInput(root);
+            AnnotationAdapter.hideAnnotationEditorPopup(root, { commit: false });
+        });
         save?.addEventListener("click", event => {
             event.preventDefault();
             event.stopPropagation();
-            const editor = AnnotationAdapter.annotationSpike?.nameEditor;
-            editor?.commit();
+            AnnotationAdapter.commitAnnotationNameFromInput(root);
+            AnnotationAdapter.hideAnnotationEditorPopup(root, { commit: false });
         });
         cancel?.addEventListener("click", event => {
             event.preventDefault();
@@ -5693,34 +7861,19 @@ class AnnotationAdapter {
                     editor.input.setCustomValidity("");
                 }
             }
-            AnnotationAdapter.hideAnnotationEditorPopup(root);
+            AnnotationAdapter.hideAnnotationEditorPopup(root, { commit: false });
         });
         return popup;
     }
 
-    static bindAnnotationShapeEditorLoop(viewer, root = null) {
-        const host = viewer?.element || viewer?.canvas || viewer?.container;
-        if (!host || host._wsiAnnotationEditorLoopBound) return false;
-        host._wsiAnnotationEditorLoopBound = true;
-        const handlePointer = event => {
-            if (AnnotationAdapter.isMeasurementModeActive) return;
-            if (event?.button != null && event.button !== 0) return;
-            if (event?.target?.closest?.("#annotation-editor-popup")) return;
-            const spike = AnnotationAdapter.annotationSpike;
-            queueMicrotask(() => {
-                const selected = spike?.getSelectedAnnotations?.() || [];
-                if (selected.length === 1 && spike.annotationsVisible !== false) {
-                    AnnotationAdapter.showAnnotationEditorForShape(selected[0], viewer, {
-                        clientX: event.clientX,
-                        clientY: event.clientY,
-                        root
-                    });
-                    return;
-                }
-                AnnotationAdapter.hideAnnotationEditorPopup(root);
-            });
-        };
-        host.addEventListener("pointerup", handlePointer, true);
+    /**
+     * Only wires up the popup's viewport-follow behavior (so it tracks the shape while panning/
+     * zooming). This used to also open the name popup on every pointerup whenever exactly one
+     * annotation was selected — but selection (single click) and opening the popup (double click,
+     * see onQuPathDoubleClick/openAnnotationNamePanelForShape) are now deliberately decoupled, so
+     * that reopen-on-every-click behavior was removed.
+     */
+    static bindAnnotationShapeEditorLoop(viewer, _root = null) {
         AnnotationAdapter.bindAnnotationEditorViewportFollow(viewer);
         return true;
     }
@@ -5799,7 +7952,10 @@ class AnnotationAdapter {
         return true;
     }
 
-    static hideAnnotationEditorPopup(root = null) {
+    static hideAnnotationEditorPopup(root = null, options = {}) {
+        if (options.commit !== false) {
+            AnnotationAdapter.commitAnnotationNameFromInput(root);
+        }
         const doc = AnnotationAdapter._documentFromRoot(root);
         const popup = doc?.getElementById?.("annotation-editor-popup")
             || AnnotationAdapter.annotationEditorPopupEl;
@@ -5808,6 +7964,113 @@ class AnnotationAdapter {
         popup.hidden = true;
         if (popup.style) popup.style.display = "none";
         return true;
+    }
+
+    static commitAnnotationNameFromInput(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        const input = doc?.getElementById?.("annotation-name-input")
+            || AnnotationAdapter.annotationSpike?.nameEditor?.input
+            || AnnotationAdapter.annotationEditorPopupEl?.querySelector?.("#annotation-name-input");
+        const value = String(input?.value ?? "");
+        const editor = AnnotationAdapter.annotationSpike?.nameEditor;
+        if (editor?.selectedId && typeof editor.commit === "function") {
+            const id = editor.selectedId;
+            editor.commit();
+            AnnotationAdapter.applyCommittedAnnotationName(id, editor.storedValue ?? value);
+            return true;
+        }
+        const annotation = AnnotationAdapter._annotationEditorAnnotation
+            || AnnotationAdapter.annotationSpike?.getSelectedAnnotations?.()?.[0];
+        const clientId = annotation?.id;
+        if (!clientId) return false;
+        const adapter = AnnotationAdapter.annotationSpike?.adapter;
+        adapter?.setAnnotationName?.(clientId, value);
+        AnnotationAdapter.applyCommittedAnnotationName(clientId, value);
+        return true;
+    }
+
+    static applyCommittedAnnotationName(clientId, rawValue) {
+        if (!clientId) return false;
+        const name = String(rawValue || "").trim();
+        let list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        let entry = list.find(item => item && item.id === clientId);
+        if (!entry) {
+            entry = { id: clientId, name };
+            list = list.concat(entry);
+        } else {
+            entry.name = name || null;
+        }
+        AnnotationAdapter.setSavedAnnotations(list);
+
+        const spike = AnnotationAdapter.annotationSpike;
+        const annotation = spike?.annotator?.getAnnotations?.()?.find(item => item?.id === clientId)
+            || (AnnotationAdapter._annotationEditorAnnotation?.id === clientId
+                ? AnnotationAdapter._annotationEditorAnnotation
+                : null);
+        if (annotation) {
+            try { spike?.labelLayer?.syncAnnotation?.(annotation); } catch (_error) { /* ignore */ }
+        }
+        const doc = typeof document !== "undefined" ? document : null;
+        const labeled = doc?.querySelectorAll?.(
+            `[data-annotation-id="${clientId}"], [data-annotation-name-for="${clientId}"]`
+        ) || [];
+        labeled.forEach(node => {
+            if (node && "textContent" in node) node.textContent = name;
+        });
+        return true;
+    }
+
+    static syncSavedAnnotationsArray(adapter = null) {
+        const inst = adapter
+            || AnnotationAdapter.annotationEngine?.adapter
+            || AnnotationAdapter.annotationSpike?.adapter;
+        let backendList = [];
+        try {
+            backendList = inst?.toBackendCollection?.()?.annotations || [];
+        } catch (_error) {
+            backendList = inst?.store?.currentCollection?.annotations || [];
+        }
+        const existing = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        const byId = new Map();
+        existing.forEach(entry => {
+            if (entry?.id) byId.set(entry.id, entry);
+        });
+        const merged = (Array.isArray(backendList) ? backendList : []).map(backend => {
+            const prev = backend?.id ? byId.get(backend.id) : null;
+            if (prev && Array.isArray(prev.vertices) && prev.vertices.length) {
+                return {
+                    ...prev,
+                    name: backend.name ?? prev.name,
+                    visible: backend.visible !== false,
+                    type: prev.type || backend.type,
+                    vertices: prev.vertices,
+                    x: Number.isFinite(Number(backend.x)) ? Number(backend.x) : prev.x,
+                    y: Number.isFinite(Number(backend.y)) ? Number(backend.y) : prev.y,
+                    width: Number.isFinite(Number(backend.width)) ? Number(backend.width) : prev.width,
+                    height: Number.isFinite(Number(backend.height)) ? Number(backend.height) : prev.height
+                };
+            }
+            const points = Array.isArray(backend?.vertices) ? backend.vertices : [];
+            return {
+                ...(prev || {}),
+                ...backend,
+                type: backend?.type || prev?.type || "rectangle",
+                vertices: points.length
+                    ? points.map(pt => AnnotationAdapter.imagePointToShapePoint({
+                        x: Number(Array.isArray(pt) ? pt[0] : pt?.x),
+                        y: Number(Array.isArray(pt) ? pt[1] : pt?.y)
+                    }))
+                    : (prev?.vertices || [])
+            };
+        });
+        existing.forEach(entry => {
+            if (entry?.id && !merged.some(item => item?.id === entry.id)) merged.push(entry);
+        });
+        return AnnotationAdapter.setSavedAnnotations(merged);
     }
 
     static ensureMeasurementPopupOverlay(root = null) {
@@ -6360,9 +8623,14 @@ class AnnotationAdapter {
             return doc.createElementNS("http://www.w3.org/2000/svg", name);
         }
         const node = {
+            tagName: name,
             attrs: Object.create(null),
             style: {},
-            setAttribute(key, value) { this.attrs[key] = String(value); }
+            children: [],
+            setAttribute(key, value) { this.attrs[key] = String(value); },
+            getAttribute(key) { return this.attrs[key] ?? null; },
+            appendChild(child) { this.children.push(child); return child; },
+            querySelector() { return this.children[0] || null; }
         };
         return node;
     }
@@ -6837,6 +9105,7 @@ class AnnotationAdapter {
         // Re-read localStorage before the store's debounced annotation PUT.
         this.workstationUserId = AnnotationAdapter.resolveWorkstationUserId();
         this.store.updateCollection(this.toBackendCollection());
+        AnnotationAdapter.syncSavedAnnotationsArray(this);
     }
 
     getAnnotationName(clientId) {
@@ -6845,19 +9114,27 @@ class AnnotationAdapter {
     }
 
     setAnnotationName(clientId, value) {
-        const existing = this.metadataById.get(clientId);
-        if (!existing) return false;
+        if (!clientId) return false;
+        let existing = this.metadataById.get(clientId);
+        if (!existing) {
+            existing = { id: clientId, name: null };
+            this.metadataById.set(clientId, existing);
+        }
         const name = value === null || value === undefined ? null : String(value).trim() || null;
         const previous = typeof existing.name === "string" && existing.name.length > 0
             ? existing.name
             : null;
-        if (name === previous) return false;
+        if (name === previous) {
+            AnnotationAdapter.applyCommittedAnnotationName(clientId, name || "");
+            return false;
+        }
 
         const updated = { ...existing, name };
         this.metadataById.set(clientId, updated);
         const backendId = this.backendIdByClientId.get(clientId);
         if (backendId) this.metadataById.set(backendId, updated);
         this.collectionEdited();
+        AnnotationAdapter.applyCommittedAnnotationName(clientId, name || "");
         return true;
     }
 
@@ -6889,7 +9166,7 @@ class AnnotationAdapter {
             }
         }
 
-        await this.replaceAnnotoriousAnnotations(displayed);
+        await this.replaceDisplayedAnnotations(displayed);
     }
 
     indexBackendMetadata(collection) {
@@ -6933,11 +9210,10 @@ class AnnotationAdapter {
 
     isSupportedBackendAnnotation(annotation) {
         const type = String(annotation?.type || "rectangle").toLowerCase();
-        return type === "rectangle" || type === "square" ||
-            type === "ellipse" || type === "circle";
+        return Boolean(AnnotationAdapter.FREEFORM_BACKEND_TYPES[type]);
     }
 
-    replaceAnnotoriousAnnotations(annotations) {
+    replaceDisplayedAnnotations(annotations) {
         const safeAnnotations = (Array.isArray(annotations) ? annotations : [])
             .filter(annotation => annotation && typeof annotation === "object")
             .map(annotation => ({
@@ -6947,24 +9223,13 @@ class AnnotationAdapter {
                     : []
             }));
 
-        // Annotorious replacement can be asynchronous. Serializing replacements
-        // makes an older image incapable of winning a race with a newer one.
         const replacement = this.replacementQueue.then(async () => {
             this.suppressEvents = true;
             try {
-                if (typeof this.annotator.setAnnotations === "function") {
+                if (typeof this.annotator?.setAnnotations === "function") {
                     await this.annotator.setAnnotations(safeAnnotations, true);
                 } else {
-                    await this.annotator.clearAnnotations();
-                    if (safeAnnotations.length > 0) {
-                        if (typeof this.annotator.addAnnotations === "function") {
-                            await this.annotator.addAnnotations(safeAnnotations);
-                        } else {
-                            for (const annotation of safeAnnotations) {
-                                await this.annotator.addAnnotation(annotation);
-                            }
-                        }
-                    }
+                    AnnotationAdapter.mountW3cAnnotationsOnOverlay(safeAnnotations);
                 }
             } finally {
                 this.suppressEvents = false;
@@ -6972,6 +9237,10 @@ class AnnotationAdapter {
         });
         this.replacementQueue = replacement.catch(() => {});
         return replacement;
+    }
+
+    replaceAnnotoriousAnnotations(annotations) {
+        return this.replaceDisplayedAnnotations(annotations);
     }
 
     toBackendCollection() {
@@ -6998,16 +9267,29 @@ class AnnotationAdapter {
         const height = Number(geometry?.h);
 
         if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
-            throw new Error("Annotorious returned invalid annotation geometry.");
+            throw new Error("Annotation has invalid geometry.");
         }
 
         const existing = this.metadataById.get(annotation.id);
         const selectorType = String(annotation?.target?.selector?.type || "RECTANGLE").toUpperCase();
-        const type = selectorType === "ELLIPSE" ? "ellipse" : "rectangle";
+        const rawType = String(annotation?.type || existing?.type || "").toLowerCase();
+        const type = AnnotationAdapter.FREEFORM_BACKEND_TYPES[rawType]
+            ? rawType
+            : selectorType === "ELLIPSE" ? "ellipse"
+            : selectorType === "POLYGON" ? "polygon"
+            : selectorType === "POLYLINE" ? "polyline"
+            : selectorType === "LINE" ? "line"
+            : "rectangle";
+        const vertexSource = Array.isArray(geometry?.points) && geometry.points.length
+            ? geometry.points
+            : (Array.isArray(existing?.vertices) ? existing.vertices : []);
+        const vertices = vertexSource.map(pt => AnnotationAdapter.vertexToImagePair(pt)).filter(pair =>
+            Number.isFinite(pair[0]) && Number.isFinite(pair[1])
+        );
 
         const backend = {
             ...existing,
-            // Annotorious-generated IDs are not guaranteed to be UUIDs. Sending
+            // Client-generated IDs are not guaranteed to be UUIDs. Sending
             // null lets the backend assign a canonical UUID.
             id: this.backendIdByClientId.get(annotation.id) ||
                 (this.isUuid(annotation.id) ? annotation.id : null),
@@ -7026,7 +9308,8 @@ class AnnotationAdapter {
             modifiedAt: existing?.modifiedAt || null,
             bodies: Array.isArray(annotation?.bodies)
                 ? annotation.bodies.filter(body => body && typeof body === "object")
-                : (Array.isArray(existing?.bodies) ? existing.bodies : [])
+                : (Array.isArray(existing?.bodies) ? existing.bodies : []),
+            vertices
         };
         // Keep metadata for a freshly drawn client ID so it can be named before
         // the first debounced server response assigns a canonical UUID.
@@ -7046,12 +9329,21 @@ class AnnotationAdapter {
         }
 
         const type = String(annotation.type || "rectangle").toLowerCase();
-        const selectorType = type === "ellipse" || type === "circle"
-            ? "ELLIPSE"
+        const selectorType = type === "ellipse" || type === "circle" ? "ELLIPSE"
+            : type === "polygon" || type === "wand" ? "POLYGON"
+            : type === "polyline" || type === "brush" ? "POLYLINE"
+            : type === "line" ? "LINE"
             : "RECTANGLE";
+        const points = Array.isArray(annotation.vertices)
+            ? annotation.vertices.map(pt => AnnotationAdapter.vertexToImagePair(pt)).filter(pair =>
+                Number.isFinite(pair[0]) && Number.isFinite(pair[1])
+            )
+            : [];
 
         return {
             id: annotation.id,
+            type,
+            name: annotation.name || null,
             bodies: Array.isArray(annotation.bodies)
                 ? annotation.bodies.filter(body => body && typeof body === "object")
                 : [],
@@ -7068,7 +9360,8 @@ class AnnotationAdapter {
                         x,
                         y,
                         w: width,
-                        h: height
+                        h: height,
+                        points
                     }
                 }
             }
@@ -8460,11 +10753,11 @@ class AnnotationAdapter {
     }
 
     static readSelectedAnnotationImageBounds() {
-        const spike = AnnotationAdapter.annotationSpike;
-        const selected = spike?.getSelectedAnnotations?.()?.[0];
-        if (!selected || typeof spike.getAnnotationBounds !== "function") return null;
+        const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        const selected = engine?.getSelectedAnnotations?.()?.[0];
+        if (!selected || typeof engine.getAnnotationBounds !== "function") return null;
         try {
-            const bounds = spike.getAnnotationBounds(selected);
+            const bounds = engine.getAnnotationBounds(selected);
             const x = Number(bounds?.x);
             const y = Number(bounds?.y);
             const width = Number(bounds?.width);
@@ -9518,8 +11811,175 @@ class AnnotationAdapter {
     }
 }
 
+class NativeOsdAnnotationEngine {
+    constructor(options = {}) {
+        this.viewer = options.viewer || null;
+        this.adapter = options.adapter || null;
+        this.annotator = options.annotator || AnnotationAdapter.createNativeAnnotatorFacade();
+        this.labelLayer = options.labelLayer || null;
+        this.nameEditor = options.nameEditor || null;
+        this.toggleButton = options.toggleButton || null;
+        this.visibilityButton = options.visibilityButton || null;
+        this.namesButton = options.namesButton || null;
+        this.getCurrentImageId = options.getCurrentImageId || (() => null);
+        this.timingCallbacks = options.timingCallbacks || {};
+        this.drawingEnabled = false;
+        this.annotationsVisible = true;
+    }
+
+    bindChrome() {
+        if (this.toggleButton && this.toggleButton.dataset?.nativeDrawBound !== "1") {
+            this.toggleButton.addEventListener("click", () => {
+                if (AnnotationAdapter.isMeasurementModeActive) {
+                    try { AnnotationAdapter.setMeasurementModeActive(false); } catch (_error) { /* ignore */ }
+                }
+                AnnotationAdapter.setViewerTool("rectangle");
+            });
+            if (this.toggleButton.dataset) this.toggleButton.dataset.nativeDrawBound = "1";
+        }
+        if (this.visibilityButton && this.visibilityButton.dataset?.nativeVisBound !== "1") {
+            this.visibilityButton.addEventListener("click", () => {
+                this.setAnnotationsVisible(!this.annotationsVisible);
+            });
+            if (this.visibilityButton.dataset) this.visibilityButton.dataset.nativeVisBound = "1";
+        }
+        if (this.namesButton && this.namesButton.dataset?.nativeNamesBound !== "1") {
+            this.namesButton.addEventListener("click", () => {
+                const visible = !(this.labelLayer?.namesVisible);
+                this.labelLayer?.setNamesVisible?.(visible);
+                AnnotationAdapter.annotationLabelsVisible = Boolean(visible);
+                this.updateNamesButton();
+            });
+            if (this.namesButton.dataset) this.namesButton.dataset.nativeNamesBound = "1";
+        }
+        this.updateNamesButton();
+        if (this.visibilityButton) {
+            this.visibilityButton.setAttribute("aria-pressed", String(this.annotationsVisible));
+            this.visibilityButton.textContent = "Annotations";
+            const action = this.annotationsVisible ? "Hide annotations" : "Show annotations";
+            this.visibilityButton.title = action;
+            this.visibilityButton.setAttribute("aria-label", action);
+        }
+        return this;
+    }
+
+    async handleViewerOpen() {
+        const imageId = this.getCurrentImageId?.();
+        this.timingCallbacks.open?.(imageId);
+        this.setDrawingEnabled(false);
+        this.nameEditor?.setSelection?.([], this.annotationsVisible);
+        this.timingCallbacks.selectionChanged?.([]);
+        try { AnnotationAdapter.hideAnnotationEditorPopup(); } catch (_error) { /* ignore */ }
+        this.labelLayer?.beginImage?.(imageId);
+        if (this.adapter && typeof this.adapter.loadCurrentImage === "function") {
+            await this.adapter.loadCurrentImage(imageId);
+        }
+    }
+
+    setDrawingEnabled(enabled) {
+        this.drawingEnabled = Boolean(enabled) && this.annotationsVisible;
+        if (this.drawingEnabled) {
+            try { AnnotationAdapter.setMeasureTracking?.(false); } catch (_error) { /* ignore */ }
+            if (AnnotationAdapter.isMeasurementModeActive) {
+                try { AnnotationAdapter.setMeasurementModeActive(false); } catch (_error) { /* ignore */ }
+            }
+            AnnotationAdapter.activateQuPathTool("rectangle");
+        } else if (AnnotationAdapter.currentActiveTool === "rectangle") {
+            AnnotationAdapter.activateQuPathTool("move");
+        }
+        this.drawingEnabled = Boolean(enabled) && this.annotationsVisible;
+        if (this.toggleButton) {
+            this.toggleButton.disabled = !this.annotationsVisible;
+            this.toggleButton.setAttribute("aria-pressed", String(this.drawingEnabled));
+            this.toggleButton.title = this.drawingEnabled
+                ? "Exit rectangle annotation mode"
+                : "Draw rectangle annotation";
+            this.toggleButton.setAttribute("aria-label", this.toggleButton.title);
+        }
+        return this.drawingEnabled;
+    }
+
+    setAnnotationsVisible(visible) {
+        this.annotationsVisible = Boolean(visible);
+        AnnotationAdapter.vectorOutlinesVisible = this.annotationsVisible;
+        this.viewer?.element?.classList?.toggle?.("annotations-hidden", !this.annotationsVisible);
+        this.labelLayer?.setAnnotationsVisible?.(this.annotationsVisible);
+        const doc = typeof document !== "undefined" ? document : null;
+        const outlines = doc?.querySelectorAll?.(".osd-annotation-shape") || [];
+        outlines.forEach(el => {
+            if (el?.style) el.style.opacity = this.annotationsVisible ? "1" : "0";
+        });
+        if (!this.annotationsVisible) this.setDrawingEnabled(false);
+        if (this.toggleButton) this.toggleButton.disabled = !this.annotationsVisible;
+        if (this.visibilityButton) {
+            this.visibilityButton.setAttribute("aria-pressed", String(this.annotationsVisible));
+            this.visibilityButton.textContent = "Annotations";
+            const action = this.annotationsVisible ? "Hide annotations" : "Show annotations";
+            this.visibilityButton.title = action;
+            this.visibilityButton.setAttribute("aria-label", action);
+        }
+        this.notifySelectionChanged();
+        return this.annotationsVisible;
+    }
+
+    updateNamesButton() {
+        if (!this.namesButton) return;
+        const shown = this.labelLayer?.namesVisible !== false;
+        this.namesButton.setAttribute("aria-pressed", String(shown));
+        this.namesButton.textContent = "Names";
+        this.namesButton.title = shown ? "Hide annotation names" : "Show annotation names";
+        this.namesButton.setAttribute("aria-label", this.namesButton.title);
+    }
+
+    getSelectedAnnotations() {
+        const id = AnnotationAdapter.selectedNativeAnnotationId;
+        const live = this.annotator?.getAnnotations?.() || [];
+        if (id) {
+            const found = live.find(item => item?.id === id);
+            return found ? [found] : [];
+        }
+        return [];
+    }
+
+    notifySelectionChanged() {
+        const selected = this.getSelectedAnnotations();
+        this.nameEditor?.setSelection?.(selected, this.annotationsVisible);
+        if (selected.length === 1 && this.annotationsVisible) {
+            AnnotationAdapter.showAnnotationEditorForShape(selected[0], this.viewer);
+        } else {
+            AnnotationAdapter.hideAnnotationEditorPopup(null, { commit: false });
+        }
+        this.timingCallbacks.selectionChanged?.(selected);
+    }
+
+    getAnnotationBounds(annotation) {
+        const geometry = annotation?.target?.selector?.geometry;
+        const bounds = geometry?.bounds;
+        const minX = Number(bounds?.minX);
+        const minY = Number(bounds?.minY);
+        const maxX = Number(bounds?.maxX);
+        const maxY = Number(bounds?.maxY);
+        if ([minX, minY, maxX, maxY].every(Number.isFinite) && maxX > minX && maxY > minY) {
+            return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        }
+        const x = Number(geometry?.x);
+        const y = Number(geometry?.y);
+        const width = Number(geometry?.w ?? geometry?.width);
+        const height = Number(geometry?.h ?? geometry?.height);
+        if ([x, y, width, height].every(Number.isFinite) && width > 0 && height > 0) {
+            return { x, y, width, height };
+        }
+        throw new Error("The selected annotation has no exportable geometry.");
+    }
+}
+
 // Cold-start / cleared-storage defaults for measurement state.
 AnnotationAdapter.ensureMeasurementDefaults();
+AnnotationAdapter.setSavedAnnotations(
+    (typeof window !== "undefined" && Array.isArray(window.savedAnnotationsArray))
+        ? window.savedAnnotationsArray
+        : AnnotationAdapter.savedAnnotationsArray
+);
 AnnotationAdapter.scheduleAiMlBackendInit();
 AnnotationAdapter.bindResetViewportHomeButton();
 AnnotationAdapter.bindAdvancedChannelPalette();
@@ -9527,6 +11987,9 @@ AnnotationAdapter.bindFloatingAiLabsPalette();
 AnnotationAdapter.bindFloatingAdminPalette();
 AnnotationAdapter.bindFloatingZStackPalette();
 AnnotationAdapter.bindFloatingMeasurementPalette();
+AnnotationAdapter.bindFloatingWandPalette();
+AnnotationAdapter.installViewerToolAlias();
+AnnotationAdapter.bindGlobalUiTooltip();
 if (typeof document !== "undefined" && document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
         AnnotationAdapter.bindResetViewportHomeButton();
@@ -9535,8 +11998,10 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
         AnnotationAdapter.bindFloatingAdminPalette();
         AnnotationAdapter.bindFloatingZStackPalette();
         AnnotationAdapter.bindFloatingMeasurementPalette();
+        AnnotationAdapter.bindFloatingWandPalette();
         AnnotationAdapter.ensureMeasurementPopupOverlay();
         AnnotationAdapter.ensureAnnotationEditorPopup();
+        AnnotationAdapter.bindGlobalUiTooltip();
     });
 } else if (typeof document !== "undefined") {
     AnnotationAdapter.bindAdvancedChannelPalette();
@@ -9544,6 +12009,8 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
     AnnotationAdapter.bindFloatingAdminPalette();
     AnnotationAdapter.bindFloatingZStackPalette();
     AnnotationAdapter.bindFloatingMeasurementPalette();
+    AnnotationAdapter.bindFloatingWandPalette();
     AnnotationAdapter.ensureMeasurementPopupOverlay();
     AnnotationAdapter.ensureAnnotationEditorPopup();
+    AnnotationAdapter.bindGlobalUiTooltip();
 }

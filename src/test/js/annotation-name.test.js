@@ -103,12 +103,14 @@ context.WsiCsrf.csrfFetch = async (_url, options) => {
     input.dispatch("blur"); await new Promise(resolve => setTimeout(resolve, 15));
     assert.equal(putCount, 2);
 
-    // Selection/image transitions discard drafts; hidden/deleted state is unavailable.
-    input.value = "wrong image";
+    // Leaving a shape commits the live input value onto that vector.
+    input.value = "Committed name";
     editor.setSelection([annotator.annotations[1]]);
+    assert.equal(adapter.getAnnotationName(firstShape.id), "Committed name");
     assert.equal(input.value, "Second");
     editor.setSelection([]); input.dispatch("blur");
-    assert.equal(putCount, 2);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(putCount, 3);
     editor.setSelection([firstShape]); editor.setVisible(false, [firstShape]);
     assert.equal(input.disabled, true);
     editor.setVisible(true, [firstShape]); assert.equal(input.disabled, false);

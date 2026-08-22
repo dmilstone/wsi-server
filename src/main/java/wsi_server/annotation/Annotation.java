@@ -5,8 +5,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * One rectangular or elliptical ROI in level-0 slide pixel coordinates.
- * Square and circle constraints are enforced by the client and validated here.
+ * One ROI in level-0 slide pixel coordinates. Rectangle and ellipse use the
+ * bounding box; wand / polygon / polyline persist {@code vertices} as
+ * image-pixel {@code [x, y]} pairs.
  */
 public record Annotation(
         String id,
@@ -23,6 +24,11 @@ public record Annotation(
         double rotation,
         Instant createdAt,
         Instant modifiedAt,
-        List<Map<String, Object>> bodies
+        List<Map<String, Object>> bodies,
+        List<List<Double>> vertices
 ) {
+    public Annotation {
+        bodies = bodies == null ? List.of() : List.copyOf(bodies);
+        vertices = vertices == null ? List.of() : List.copyOf(vertices);
+    }
 }

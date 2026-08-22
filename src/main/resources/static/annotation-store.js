@@ -14,8 +14,8 @@ class AnnotationStore {
 
     /**
      * Stable per-browser workstation id for annotation ownership.
-     * Restored from the previous store: Annotorious construction calls this
-     * during {@code new AnnotationAdapter(...)}.
+     * Restored from the previous store: native OSD annotation construction
+     * calls this during {@code new AnnotationAdapter(...)}.
      */
     static resolveWorkstationUserId() {
         if (this.workstationUserIdCache) return this.workstationUserIdCache;

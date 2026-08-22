@@ -5,12 +5,18 @@ import com.fasterxml.jackson.annotation.JsonValue;
 
 import java.util.Locale;
 
-/** Shape types supported by the first annotation milestone. */
+/** Shape types persisted in the annotation document. */
 public enum AnnotationShape {
     RECTANGLE,
     SQUARE,
     ELLIPSE,
-    CIRCLE;
+    CIRCLE,
+    POLYGON,
+    POLYLINE,
+    LINE,
+    WAND,
+    BRUSH,
+    POINTS;
 
     @JsonCreator
     public static AnnotationShape fromJson(String value) {

@@ -119,10 +119,23 @@ public class AnnotationService {
         Instant created = value.createdAt() == null ? now : value.createdAt();
         Instant modified = touchModifiedTime || value.modifiedAt() == null ? now : value.modifiedAt();
 
+        List<List<Double>> vertices = value.vertices() == null ? List.of() : value.vertices().stream()
+                .filter(Objects::nonNull)
+                .map(point -> {
+                    if (point.size() < 2) return null;
+                    Double vx = point.get(0);
+                    Double vy = point.get(1);
+                    if (vx == null || vy == null || !Double.isFinite(vx) || !Double.isFinite(vy)) return null;
+                    return List.of(vx, vy);
+                })
+                .filter(Objects::nonNull)
+                .toList();
+
         return new Annotation(
                 id, value.type(), name, value.visible(), value.locked(), color.toLowerCase(), value.lineWidth(),
                 value.x(), value.y(), value.width(), value.height(), value.rotation(), created, modified,
-                value.bodies() == null ? List.of() : value.bodies().stream().filter(Objects::nonNull).toList()
+                value.bodies() == null ? List.of() : value.bodies().stream().filter(Objects::nonNull).toList(),
+                vertices
         );
     }
 

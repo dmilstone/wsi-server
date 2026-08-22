@@ -29,13 +29,14 @@ class AnnotationNameEditor {
     }
 
     setSelection(annotations, visible = this.visible) {
+        // Commit the live #annotation-name-input value before leaving this shape.
+        if (this.selectedId) this.commit();
         this.visible = Boolean(visible);
         const selected = this.visible && Array.isArray(annotations) && annotations.length === 1
             ? annotations[0]
             : null;
         const nextId = selected?.id || null;
 
-        // Deliberately discard the draft before changing selection/image.
         this.selectedId = nextId;
         this.storedValue = nextId ? this.adapter.getAnnotationName(nextId) : "";
         this.input.value = this.storedValue;
@@ -60,11 +61,12 @@ class AnnotationNameEditor {
 
     commit() {
         if (!this.selectedId || this.input.disabled || !this.validate()) return false;
-        const value = this.input.value.trim();
-        if (value === this.storedValue) return false;
-        const changed = this.adapter.setAnnotationName(this.selectedId, value || null);
+        const value = this.input.value;
+        const trimmed = String(value == null ? "" : value).trim();
+        if (trimmed === this.storedValue) return false;
+        const changed = this.adapter.setAnnotationName(this.selectedId, trimmed || null);
         if (changed) {
-            this.storedValue = value;
+            this.storedValue = trimmed;
             this.nameCommitted(this.selectedId);
         }
         this.input.value = this.storedValue;

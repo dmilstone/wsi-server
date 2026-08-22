@@ -3,12 +3,19 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(
-    path.join(__dirname, "../../main/resources/static/annotorious-spike.js"),
-    "utf8"
-);
-const context = vm.createContext({ console });
-vm.runInContext(`${source}\nthis.AnnotoriousSpike = AnnotoriousSpike;`, context);
+const staticRoot = path.join(__dirname, "../../main/resources/static");
+const adapterSource = fs.readFileSync(path.join(staticRoot, "annotation-adapter.js"), "utf8");
+const storeSource = fs.readFileSync(path.join(staticRoot, "annotation-store.js"), "utf8");
+
+const context = vm.createContext({
+    console: { info() {}, warn() {}, error() {} },
+    window: { setTimeout, clearTimeout, addEventListener() {}, removeEventListener() {} },
+    document: { getElementById() { return null; }, querySelectorAll() { return []; }, addEventListener() {} },
+    fetch: null,
+    WsiCsrf: { csrfFetch: async () => { throw new Error("unexpected save"); } }
+});
+vm.runInContext(`${storeSource}\nthis.AnnotationStore = AnnotationStore;`, context);
+vm.runInContext(`${adapterSource}\nthis.AnnotationAdapter = AnnotationAdapter; this.NativeOsdAnnotationEngine = NativeOsdAnnotationEngine;`, context);
 
 function button() {
     return {
@@ -19,42 +26,36 @@ function button() {
 }
 
 const classes = new Set();
-const spike = Object.create(context.AnnotoriousSpike.prototype);
-spike.annotationsVisible = true;
-spike.drawingEnabled = true;
-spike.viewer = {
-    element: {
-        classList: {
-            toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); }
+const engine = new context.NativeOsdAnnotationEngine({
+    viewer: {
+        element: {
+            classList: {
+                toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); }
+            }
         }
-    }
-};
-spike.toggleButton = button();
-spike.visibilityButton = button();
-spike.annotator = {
-    drawingCalls: [],
-    setDrawingEnabled(enabled) { this.drawingCalls.push(enabled); }
-};
-spike.notifySelectionChanged = () => {};
+    },
+    toggleButton: button(),
+    visibilityButton: button(),
+    annotator: { getAnnotations() { return []; } }
+});
 
-spike.setAnnotationsVisible(false);
-assert.equal(spike.annotationsVisible, false);
+engine.setAnnotationsVisible(false);
+assert.equal(engine.annotationsVisible, false);
 assert(classes.has("annotations-hidden"));
-assert.equal(spike.toggleButton.disabled, true);
-assert.equal(spike.visibilityButton.textContent, "Annotations");
-assert.equal(spike.visibilityButton.attributes.get("aria-pressed"), "false");
-assert.equal(spike.visibilityButton.attributes.get("aria-label"), "Show annotations");
-assert.deepEqual(spike.annotator.drawingCalls, [false]);
+assert.equal(engine.toggleButton.disabled, true);
+assert.equal(engine.visibilityButton.textContent, "Annotations");
+assert.equal(engine.visibilityButton.attributes.get("aria-pressed"), "false");
+assert.equal(engine.visibilityButton.attributes.get("aria-label"), "Show annotations");
 
-spike.setAnnotationsVisible(true);
-assert.equal(spike.annotationsVisible, true);
+engine.setAnnotationsVisible(true);
+assert.equal(engine.annotationsVisible, true);
 assert(!classes.has("annotations-hidden"));
-assert.equal(spike.toggleButton.disabled, false);
-assert.equal(spike.visibilityButton.textContent, "Annotations");
-assert.equal(spike.visibilityButton.attributes.get("aria-pressed"), "true");
-assert.equal(spike.visibilityButton.attributes.get("aria-label"), "Hide annotations");
-// Visibility changes never call annotation create/update/delete or store APIs;
-// only Annotorious drawing interaction is disabled while the overlay is hidden.
-assert.deepEqual(Object.keys(spike.annotator).sort(), ["drawingCalls", "setDrawingEnabled"]);
+assert.equal(engine.toggleButton.disabled, false);
+assert.equal(engine.visibilityButton.attributes.get("aria-pressed"), "true");
+assert.equal(engine.visibilityButton.attributes.get("aria-label"), "Hide annotations");
+
+assert.match(adapterSource, /\.osd-annotation-shape/);
+assert.match(adapterSource, /svgOverlay\(\)/);
+assert.doesNotMatch(adapterSource, /createOSDAnnotator/);
 
 console.log("annotation visibility checks passed");

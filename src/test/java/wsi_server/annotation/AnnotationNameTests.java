@@ -74,7 +74,8 @@ class AnnotationNameTests {
         return new Annotation("00000000-0000-4000-8000-000000000001", AnnotationShape.RECTANGLE, name,
                 true, true, "#123456", 3, 10, 20, 30, 40, 0,
                 Instant.parse("2026-01-02T03:04:05Z"), Instant.parse("2026-01-03T03:04:05Z"),
-                List.of(Map.of("purpose", "commenting", "value", "body stays")));
+                List.of(Map.of("purpose", "commenting", "value", "body stays")),
+                List.of());
     }
 
     private static AnnotationCollection collection(Annotation annotation) {
