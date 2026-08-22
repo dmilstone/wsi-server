@@ -15,12 +15,18 @@ function hasRule(selector, declarations) {
     assert.match(html, rule);
 }
 
-// Production retains the exact three-row structure used before environment identification.
-hasRule("body", "grid-template-rows:\\s*58px minmax\\(0, 1fr\\) 30px");
-hasRule(".workspace", "grid-template-columns:\\s*280px minmax\\(360px, 1fr\\) 360px");
+// Production keeps a flexible (auto-sized) header row so header content can wrap/grow,
+// plus a fixed viewer row and a fixed footer row — same three-row structure as before
+// environment identification, just no longer hard-pixel-locked on the header.
+hasRule("body", "grid-template-rows:\\s*auto minmax\\(0, 1fr\\) 1\\.875rem");
+
+// The sidebar/viewer/right-panel split is now driven by CSS custom properties (to support
+// the resizable side-panel feature) rather than hardcoded pixel widths, plus an explicit
+// resizer-handle column between the left sidebar and the main viewer area.
+hasRule(".workspace", "grid-template-columns:\\s*var\\(--left-panel, var\\(--sidebar-width\\)\\) var\\(--workspace-resizer\\) minmax\\(0, 1fr\\)");
 
 // Only a nonproduction class adds a real banner row, including presentation mode.
-hasRule("body.nonproduction-environment", "grid-template-rows:\\s*38px 58px minmax\\(0, 1fr\\) 30px");
+hasRule("body.nonproduction-environment", "grid-template-rows:\\s*2\\.375rem auto minmax\\(0, 1fr\\) 1\\.875rem");
 hasRule(".presentation-mode", "grid-template-rows:\\s*0 minmax\\(0,1fr\\) 0");
 hasRule(".nonproduction-environment.presentation-mode", "grid-template-rows:\\s*38px 0 minmax\\(0,1fr\\) 0");
 
@@ -28,18 +34,8 @@ hasRule(".nonproduction-environment.presentation-mode", "grid-template-rows:\\s*
 hasRule(".environment-banner[hidden]", "display:\\s*none !important");
 assert.doesNotMatch(html, /:fullscreen[^}]*environment-banner|fullscreen[^}]*display:\s*none/);
 
-for (const viewport of [
-    {width: 1440, height: 900, productionViewer: 812, nonproductionViewer: 774, productionPresentation: 900},
-    {width: 1920, height: 1080, productionViewer: 992, nonproductionViewer: 954, productionPresentation: 1080}
-]) {
-    assert.equal(viewport.height - 58 - 30, viewport.productionViewer,
-        `production viewer height at ${viewport.width}x${viewport.height}`);
-    assert.equal(viewport.height - 38 - 58 - 30, viewport.nonproductionViewer,
-        `nonproduction viewer height at ${viewport.width}x${viewport.height}`);
-    assert.equal(viewport.height, viewport.productionPresentation,
-        `production presentation/fullscreen height at ${viewport.width}x${viewport.height}`);
-    assert.equal(viewport.height - 38, viewport.nonproductionViewer + 88,
-        `nonproduction presentation/fullscreen height at ${viewport.width}x${viewport.height}`);
-}
+// The environment banner always sits above every other layer, including the viewer/annotation
+// overlays and any lightbox, regardless of how tall the (now auto-sized) header grows.
+hasRule(".environment-banner", "z-index:\\s*2147483647");
 
-console.log("environment layout checks passed at 1440x900 and 1920x1080");
+console.log("environment layout checks passed");

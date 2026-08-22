@@ -122,15 +122,23 @@ assert.ok(!pointerupListeners.includes("pointerup"),
 
 // Regression check: clicking away in the viewer (but not on any shape) must revert the
 // selection highlight — unless the "click" is really the mouseup tail end of a pan/drag.
+// The highlight is tracked as a real class membership (a sweep via querySelectorAll(".is-
+// annotation-selected"), not just an id-keyed lookup) so this also guards against the
+// highlight ending up on a node the id-based lookup wouldn't find.
+function makeClassList() {
+    const classes = new Set();
+    return { add(c) { classes.add(c); }, remove(c) { classes.delete(c); }, contains(c) { return classes.has(c); } };
+}
 const listenersByType = {};
 context.document.addEventListener = function(type, handler) { (listenersByType[type] ||= []).push(handler); };
-const shapeNodesById = {
-    "shape-1": { classList: { added: [], removed: [], add(c) { this.added.push(c); }, remove(c) { this.removed.push(c); } } }
-};
+const shapeNodesById = { "shape-1": { classList: makeClassList() } };
 context.document.querySelector = selector => {
     const match = /data-annotation-id="([^"]+)"/.exec(selector);
     return (match && shapeNodesById[match[1]]) || null;
 };
+context.document.querySelectorAll = selector => (selector === ".is-annotation-selected"
+    ? Object.values(shapeNodesById).filter(node => node.classList.contains("is-annotation-selected"))
+    : []);
 context.document._wsiQuPathPointersBound = false;
 AnnotationAdapter.bindQuPathToolPointers();
 const clickListener = listenersByType.click?.[listenersByType.click.length - 1];
@@ -139,18 +147,30 @@ assert.equal(typeof clickListener, "function");
 AnnotationAdapter.currentActiveTool = "move";
 AnnotationAdapter.viewer = { element: { contains: () => true }, viewport: {} };
 
-AnnotationAdapter.selectedNativeAnnotationId = "shape-1";
+AnnotationAdapter.selectNativeAnnotationShape("shape-1");
+assert.ok(shapeNodesById["shape-1"].classList.contains("is-annotation-selected"),
+    "selecting a shape must add the highlight class");
+
 AnnotationAdapter._qpMouseDownPoint = { x: 100, y: 100 };
 clickListener({ target: { closest: () => null }, clientX: 101, clientY: 101, preventDefault() {}, stopPropagation() {} });
 assert.equal(AnnotationAdapter.selectedNativeAnnotationId, null,
     "a clean click away from any shape must clear the selection");
-assert.ok(shapeNodesById["shape-1"].classList.removed.includes("is-annotation-selected"),
+assert.ok(!shapeNodesById["shape-1"].classList.contains("is-annotation-selected"),
     "clicking away must remove the highlight class from the previously selected shape");
 
-AnnotationAdapter.selectedNativeAnnotationId = "shape-1";
+AnnotationAdapter.selectNativeAnnotationShape("shape-1");
 AnnotationAdapter._qpMouseDownPoint = { x: 100, y: 100 };
 clickListener({ target: { closest: () => null }, clientX: 250, clientY: 100, preventDefault() {}, stopPropagation() {} });
 assert.equal(AnnotationAdapter.selectedNativeAnnotationId, "shape-1",
     "releasing the mouse far from where it went down (a pan/drag) must not clear the selection");
+assert.ok(shapeNodesById["shape-1"].classList.contains("is-annotation-selected"),
+    "a pan/drag ending over empty canvas must not remove the highlight class either");
+
+// A small amount of real-world pointer jitter (well under the old 6px threshold) on an
+// intentional click must still be treated as a click, not a drag, and must deselect.
+AnnotationAdapter._qpMouseDownPoint = { x: 100, y: 100 };
+clickListener({ target: { closest: () => null }, clientX: 109, clientY: 100, preventDefault() {}, stopPropagation() {} });
+assert.equal(AnnotationAdapter.selectedNativeAnnotationId, null,
+    "up to ~15px of pointer jitter on a click must still count as a deliberate click-away");
 
 console.log("annotation movement checks passed");

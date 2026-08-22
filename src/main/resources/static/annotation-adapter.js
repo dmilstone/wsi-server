@@ -6113,15 +6113,21 @@ class AnnotationAdapter {
      * applies a highlight class); it does NOT open the name popup. Double-click
      * (onQuPathDoubleClick) is what opens the name popup.
      */
+    /** Clears the highlight class from every element carrying it, regardless of whether it
+     *  matches selectedNativeAnnotationId — a real DOM can end up with the class on a node
+     *  other than the one the id-based lookup expects (e.g. after a redraw/re-render), so a
+     *  full sweep is the only way to reliably guarantee no stale highlight is left behind. */
+    static clearNativeAnnotationHighlights() {
+        const doc = typeof document !== "undefined" ? document : null;
+        const nodes = doc?.querySelectorAll?.(".is-annotation-selected") || [];
+        nodes.forEach?.(node => node.classList?.remove?.("is-annotation-selected"));
+    }
+
     static selectNativeAnnotationShape(id) {
         if (!id) return false;
-        const doc = typeof document !== "undefined" ? document : null;
-        const previousId = AnnotationAdapter.selectedNativeAnnotationId;
-        if (previousId && previousId !== id) {
-            const prevNode = doc?.querySelector?.(`[data-annotation-id="${previousId}"]`);
-            prevNode?.classList?.remove?.("is-annotation-selected");
-        }
+        AnnotationAdapter.clearNativeAnnotationHighlights();
         AnnotationAdapter.selectedNativeAnnotationId = id;
+        const doc = typeof document !== "undefined" ? document : null;
         const node = doc?.querySelector?.(`[data-annotation-id="${id}"]`);
         node?.classList?.add?.("is-annotation-selected");
         return true;
@@ -6129,18 +6135,17 @@ class AnnotationAdapter {
 
     /** Reverts the selection highlight and clears selectedNativeAnnotationId. */
     static deselectNativeAnnotationShape() {
-        const previousId = AnnotationAdapter.selectedNativeAnnotationId;
-        if (!previousId) return false;
-        const doc = typeof document !== "undefined" ? document : null;
-        const prevNode = doc?.querySelector?.(`[data-annotation-id="${previousId}"]`);
-        prevNode?.classList?.remove?.("is-annotation-selected");
+        if (!AnnotationAdapter.selectedNativeAnnotationId) return false;
+        AnnotationAdapter.clearNativeAnnotationHighlights();
         AnnotationAdapter.selectedNativeAnnotationId = null;
         return true;
     }
 
     /** True if the pointer moved more than a small threshold between mousedown and this click
-     *  (i.e. this "click" is really the tail end of a pan/drag, not a deliberate click). */
-    static wasQuPathClickADrag(event, thresholdPx = 6) {
+     *  (i.e. this "click" is really the tail end of a pan/drag, not a deliberate click).
+     *  15px accounts for real mouse/trackpad jitter on an intentional click, which easily
+     *  exceeds a few pixels and would otherwise get misclassified as a drag. */
+    static wasQuPathClickADrag(event, thresholdPx = 15) {
         const start = AnnotationAdapter._qpMouseDownPoint;
         if (!start) return false;
         const dx = Number(event?.clientX) - start.x;
