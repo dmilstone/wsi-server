@@ -173,4 +173,36 @@ clickListener({ target: { closest: () => null }, clientX: 109, clientY: 100, pre
 assert.equal(AnnotationAdapter.selectedNativeAnnotationId, null,
     "up to ~15px of pointer jitter on a click must still count as a deliberate click-away");
 
+// Regression check: "b" must activate the Brush tool (its own tooltip has always advertised
+// "(B)"), not Brightness & Contrast — which used to silently shadow it. "c" now opens
+// Brightness & Contrast (matching ITS tooltip's "(C)" claim) and "z" activates Zoom (matching
+// its "(Z)" claim); neither had a working shortcut before.
+const keydownListeners = [];
+context.window.addEventListener = function(type, handler) { if (type === "keydown") keydownListeners.push(handler); };
+context.window._wsiQuPathShortcutsBound = false;
+const clickSpies = { "qp-tool-brush": 0, "qp-tool-zoom": 0 };
+context.document.getElementById = id => (id in clickSpies ? { click() { clickSpies[id] += 1; } } : null);
+context.document.activeElement = null;
+let contrastLaunched = 0;
+const previousLaunch = AnnotationAdapter.launchBrightnessContrastPalette;
+AnnotationAdapter.launchBrightnessContrastPalette = function() { contrastLaunched += 1; };
+AnnotationAdapter.viewer = null;
+
+AnnotationAdapter.bindQuPathKeyboardShortcuts();
+const keydownListener = keydownListeners[keydownListeners.length - 1];
+assert.equal(typeof keydownListener, "function");
+
+const fakeKeyEvent = key => ({ key, ctrlKey: false, metaKey: false, altKey: false, isComposing: false, preventDefault() {} });
+keydownListener(fakeKeyEvent("b"));
+assert.equal(clickSpies["qp-tool-brush"], 1, "\"b\" must click the Brush tool button");
+assert.equal(contrastLaunched, 0, "\"b\" must no longer open Brightness & Contrast");
+
+keydownListener(fakeKeyEvent("c"));
+assert.equal(contrastLaunched, 1, "\"c\" must open Brightness & Contrast");
+
+keydownListener(fakeKeyEvent("z"));
+assert.equal(clickSpies["qp-tool-zoom"], 1, "\"z\" must click the Zoom tool button");
+
+AnnotationAdapter.launchBrightnessContrastPalette = previousLaunch;
+
 console.log("annotation movement checks passed");

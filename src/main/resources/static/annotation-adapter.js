@@ -5835,9 +5835,12 @@ class AnnotationAdapter {
                     if (polylineBtn) polylineBtn.click();
                     break;
 
-                case "b": // Brightness & Contrast palette
+                case "b": // QuPath: Brush (previously mis-bound to Brightness & Contrast, which
+                          // has its own tooltip/shortcut on "c" below — see qp-tool-brush's
+                          // tooltip, which has always advertised "(B)" for this tool)
                     e.preventDefault();
-                    AnnotationAdapter.launchBrightnessContrastPalette();
+                    let brushBtn = document.getElementById("qp-tool-brush");
+                    if (brushBtn) brushBtn.click();
                     break;
 
                 case "w": // QuPath: Wand
@@ -5857,6 +5860,18 @@ class AnnotationAdapter {
                     let selectionBtn = document.getElementById("qp-tool-selection");
                     if (selectionBtn) selectionBtn.click();
                     break;
+
+                case "c": // Brightness & Contrast palette (matches qp-tool-contrast's own
+                          // "(C)" tooltip, which "b" used to shadow before the fix above)
+                    e.preventDefault();
+                    AnnotationAdapter.launchBrightnessContrastPalette();
+                    break;
+
+                case "z": // QuPath: Zoom
+                    e.preventDefault();
+                    let zoomBtn = document.getElementById("qp-tool-zoom");
+                    if (zoomBtn) zoomBtn.click();
+                    break;
             }
         });
         window._wsiQuPathShortcutsBound = true;
@@ -5869,7 +5884,7 @@ class AnnotationAdapter {
         }
         viewer.addHandler("canvas-key", function(event) {
             let key = event.originalEvent?.key?.toLowerCase?.() || "";
-            if (["a", "n", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "_", "-", "."].includes(key)) {
+            if (["a", "n", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "_", "-", "."].includes(key)) {
                 event.preventDefaultAction = true; // Suppresses OSD's default pan/zoom behavior on these keys
                 if (typeof event.originalEvent?.preventDefault === "function") {
                     event.originalEvent.preventDefault();

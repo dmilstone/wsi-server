@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260817"></script>
-    <script src="/annotation-adapter.js?v=20260822-click-away-deselect-2"></script>
+    <script src="/annotation-adapter.js?v=20260823-qupath-toolbar-restyle-2"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260822-native-osd-svg"></script>
     <style>
@@ -2951,6 +2951,8 @@
             line-height: 1.35;
             padding: 0.2em 0.5em 0.2em 0;
         }
+        /* QuPath-style high-clarity toolbar: light-gray backdrop panel with crisp dark-charcoal
+           icons, so glyphs read clearly at a glance instead of blending into a dark theme. */
         #secondary-annotation-toolbar {
             display: none;
             width: 100%;
@@ -2958,12 +2960,12 @@
             min-height: var(--toolbar-height);
             box-sizing: border-box;
             align-items: center;
-            gap: 0.15rem;
+            gap: 0.25rem;
             padding: 0 0.5rem;
             overflow-x: auto;
             overflow-y: hidden;
-            background: #2a2a2a;
-            border-bottom: 1px solid #444;
+            background: #d9d9dc;
+            border-bottom: 1px solid #a8a8ae;
         }
         #secondary-annotation-toolbar.is-open {
             display: flex !important;
@@ -2974,29 +2976,31 @@
             display: inline-grid;
             place-items: center;
             width: auto;
-            min-width: 1.75rem;
+            min-width: 2.1rem;
             height: auto;
             min-height: 0;
             max-height: none;
             margin: 0;
-            padding: 0.25em 0.4em;
+            padding: 0.35em 0.55em;
             border: 1px solid transparent;
             border-radius: 0.35em;
             background: transparent;
-            color: #f2f2f2;
-            font-size: 1.1em;
+            color: #222;
+            font-size: 1.3em;
             line-height: 1;
             cursor: pointer;
         }
         #secondary-annotation-toolbar .ij-tool:hover,
         #secondary-annotation-toolbar .qp-tool:hover {
-            background: rgba(255,255,255,.12);
+            background: rgba(0,0,0,.08);
         }
+        /* Real QuPath toggles the active tool with a neutral/soft highlight, not a color
+           change on the icon itself — icons stay the same dark charcoal whether active or not. */
         #secondary-annotation-toolbar .ij-tool[aria-pressed="true"],
         #secondary-annotation-toolbar .qp-tool[aria-pressed="true"] {
-            background: rgba(77, 148, 216, .35);
-            border-color: rgba(140, 190, 240, .85);
-            color: #fff;
+            background: #cfe1f2;
+            border-color: #8fb3d1;
+            color: #222;
         }
         .wsi-qp-draw-overlay {
             position: absolute !important;
@@ -3137,40 +3141,40 @@
         </div>
     </div>
     <div id="secondary-annotation-toolbar" role="toolbar" aria-label="QuPath annotation tools" hidden
-         style="display: none; width: 100%; height: var(--toolbar-height); background: #2a2a2a; border-bottom: 1px solid #444;">
+         style="display: none; width: 100%; height: var(--toolbar-height); background: #d9d9dc; border-bottom: 1px solid #a8a8ae;">
         <button type="button" class="qp-tool" id="qp-tool-browser" data-qp-tool="browser"
                 data-tooltip="(_^A) Toggle Image Browser" aria-label="Browser" aria-pressed="false">📂</button>
         <button type="button" class="qp-tool" id="qp-tool-move" data-qp-tool="move"
-                data-tooltip="(M) Move Tool" aria-label="Move" aria-pressed="true">✥</button>
+                data-tooltip="(M) Move Tool: Pan and zoom the canvas." aria-label="Move" aria-pressed="true">✥</button>
         <button type="button" class="qp-tool" id="qp-tool-rectangle" data-qp-tool="rectangle"
                 data-tooltip="(R) Rectangle Tool: Hold down &quot;Shift&quot; to constrain shape to a square." aria-label="Rectangle" aria-pressed="false">🟥</button>
         <button type="button" class="qp-tool" id="qp-tool-ellipse" data-qp-tool="ellipse"
                 data-tooltip="(O) Ellipse Tool: Hold down &quot;Shift&quot; to constrain shape to a circle." aria-label="Ellipse" aria-pressed="false">⭕</button>
         <button type="button" class="qp-tool" id="qp-tool-line" data-qp-tool="line"
-                data-tooltip="(L) Line Tool" aria-label="Line" aria-pressed="false">📏</button>
+                data-tooltip="(L) Line Tool: Trace a single straight metric linear span." aria-label="Line" aria-pressed="false">📏</button>
         <button type="button" class="qp-tool" id="qp-tool-polygon" data-qp-tool="polygon"
-                data-tooltip="(P) Polygon Tool" aria-label="Polygon" aria-pressed="false">🪢</button>
+                data-tooltip="(P) Polygon Tool: Click to place vertices, double-click to close and name the shape." aria-label="Polygon" aria-pressed="false">🪢</button>
         <button type="button" class="qp-tool" id="qp-tool-polyline" data-qp-tool="polyline"
-                data-tooltip="(V) Polyline Tool" aria-label="Polyline" aria-pressed="false">☡</button>
+                data-tooltip="(V) Polyline Tool: Click to place points, double-click to finish the open path." aria-label="Polyline" aria-pressed="false">☡</button>
         <button type="button" class="qp-tool" id="qp-tool-brush" data-qp-tool="brush"
-                data-tooltip="(B) Brush Tool" aria-label="Brush" aria-pressed="false">🖌️</button>
+                data-tooltip="(B) Brush Tool: Paint a freehand region; drag to extend the stroke." aria-label="Brush" aria-pressed="false">🖌️</button>
         <div class="qp-wand-cluster" style="display: flex; flex-direction: row; align-items: center; position: relative;">
             <button type="button" class="qp-tool" id="qp-tool-wand" data-qp-tool="wand"
                     data-tooltip="(W) Wand Tool: Click structure to auto-detect boundary edges." aria-label="Wand" aria-pressed="false">🪄</button>
-            <select id="wand-config-dropdown" aria-label="Wand configuration" style="background:#222; color:#fff; border:1px solid #444; font-size:0.7rem; border-radius:3px; padding:2px; margin-left:2px;">
+            <select id="wand-config-dropdown" aria-label="Wand configuration" style="background:#f2f2f3; color:#222; border:1px solid #a8a8ae; font-size:0.7rem; border-radius:3px; padding:2px; margin-left:2px;">
                 <option value="default" selected>Default (Nuclear Spot)</option>
                 <option value="tissue">Boundary: Tissue Wall</option>
                 <option value="custom">Custom Configuration...</option>
             </select>
         </div>
         <button type="button" class="qp-tool" id="qp-tool-points" data-qp-tool="points"
-                data-tooltip="(.) Points Tool" aria-label="Points" aria-pressed="false">⁘</button>
+                data-tooltip="(.) Points Tool: Click to drop counted marker points." aria-label="Points" aria-pressed="false">⁘</button>
         <button type="button" class="qp-tool" id="qp-tool-selection" data-qp-tool="selection"
-                data-tooltip="(S) Selection Tool" aria-label="Selection" aria-pressed="false">🎯</button>
+                data-tooltip="(S) Selection Tool: Click a shape to select it, double-click to name it." aria-label="Selection" aria-pressed="false">🎯</button>
         <button type="button" class="qp-tool" id="qp-tool-contrast" data-qp-tool="contrast"
-                data-tooltip="(C) Brightness &amp; Contrast Tool" aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
+                data-tooltip="(C) Brightness &amp; Contrast Tool: Adjust display levels for the current image." aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
         <button type="button" class="qp-tool" id="qp-tool-zoom" data-qp-tool="zoom"
-                data-tooltip="(Z) Zoom Tool" aria-label="Zoom" aria-pressed="false">🔍</button>
+                data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">🔍</button>
     </div>
 </header>
 <div class="workspace">
@@ -3319,7 +3323,7 @@
             </div>
         </aside>
         <div id="empty-viewport-guidance" role="status" aria-live="polite">
-            <span>Use the case selector to choose slides for viewing.</span>
+            <span>Use the "Select Slides" dropdown (upper left) to choose slides for viewing.</span>
         </div>
         <div id="measure-dialog" class="measure-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="measure-dialog-title">
             <div class="measure-dialog-panel">

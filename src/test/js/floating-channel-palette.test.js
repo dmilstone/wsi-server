@@ -98,9 +98,13 @@ assert.match(adapterSource, /case "o": \/\/ QuPath: Ellipse/);
 assert.match(adapterSource, /case "l": \/\/ QuPath: Line/);
 assert.match(adapterSource, /case "p": \/\/ QuPath: Polygon/);
 assert.match(adapterSource, /case "v": \/\/ QuPath: Polyline/);
-assert.match(adapterSource, /case "b": \/\/ Brightness & Contrast palette/);
+assert.match(adapterSource, /case "b": \/\/ QuPath: Brush/);
 assert.match(adapterSource, /case "w": \/\/ QuPath: Wand/);
 assert.match(adapterSource, /case "s": \/\/ QuPath: Selection/);
+assert.match(adapterSource, /case "c": \/\/ Brightness & Contrast palette/);
+assert.match(adapterSource, /case "z": \/\/ QuPath: Zoom/);
+assert.match(adapterSource, /getElementById\("qp-tool-brush"\)/);
+assert.match(adapterSource, /getElementById\("qp-tool-zoom"\)/);
 assert.match(adapterSource, /window\.currentActiveTool/);
 assert.match(adapterSource, /static activateQuPathTool\(/);
 assert.match(adapterSource, /static onQuPathPointerDown\(/);
@@ -142,22 +146,34 @@ assert.match(html, /id="qp-tool-contrast"/);
 assert.match(html, /id="qp-tool-zoom"/);
 assert.equal((html.match(/class="qp-tool"/g) || []).length, 13);
 assert.match(html, /data-tooltip="\(_\^A\) Toggle Image Browser"/);
-assert.match(html, /data-tooltip="\(M\) Move Tool"/);
+assert.match(html, /data-tooltip="\(M\) Move Tool: Pan and zoom the canvas."/);
 assert.match(html, /data-tooltip="\(R\) Rectangle Tool: Hold down &quot;Shift&quot; to constrain shape to a square."/);
 assert.match(html, /data-tooltip="\(O\) Ellipse Tool: Hold down &quot;Shift&quot; to constrain shape to a circle."/);
-assert.match(html, /data-tooltip="\(L\) Line Tool"/);
-assert.match(html, /data-tooltip="\(P\) Polygon Tool"/);
-assert.match(html, /data-tooltip="\(V\) Polyline Tool"/);
-assert.match(html, /data-tooltip="\(B\) Brush Tool"/);
+assert.match(html, /data-tooltip="\(L\) Line Tool: Trace a single straight metric linear span."/);
+assert.match(html, /data-tooltip="\(P\) Polygon Tool: Click to place vertices, double-click to close and name the shape."/);
+assert.match(html, /data-tooltip="\(V\) Polyline Tool: Click to place points, double-click to finish the open path."/);
+assert.match(html, /data-tooltip="\(B\) Brush Tool: Paint a freehand region; drag to extend the stroke."/);
 assert.match(html, /data-tooltip="\(W\) Wand Tool: Click structure to auto-detect boundary edges."/);
 assert.match(html, /id="wand-config-dropdown"/);
 assert.match(html, /Default \(Nuclear Spot\)/);
 assert.match(html, /Boundary: Tissue Wall/);
 assert.match(html, /Custom Configuration\.\.\./);
-assert.match(html, /data-tooltip="\(\.\) Points Tool"/);
-assert.match(html, /data-tooltip="\(S\) Selection Tool"/);
-assert.match(html, /data-tooltip="\(C\) Brightness &amp; Contrast Tool"/);
-assert.match(html, /data-tooltip="\(Z\) Zoom Tool"/);
+assert.match(html, /data-tooltip="\(\.\) Points Tool: Click to drop counted marker points."/);
+assert.match(html, /data-tooltip="\(S\) Selection Tool: Click a shape to select it, double-click to name it."/);
+assert.match(html, /data-tooltip="\(C\) Brightness &amp; Contrast Tool: Adjust display levels for the current image."/);
+assert.match(html, /data-tooltip="\(Z\) Zoom Tool: Click a region to zoom in\. Shift-click a region to zoom out\."/);
+
+// The secondary QuPath tool row uses a light-gray, high-contrast "QuPath dashboard" panel
+// (crisp dark-charcoal icons, bold-red active state) instead of the old low-contrast dark
+// theme, with slightly larger touch targets — but the toolbar keeps its existing position/
+// role in the page (still hidden by default, toggled via the same "Tools" chip).
+assert.doesNotMatch(html, /style="display: none; width: 100%; height: var\(--toolbar-height\); background: #2a2a2a/);
+assert.match(html, /#secondary-annotation-toolbar \{[^}]*background:\s*#d9d9dc/);
+assert.match(html, /#secondary-annotation-toolbar \.ij-tool,\s*\n\s*#secondary-annotation-toolbar \.qp-tool \{[^}]*color:\s*#222/);
+// Confirmed against a real QuPath toolbar screenshot: active tools get a neutral/soft
+// highlight, not a color change on the icon itself — no red anywhere in the real toolbar.
+assert.match(html, /#secondary-annotation-toolbar \.ij-tool\[aria-pressed="true"\],\s*\n\s*#secondary-annotation-toolbar \.qp-tool\[aria-pressed="true"\] \{[^}]*background:\s*#cfe1f2/);
+assert.doesNotMatch(html, /#secondary-annotation-toolbar[^{]*\{[^}]*#cc0000/);
 assert.match(html, /data-tooltip="\(A\) Show\/Hide All Annotations"/);
 assert.match(html, /data-tooltip="\(N\) Show\/Hide All Annotation Names"/);
 assert.match(html, /#global-ui-tooltip/);
