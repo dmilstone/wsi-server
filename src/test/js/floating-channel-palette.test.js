@@ -150,7 +150,11 @@ assert.match(html, /id="qp-tool-points"/);
 assert.match(html, /id="qp-tool-selection"/);
 assert.match(html, /id="qp-tool-contrast"/);
 assert.match(html, /id="qp-tool-zoom"/);
-assert.equal((html.match(/class="qp-tool"/g) || []).length, 13);
+// 13 originals in the sandboxed secondary toolbar (12 tools + browser) plus 12
+// duplicates (everything except browser) mirrored into the always-visible primary
+// unified toolbar — see bindPrimaryUnifiedToolbar/syncQuPathToolChrome, which keep
+// both button sets' pressed/active chrome in lockstep.
+assert.equal((html.match(/class="qp-tool"/g) || []).length, 25);
 assert.match(html, /data-tooltip="\(_\^A\) Toggle Image Browser"/);
 assert.match(html, /data-tooltip="\(M\) Move Tool: Pan and zoom the canvas."/);
 assert.match(html, /data-tooltip="\(R\) Rectangle Tool: Hold down &quot;Shift&quot; to constrain shape to a square."/);

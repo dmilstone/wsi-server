@@ -3802,6 +3802,7 @@ class AnnotationAdapter {
         }
         AnnotationAdapter.bindMeasurementKeyboardEscape();
         AnnotationAdapter.bindSecondaryAnnotationToolbar();
+        AnnotationAdapter.bindPrimaryUnifiedToolbar();
         AnnotationAdapter.bindLayerVisibilityAndSanitizeControls();
         AnnotationAdapter.bindQuPathKeyboardShortcuts();
         AnnotationAdapter.ensureCurrentActiveTool(AnnotationAdapter.currentActiveTool || "move");
@@ -5746,6 +5747,168 @@ class AnnotationAdapter {
         return true;
     }
 
+    /**
+     * Wires the new always-visible primary toolbar (Row 1). QuPath drawing-tool buttons
+     * are duplicated with `primary-` prefixed ids but the exact same `data-qp-tool`
+     * values, and reuse activateQuPathTool()/syncQuPathToolChrome() so both toolbars'
+     * button sets stay in lockstep. The case/slide selector plus browser toggle are the
+     * same original elements simply relocated into this row (not duplicated), so their
+     * existing bindings are untouched. The layer-visibility/AI-Labs proxies that used to
+     * live here were removed (cleanup pass) — those controls now live exclusively in the
+     * sandboxed legacy toolbars; see #developer-sandbox-container.
+     */
+    static bindPrimaryUnifiedToolbar(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        if (!doc?.getElementById) return false;
+
+        const helpBtn = doc.getElementById("primary-help-directory-link");
+        if (helpBtn && helpBtn.dataset?.primaryHelpBound !== "1") {
+            helpBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.shiftKey) {
+                    // Chromium (and some other engines) treat a window.open() call made
+                    // synchronously inside a Shift-held click as an explicit "open in a new
+                    // WINDOW" request — a documented, unfixable-from-script browser quirk
+                    // (see Mozilla bug 1873330; multiple Chromium bug reports) that fires
+                    // even though no window "features" string is passed here. Deferring the
+                    // call by a tick decouples it from that shift-click input event, so the
+                    // browser falls back to its normal default: a new tab.
+                    setTimeout(() => {
+                        if (typeof window !== "undefined" && typeof window.open === "function") {
+                            window.open("/help/help-directory.html", "_blank");
+                        }
+                    }, 0);
+                    return;
+                }
+                AnnotationAdapter.openFloatingShortcutsLegend(doc);
+            });
+            if (helpBtn.dataset) helpBtn.dataset.primaryHelpBound = "1";
+        }
+
+        const primaryBar = doc.getElementById("primary-unified-toolbar");
+        if (primaryBar && primaryBar.dataset?.qpBarBound !== "1") {
+            primaryBar.addEventListener("click", event => {
+                const btn = event.target?.closest?.(".qp-tool, .ij-tool");
+                if (!btn) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const tool = btn.getAttribute("data-qp-tool") || btn.getAttribute("data-ij-tool");
+                if (String(tool || "").toLowerCase() === "contrast") {
+                    AnnotationAdapter.launchBrightnessContrastPalette(doc);
+                    return;
+                }
+                AnnotationAdapter.activateQuPathTool(tool, { button: btn, event });
+            });
+            if (primaryBar.dataset) primaryBar.dataset.qpBarBound = "1";
+        }
+
+        AnnotationAdapter.bindGlobalUiTooltip(doc);
+        return true;
+    }
+
+    /**
+     * Shows/hides the `#developer-sandbox-container` wrapper holding both legacy
+     * staging toolbars (the old always-on main bar and the old hidden-by-default
+     * QuPath bar). There is no dedicated toolbar button for this anymore (removed in
+     * the toolbar cleanup pass) — it is reachable only via the "T" hotkey (see
+     * bindQuPathKeyboardShortcuts). Purely a display toggle on the wrapper; every
+     * control inside keeps its own independent state/bindings exactly as before.
+     */
+    static toggleDeveloperSandbox(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const container = doc?.getElementById?.("developer-sandbox-container");
+        if (!container) return false;
+        const opening = !container.style || container.style.display === "none" || container.style.display === "";
+        if (container.style) container.style.display = opening ? "flex" : "none";
+        AnnotationAdapter.relayoutViewerAfterToolbarChange();
+        return opening;
+    }
+
+    /**
+     * Draggable "?" quick-reference card listing every active keyboard shortcut. Kept
+     * separate from the full help directory (Shift-click on the same button opens that
+     * in a new tab) so a pathologist can glance at hotkeys without leaving the slide.
+     */
+    static bindFloatingShortcutsLegend(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const palette = doc?.getElementById?.("floating-shortcuts-legend");
+        if (!palette) return null;
+        AnnotationAdapter.isolateFloatingPalettePointerEvents(palette);
+        const handle = palette.querySelector(".legend-header");
+        // The close button must carry the .fcp-close class (checked by
+        // bindLiberatedPaletteDrag's beginWindowDrag) so clicking it doesn't get
+        // hijacked into starting a window-drag/pointer-capture on the header first —
+        // that hijack was why the button previously appeared to do nothing.
+        if (handle) AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
+        const closeBtn = palette.querySelector("#floating-shortcuts-legend-close")
+            || doc?.getElementById?.("floating-shortcuts-legend-close");
+        if (closeBtn && closeBtn.dataset?.legendCloseBound !== "1") {
+            closeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.closeFloatingShortcutsLegend(doc);
+            });
+            if (closeBtn.dataset) closeBtn.dataset.legendCloseBound = "1";
+        }
+        // Scale the reference table's text with the panel's own size (the corner
+        // `resize: both` handle), instead of a fixed 0.8rem that either overflows or
+        // stays tiny as a pathologist drags the window bigger.
+        if (typeof ResizeObserver === "function" && palette.dataset?.legendResizeBound !== "1") {
+            const body = palette.querySelector(".legend-body");
+            const baseWidth = 340;
+            const baseHeight = 420;
+            const baseFontRem = 0.8;
+            const observer = new ResizeObserver(entries => {
+                const entry = entries?.[0];
+                const width = entry?.contentRect?.width || palette.clientWidth || baseWidth;
+                const height = entry?.contentRect?.height || palette.clientHeight || baseHeight;
+                const scale = Math.min(width / baseWidth, height / baseHeight);
+                const clamped = Math.max(0.75, Math.min(2.5, scale));
+                if (body?.style) body.style.fontSize = `${(baseFontRem * clamped).toFixed(3)}rem`;
+            });
+            observer.observe(palette);
+            if (palette.dataset) palette.dataset.legendResizeBound = "1";
+        }
+        return palette;
+    }
+
+    static openFloatingShortcutsLegend(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const palette = doc?.getElementById?.("floating-shortcuts-legend");
+        if (!doc || !palette) return false;
+        AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "340px", minHeight: "420px" });
+        if (palette.style) palette.style.flexDirection = "column";
+        const cascaded = AnnotationAdapter.getAntiOverlapPosition(100, 100, 340, 420, "floating-shortcuts-legend", doc);
+        if (palette.style) {
+            palette.style.left = `${cascaded.left}px`;
+            palette.style.top = `${cascaded.top}px`;
+            palette.style.right = "auto";
+            palette.style.bottom = "auto";
+            palette.style.display = "flex";
+        }
+        palette.hidden = false;
+        palette.removeAttribute?.("hidden");
+        palette.setAttribute?.("aria-hidden", "false");
+        AnnotationAdapter.bindFloatingShortcutsLegend(doc);
+        return true;
+    }
+
+    static closeFloatingShortcutsLegend(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const palette = doc?.getElementById?.("floating-shortcuts-legend");
+        if (!palette) return false;
+        if (palette.style) palette.style.display = "none";
+        palette.hidden = true;
+        palette.setAttribute?.("aria-hidden", "true");
+        return true;
+    }
+
     static bindQuPathKeyboardShortcuts(root = null) {
         AnnotationAdapter.bindOpenSeadragonCanvasKeyIntercept(
             AnnotationAdapter.viewer
@@ -5796,6 +5959,12 @@ class AnnotationAdapter {
                     let sideBtn = document.getElementById("toggle-sidebar-btn")
                         || document.getElementById("toggle-left");
                     if (sideBtn) sideBtn.click();
+                    break;
+
+                case "t": // Toggle the hidden developer sandbox (legacy staging toolbars) —
+                          // no toolbar button for this anymore (cleanup pass); hotkey-only.
+                    e.preventDefault();
+                    AnnotationAdapter.toggleDeveloperSandbox();
                     break;
 
                 case "_": // QuPath: Browser
@@ -5890,7 +6059,7 @@ class AnnotationAdapter {
         }
         viewer.addHandler("canvas-key", function(event) {
             let key = event.originalEvent?.key?.toLowerCase?.() || "";
-            if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "_", "-", "."].includes(key)) {
+            if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "t", "_", "-", "."].includes(key)) {
                 event.preventDefaultAction = true; // Suppresses OSD's default pan/zoom behavior on these keys
                 if (typeof event.originalEvent?.preventDefault === "function") {
                     event.originalEvent.preventDefault();
@@ -6038,7 +6207,13 @@ class AnnotationAdapter {
 
     static syncQuPathToolChrome(tool) {
         const doc = typeof document !== "undefined" ? document : null;
-        const buttons = doc?.querySelectorAll?.("#secondary-annotation-toolbar .qp-tool, #secondary-annotation-toolbar .ij-tool");
+        // Covers both the always-visible primary toolbar's duplicate tool buttons and the
+        // sandboxed secondary toolbar's originals so their pressed/active chrome never
+        // drifts out of sync with each other, whichever one the user actually clicked.
+        const buttons = doc?.querySelectorAll?.(
+            "#secondary-annotation-toolbar .qp-tool, #secondary-annotation-toolbar .ij-tool, "
+            + "#primary-unified-toolbar .qp-tool, #primary-unified-toolbar .ij-tool"
+        );
         if (!buttons) return false;
         for (const btn of buttons) {
             const id = btn.getAttribute("data-qp-tool") || btn.getAttribute("data-ij-tool");
@@ -6090,7 +6265,7 @@ class AnnotationAdapter {
 
     static quPathEventOnViewer(event) {
         if (!event) return false;
-        if (event.target?.closest?.("#secondary-annotation-toolbar, header, aside, #annotation-editor-popup, #floating-wand-palette, input, textarea, select, button")) {
+        if (event.target?.closest?.("#secondary-annotation-toolbar, header, aside, #annotation-editor-popup, #floating-wand-palette, #floating-shortcuts-legend, input, textarea, select, button")) {
             return false;
         }
         const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
@@ -6217,7 +6392,7 @@ class AnnotationAdapter {
             return true;
         }
         if (tool === "wand") {
-            if (event.target?.closest?.("#qp-tool-wand, #wand-config-dropdown, #floating-wand-palette, #secondary-annotation-toolbar, header, aside, button, select")) {
+            if (event.target?.closest?.("#qp-tool-wand, #wand-config-dropdown, #floating-wand-palette, #floating-shortcuts-legend, #secondary-annotation-toolbar, header, aside, button, select")) {
                 return false;
             }
             if (typeof event.preventDefault === "function") event.preventDefault();
