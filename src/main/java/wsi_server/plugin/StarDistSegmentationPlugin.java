@@ -53,7 +53,7 @@ public class StarDistSegmentationPlugin implements WsiPlugin {
         int z = request.z() == null ? 0 : Math.max(0, request.z());
         ImageRegistry.ImageEntry entry = registry.getRequired(request.imageId());
         boolean rgbSeries = tileService.isRgbSeries(request.imageId(), series);
-        boolean brightfield = StarDistTensorEngine.looksBrightfield(entry.modality(), entry.engine(), rgbSeries);
+        boolean brightfield = resolveBrightfield(request.modelOverride(), entry, rgbSeries);
         String weightsName = StarDistTensorEngine.modelName(brightfield);
         Path weights = StarDistTensorEngine.resolveWeights(modelDirectory, weightsName);
         List<String> channels = brightfield
@@ -69,7 +69,8 @@ public class StarDistSegmentationPlugin implements WsiPlugin {
                 request.height(),
                 channels
         );
-        List<NucleusPolygon> nuclei = StarDistTensorEngine.infer(grid, brightfield, weights);
+        List<NucleusPolygon> nuclei = StarDistTensorEngine.infer(
+                grid, brightfield, weights, request.starDistParams());
         return new PluginResult(
                 ID,
                 TITLE + " (" + weightsName + ")",
@@ -85,6 +86,19 @@ public class StarDistSegmentationPlugin implements WsiPlugin {
                 List.of(),
                 nuclei
         );
+    }
+
+    /**
+     * "auto" (default, {@code null}, or unrecognized) keeps the existing modality/engine
+     * detection; "fluorescence" and "he"/"brightfield" force that model regardless of
+     * what the slide's metadata says, for the rare edge case where auto-detection guesses
+     * wrong (e.g. a brightfield scan mis-tagged as fluorescence).
+     */
+    static boolean resolveBrightfield(String modelOverride, ImageRegistry.ImageEntry entry, boolean rgbSeries) {
+        String normalized = modelOverride == null ? "" : modelOverride.trim().toLowerCase();
+        if ("fluorescence".equals(normalized) || "fluo".equals(normalized)) return false;
+        if ("he".equals(normalized) || "brightfield".equals(normalized)) return true;
+        return StarDistTensorEngine.looksBrightfield(entry.modality(), entry.engine(), rgbSeries);
     }
 
     static boolean isBrightfieldEntry(ImageRegistry.ImageEntry entry, boolean rgbSeries) {

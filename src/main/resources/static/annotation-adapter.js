@@ -5785,6 +5785,12 @@ class AnnotationAdapter {
                     if (lblBtn) lblBtn.click();
                     break;
 
+                case "d": // Toggle detected nuclei/objects visibility (D / d)
+                    e.preventDefault();
+                    let detBtn = document.getElementById("toggle-detections-visibility-btn");
+                    if (detBtn) detBtn.click();
+                    break;
+
                 case "h": // QuPath: Hide/Show left side browser panel panel space
                     e.preventDefault();
                     let sideBtn = document.getElementById("toggle-sidebar-btn")
@@ -5884,7 +5890,7 @@ class AnnotationAdapter {
         }
         viewer.addHandler("canvas-key", function(event) {
             let key = event.originalEvent?.key?.toLowerCase?.() || "";
-            if (["a", "n", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "_", "-", "."].includes(key)) {
+            if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "_", "-", "."].includes(key)) {
                 event.preventDefaultAction = true; // Suppresses OSD's default pan/zoom behavior on these keys
                 if (typeof event.originalEvent?.preventDefault === "function") {
                     event.originalEvent.preventDefault();
@@ -6939,6 +6945,23 @@ class AnnotationAdapter {
                 AnnotationAdapter.toggleAnnotationLabelVisibility(doc);
             });
             if (lblBtn.dataset) lblBtn.dataset.lblVisBound = "1";
+        }
+        const detBtn = doc.getElementById("toggle-detections-visibility-btn");
+        if (detBtn && detBtn.dataset?.detVisBound !== "1") {
+            detBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.setNucleiOverlaysVisible(!AnnotationAdapter.nucleiOverlaysRendered());
+            });
+            if (detBtn.dataset) detBtn.dataset.detVisBound = "1";
+        }
+        const clearDetBtn = doc.getElementById("clear-detections-only-btn");
+        if (clearDetBtn && clearDetBtn.dataset?.clearDetBound !== "1") {
+            clearDetBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.clearAiNucleiOverlay({ remove: true, viewer: AnnotationAdapter.viewer });
+                AnnotationAdapter.setAiStatus("AI Pipeline: Detections cleared.", doc);
+            });
+            if (clearDetBtn.dataset) clearDetBtn.dataset.clearDetBound = "1";
         }
         const clearBtn = doc.getElementById("clear-all-annotations-btn");
         if (clearBtn && clearBtn.dataset?.sanitizeBound !== "1") {
@@ -9403,6 +9426,10 @@ class AnnotationAdapter {
     static AI_NUCLEI_STROKE = "#39FF14";
     static AI_DEFAULT_PROBABILITY = 0.5;
     static AI_DEFAULT_NMS = 0.4;
+    static AI_DEFAULT_MAX_NUCLEUS_RADIUS = 6;
+    static AI_DEFAULT_RAY_COUNT = 32;
+    static AI_DEFAULT_BOUNDARY_TIGHTNESS = 0.82;
+    static AI_DEFAULT_MODEL_OVERRIDE = "auto";
     static AI_HIGH_DENSITY_PROB_DELTA = 0.15;
     static AI_HIGH_DENSITY_NMS_DELTA = 0.15;
     static AI_HIGH_DENSITY_VARIANCE_LIMIT = 0.045;
@@ -9421,6 +9448,9 @@ class AnnotationAdapter {
     static lastNucleiCircles = [];
     static lastPluginStatsOverlay = null;
     static aiNucleusOverlayParts = [];
+    static AI_NUCLEUS_DEFAULT_FILL = "rgba(0,255,0,.15)";
+    static AI_NUCLEUS_DEFAULT_STROKE = "#00FF00";
+    static heatMapActive = false;
 
     static get ocrAutoBaseline() { return ocrAutoBaseline; }
     static get localizedCellObjects() { return localizedCellObjects; }
@@ -9486,6 +9516,10 @@ class AnnotationAdapter {
         const nmsEl = get("ai-nms-threshold");
         const overlayEl = get("ai-overlay-visible");
         const targetEl = get("ai-seg-target");
+        const maxNucleusRadiusEl = get("ai-max-nucleus-radius");
+        const rayCountEl = get("ai-ray-count");
+        const boundaryTightnessEl = get("ai-boundary-tightness");
+        const modelOverrideEl = get("ai-model-override");
         const channel = options.channel ?? channelEl?.value ?? "default";
         const segTarget = options.segTarget ?? targetEl?.value ?? "viewport";
         const probability = AnnotationAdapter.clampAiParam(
@@ -9496,8 +9530,35 @@ class AnnotationAdapter {
             options.nms ?? options.overlapSuppression ?? nmsEl?.value,
             AnnotationAdapter.AI_DEFAULT_NMS
         );
+        const maxNucleusRadius = AnnotationAdapter.clampAiParam(
+            options.maxNucleusRadius ?? maxNucleusRadiusEl?.value,
+            AnnotationAdapter.AI_DEFAULT_MAX_NUCLEUS_RADIUS,
+            2,
+            40
+        );
+        const rayCount = Math.round(AnnotationAdapter.clampAiParam(
+            options.rayCount ?? rayCountEl?.value,
+            AnnotationAdapter.AI_DEFAULT_RAY_COUNT,
+            8,
+            128
+        ));
+        const boundaryTightness = AnnotationAdapter.clampAiParam(
+            options.boundaryTightness ?? boundaryTightnessEl?.value,
+            AnnotationAdapter.AI_DEFAULT_BOUNDARY_TIGHTNESS,
+            0.4,
+            0.98
+        );
+        const rawModelOverride = options.modelOverride ?? modelOverrideEl?.value ?? AnnotationAdapter.AI_DEFAULT_MODEL_OVERRIDE;
+        const modelOverride = ["auto", "fluorescence", "he"].includes(rawModelOverride)
+            ? rawModelOverride
+            : AnnotationAdapter.AI_DEFAULT_MODEL_OVERRIDE;
         const overlayVisible = options.overlayVisible ?? (overlayEl ? overlayEl.checked !== false : AnnotationAdapter.aiOverlayVisible);
-        return { channel, probability, nms, overlayVisible, segTarget, channelEl, probEl, nmsEl, overlayEl, targetEl };
+        return {
+            channel, probability, nms, overlayVisible, segTarget,
+            maxNucleusRadius, rayCount, boundaryTightness, modelOverride,
+            channelEl, probEl, nmsEl, overlayEl, targetEl,
+            maxNucleusRadiusEl, rayCountEl, boundaryTightnessEl, modelOverrideEl
+        };
     }
 
     static writeAiLabSlider(inputEl, value, outputId, root) {
@@ -9569,6 +9630,11 @@ class AnnotationAdapter {
         };
         bindSlider("ai-prob-threshold", "ai-prob-threshold-value");
         bindSlider("ai-nms-threshold", "ai-nms-threshold-value");
+        bindSlider("ai-max-nucleus-radius", "ai-max-nucleus-radius-value");
+        bindSlider("ai-ray-count", "ai-ray-count-value");
+        bindSlider("ai-boundary-tightness", "ai-boundary-tightness-value");
+        // "ai-model-override" (like "ai-seg-target") is read live via readAiLabConfig()
+        // at click time; it needs no dedicated listener/binding of its own.
         const toggle = host.getElementById("ai-overlay-visible");
         if (toggle && typeof toggle.addEventListener === "function" && toggle.dataset?.aiBound !== "1") {
             toggle.addEventListener("change", () => {
@@ -9599,6 +9665,8 @@ class AnnotationAdapter {
                     AnnotationAdapter.writeAiLabSlider(nmsEl, ocrAutoBaseline.nms, "ai-nms-threshold-value", host);
                     AnnotationAdapter.dispatchAiSliderInput(nmsEl);
                 }
+                AnnotationAdapter.heatMapActive = false;
+                AnnotationAdapter.syncHeatMapButton(host);
                 void AnnotationAdapter.segmentCellNuclei({
                     root: host,
                     viewer: AnnotationAdapter.viewer,
@@ -9638,6 +9706,15 @@ class AnnotationAdapter {
             && pluginRunButton.dataset?.aiBound !== "1") {
             pluginRunButton.addEventListener("click", runSelectedPlugin);
             if (pluginRunButton.dataset) pluginRunButton.dataset.aiBound = "1";
+        }
+        const heatMapButton = host.getElementById("ai-heatmap-toggle");
+        if (heatMapButton && typeof heatMapButton.addEventListener === "function"
+            && heatMapButton.dataset?.aiBound !== "1") {
+            heatMapButton.addEventListener("click", () => {
+                void AnnotationAdapter.toggleHeatMap({ root: host, viewer: AnnotationAdapter.viewer });
+            });
+            if (heatMapButton.dataset) heatMapButton.dataset.aiBound = "1";
+            AnnotationAdapter.syncHeatMapButton(host);
         }
         const pluginButton = host.getElementById("ai-run-pixel-plugin");
         if (pluginButton && typeof pluginButton.addEventListener === "function"
@@ -9713,16 +9790,22 @@ class AnnotationAdapter {
 
     static syncNucleiVisibilityButton(root) {
         const host = root || (typeof document !== "undefined" ? document : null);
-        const button = host && typeof host.getElementById === "function"
-            ? host.getElementById("ai-nuclei-visible")
-            : null;
-        if (!button) return AnnotationAdapter.nucleiOverlaysRendered();
+        const getById = host && typeof host.getElementById === "function"
+            ? (id) => host.getElementById(id)
+            : () => null;
         const showing = AnnotationAdapter.nucleiOverlaysRendered();
-        const label = showing ? "Hide" : "Show";
-        button.textContent = label;
-        button.title = label;
-        button.setAttribute("aria-label", label);
-        button.setAttribute("aria-pressed", String(showing));
+        const button = getById("ai-nuclei-visible");
+        if (button) {
+            const label = showing ? "Hide" : "Show";
+            button.textContent = label;
+            button.title = label;
+            button.setAttribute("aria-label", label);
+            button.setAttribute("aria-pressed", String(showing));
+        }
+        // Independent toolbar toggle (works even when the AI Labs panel is closed);
+        // keeps its static "👁️ Det" label and only reflects state via aria-pressed.
+        const toolbarToggle = getById("toggle-detections-visibility-btn");
+        toolbarToggle?.setAttribute?.("aria-pressed", String(showing));
         return showing;
     }
 
@@ -10626,7 +10709,15 @@ class AnnotationAdapter {
                 AnnotationAdapter.aiNucleiOverlayEl = null;
             }
         }
-        if (remove) localizedCellObjects = [];
+        if (remove) {
+            localizedCellObjects = [];
+            // Keep the "redraw on visibility toggle" cache (see setNucleiOverlaysVisible)
+            // in sync with the backend-facing array above; otherwise a stale slide's
+            // nuclei can reappear when the panel is reopened and visibility re-enabled.
+            AnnotationAdapter.lastNucleiCircles = [];
+            AnnotationAdapter.heatMapActive = false;
+            AnnotationAdapter.syncHeatMapButton();
+        }
     }
 
     static _analyzeViewport(options = {}) {
@@ -11604,6 +11695,64 @@ class AnnotationAdapter {
         return list.length;
     }
 
+    static resetNucleusOverlayColors() {
+        const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
+        let touched = 0;
+        for (const part of parts) {
+            if (!part) continue;
+            if (typeof part.setAttribute === "function") {
+                part.setAttribute("fill", AnnotationAdapter.AI_NUCLEUS_DEFAULT_FILL);
+                part.setAttribute("stroke", AnnotationAdapter.AI_NUCLEUS_DEFAULT_STROKE);
+                touched += 1;
+            } else if (part.style) {
+                part.style.border = "";
+                part.style.background = "";
+                touched += 1;
+            }
+        }
+        return touched;
+    }
+
+    static syncHeatMapButton(root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const button = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-heatmap-toggle")
+            : null;
+        if (!button) return AnnotationAdapter.heatMapActive;
+        button.setAttribute("aria-pressed", String(AnnotationAdapter.heatMapActive));
+        button.textContent = AnnotationAdapter.heatMapActive ? "🌡️ Heat Map: ON" : "🌡️ Heat Map";
+        return AnnotationAdapter.heatMapActive;
+    }
+
+    /**
+     * Single-click Heat Map toggle: ON segments nuclei if needed (reusing the exact
+     * same StarDist pipeline as the "1. Segment Nuclei" button) then color-codes them
+     * via the real per-object signal quantifier (see runPerObjectPixelQuantifier /
+     * PerObjectPixelQuantifierPlugin). OFF reverts every nucleus back to its original
+     * uncolored outline — no dropdown/"Run" steps required either way.
+     */
+    static async toggleHeatMap(options = {}) {
+        const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
+        const viewer = options.viewer || AnnotationAdapter.viewer;
+        if (AnnotationAdapter.heatMapActive) {
+            AnnotationAdapter.resetNucleusOverlayColors();
+            AnnotationAdapter.heatMapActive = false;
+            AnnotationAdapter.setAiStatus("AI Pipeline: Heat map cleared.", root);
+            AnnotationAdapter.syncHeatMapButton(root);
+            return false;
+        }
+        if (!(AnnotationAdapter.lastNucleiCircles || []).length) {
+            await AnnotationAdapter.segmentCellNuclei({ root, viewer });
+        }
+        // runPerObjectPixelQuantifier already reports a specific status for every
+        // failure mode (no slide open, no nuclei segmented, request failed); don't
+        // stomp on that with a generic message here.
+        const result = await AnnotationAdapter.runPerObjectPixelQuantifier({ root, viewer });
+        AnnotationAdapter.heatMapActive = !!(result && (result.objects || []).length);
+        AnnotationAdapter.syncHeatMapButton(root);
+        return AnnotationAdapter.heatMapActive;
+    }
+
     static async runPerObjectPixelQuantifier(options = {}) {
         const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
         const viewer = options.viewer || AnnotationAdapter.viewer;
@@ -11727,6 +11876,10 @@ class AnnotationAdapter {
             return null;
         }
         const bounds = AnnotationAdapter.readViewportImageBounds(viewer, { root, ...options });
+        // Read the probability/NMS sliders live at click time (not a cached snapshot) so a
+        // second click with different values actually reaches the backend tensor engine —
+        // see StarDistSegmentationPlugin#execute / StarDistTensorEngine#infer for the consumer.
+        const config = AnnotationAdapter.readAiLabConfig(root, options);
         const payload = {
             imageId,
             x: Math.max(0, Math.floor(Number(bounds?.x) || 0)),
@@ -11738,7 +11891,13 @@ class AnnotationAdapter {
                 : AnnotationAdapter.visiblePluginChannels(),
             pluginId: "stardist-segmentation",
             series: Number(AnnotationAdapter.currentSeries) || 0,
-            z: Number(AnnotationAdapter.currentZ) || 0
+            z: Number(AnnotationAdapter.currentZ) || 0,
+            probability: config.probability,
+            nms: config.nms,
+            maxNucleusRadius: config.maxNucleusRadius,
+            rayCount: config.rayCount,
+            boundaryTightness: config.boundaryTightness,
+            modelOverride: config.modelOverride
         };
         AnnotationAdapter.setAiStatus("AI Pipeline: Running StarDist nuclear contours…", root);
         try {

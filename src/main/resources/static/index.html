@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260817"></script>
-    <script src="/annotation-adapter.js?v=20260823-qupath-toolbar-restyle-2"></script>
+    <script src="/annotation-adapter.js?v=20260825-toolbar-row-swap-reverted"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260822-native-osd-svg"></script>
     <style>
@@ -1905,6 +1905,9 @@
             margin: 0;
             padding: 0 8px 8px;
         }
+        #ai-analytics-panel .ai-lab-disclaimer .ai-lab-field {
+            padding: 0 8px 8px;
+        }
         #ai-analytics-panel .ai-lab-note {
             margin: 0 0 8px;
             color: #c9b56a;
@@ -3087,6 +3090,7 @@
                             data-tooltip="Brightness &amp; Contrast&#10;Show Advanced Channel Palette">◐</button>
                     <button id="toggle-annotations-visibility-btn" class="toolbar-btn" type="button" data-tooltip="(A) Show/Hide All Annotations" aria-label="Toggle vector outlines" aria-pressed="true" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; background: #222; color: #fff; border: 1px solid #444;">👁️ Vec</button>
                     <button id="toggle-labels-visibility-btn" class="toolbar-btn" type="button" data-tooltip="(N) Show/Hide All Annotation Names" aria-label="Toggle annotation labels" aria-pressed="true" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; background: #222; color: #fff; border: 1px solid #444;">👁️ Lbl</button>
+                    <button id="toggle-detections-visibility-btn" class="toolbar-btn" type="button" data-tooltip="(D) Show/Hide All Detections" aria-label="Toggle detection overlays" aria-pressed="true" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; background: #222; color: #fff; border: 1px solid #444;">👁️ Det</button>
                 </div>
                 <div class="toolbar-group drawing-group" role="group" aria-label="Annotation drawing and editing tools">
                     <button id="annotation-mode" class="toolbar-button" type="button" data-tooltip="Rectangle&#10;Draw a rectangular annotation" title="Rectangle — Draw a rectangular annotation" aria-label="Rectangle" aria-pressed="false">
@@ -3128,6 +3132,7 @@
                     <button id="reset" class="toolbar-chip action" type="button" disabled>Reset</button>
                     <button id="recompute-auto" class="toolbar-chip action" type="button" disabled>Auto</button>
                     <button id="clear-all-annotations-btn" class="toolbar-btn" type="button" data-tooltip="Delete All Annotations" aria-label="Delete all annotations" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; background: #3a1a1a; color: #ff5555; border: 1px solid #662222; font-weight: bold;">Delete All</button>
+                    <button id="clear-detections-only-btn" class="toolbar-btn" type="button" data-tooltip="Clear all detected nuclei/objects&#10;Manual annotations are left untouched" aria-label="Clear detections only" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; color: #ffaa55; border: 1px solid #664422; background: #2a1f15; font-weight: bold;">Clear Detections</button>
                     <button id="toggle-ai-labs-palette" class="toolbar-chip" type="button"
                             title="Computational Pathology AI Labs" aria-label="AI Labs" aria-pressed="false">🔬 AI Labs</button>
                     <button id="help-directory-link" class="toolbar-chip" type="button"
@@ -3437,6 +3442,9 @@
                     </select>
                     <button id="ai-run-plugin" class="action" type="button">Run</button>
                 </div>
+                <button id="ai-heatmap-toggle" class="action" type="button" aria-pressed="false"
+                        title="Segment (if needed) and color-code nuclei by signal intensity; click again to revert"
+                        aria-label="Toggle nucleus signal heat map">🌡️ Heat Map</button>
                 <div class="ai-nuclei-row">
                     <button id="ai-nuclei-visible" class="action" type="button" aria-pressed="false" title="Show" aria-label="Show">Show</button>
                     <label class="ai-lab-field" for="ai-seg-target" style="margin:0;flex:1;">
@@ -3473,6 +3481,38 @@
                                 <output id="ai-nms-threshold-value" for="ai-nms-threshold">0.40</output>
                             </div>
                         </div>
+                        <details id="ai-advanced-stardist-params" class="ai-lab-disclaimer" open>
+                            <summary>Advanced StarDist Parameters</summary>
+                            <div class="ai-lab-field">
+                                <label for="ai-model-override">Model</label>
+                                <select id="ai-model-override" aria-label="StarDist model override">
+                                    <option value="auto" selected>Auto-detect (fluorescence vs. H&amp;E)</option>
+                                    <option value="fluorescence">Force Fluorescence model</option>
+                                    <option value="he">Force H&amp;E / brightfield model</option>
+                                </select>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-max-nucleus-radius">Max Nucleus Radius (px)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-max-nucleus-radius" type="range" min="2" max="40" step="1" value="6">
+                                    <output id="ai-max-nucleus-radius-value" for="ai-max-nucleus-radius">6</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-ray-count">Shape Smoothness (outline rays)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-ray-count" type="range" min="8" max="64" step="4" value="32">
+                                    <output id="ai-ray-count-value" for="ai-ray-count">32</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-boundary-tightness">Boundary Tightness</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-boundary-tightness" type="range" min="0.4" max="0.98" step="0.02" value="0.82">
+                                    <output id="ai-boundary-tightness-value" for="ai-boundary-tightness">0.82</output>
+                                </div>
+                            </div>
+                        </details>
                     </div>
                     <div id="ai-status-output" style="color: #ffcc00; font-family: monospace; font-size: 0.85rem; margin-top: 0.3em;">AI Pipeline: Idle</div>
                     <div style="margin-top: 0.625rem; display: flex; gap: 0.3em;">
@@ -5346,6 +5386,8 @@
 
     AnnotationAdapter.bindAiLabControls(document);
     document.getElementById("ai-segment-nuclei")?.addEventListener("click", () => {
+        AnnotationAdapter.heatMapActive = false;
+        AnnotationAdapter.syncHeatMapButton(document);
         void AnnotationAdapter.segmentCellNuclei({ viewer, root: document });
     });
     document.getElementById("annotation-mode")?.addEventListener("click", () => {

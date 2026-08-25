@@ -20,8 +20,19 @@ public record PluginExecuteRequest(
         String pluginId,
         Integer series,
         Integer z,
-        List<NucleusFootprint> nuclei
+        List<NucleusFootprint> nuclei,
+        Double probability,
+        Double nms,
+        Double maxNucleusRadius,
+        Integer rayCount,
+        Double boundaryTightness,
+        String modelOverride
 ) {
+    /** Builds the StarDist fallback-engine parameter bundle from this request. */
+    StarDistTensorEngine.Params starDistParams() {
+        return new StarDistTensorEngine.Params(probability, nms, maxNucleusRadius, rayCount, boundaryTightness);
+    }
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record NucleusFootprint(
             @JsonAlias({"centerX", "x"}) double cx,

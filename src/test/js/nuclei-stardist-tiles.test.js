@@ -101,6 +101,23 @@ const { AnnotationAdapter } = context;
     assert.equal(AnnotationAdapter.aiNucleusOverlayElements.length, 0);
 }
 
+{
+    // Regression: a full reset (e.g. returning to the empty-viewport / slide switch)
+    // must also drop the "last detected nuclei" cache, otherwise re-enabling the
+    // visibility toggle afterwards can repaint a previous slide's stale contours.
+    const viewer = {
+        overlays: [],
+        currentOverlays: [],
+        removeOverlay() {},
+        addOverlay() {}
+    };
+    AnnotationAdapter.lastNucleiCircles = [{ centerX: 5, centerY: 5, radius: 3 }];
+    AnnotationAdapter.aiNucleusOverlayElements = [];
+    AnnotationAdapter.clearAiNucleiOverlay({ remove: true, viewer });
+    assert.equal(AnnotationAdapter.lastNucleiCircles.length, 0);
+    assert.equal(AnnotationAdapter.localizedCellObjects.length, 0);
+}
+
 assert.match(adapterSource, /static primaryTiledImage\(/);
 assert.doesNotMatch(adapterSource, /viewport\.viewportToImageCoordinates/);
 assert.doesNotMatch(adapterSource, /viewport\.imageToViewportWidth\(/);
@@ -230,5 +247,116 @@ assert.doesNotMatch(html, /Hide Segmented Nuclei/);
 assert.doesNotMatch(html, />Nuclei</);
 assert.match(adapterSource, /activateQuPathTool\("rectangle"\)/);
 assert.match(adapterSource, /setMeasureTracking\(false\)/);
+assert.match(html, /id="ai-heatmap-toggle"/);
+assert.match(adapterSource, /static async toggleHeatMap\(/);
+assert.match(adapterSource, /static resetNucleusOverlayColors\(/);
 
-console.log("nuclei-stardist-tiles.test.js: ok");
+// "Expose, edit and use all StarDist parameters" — the advanced controls must exist
+// in the AI Labs panel markup, not just theoretically wired in JS.
+assert.match(html, /id="ai-max-nucleus-radius"/);
+assert.match(html, /id="ai-ray-count"/);
+assert.match(html, /id="ai-boundary-tightness"/);
+assert.match(html, /id="ai-model-override"/);
+assert.match(html, /Force Fluorescence model/);
+assert.match(html, /Force H&amp;E \/ brightfield model/);
+
+(async () => {
+    // Regression: the probability/NMS sliders must be read live (not cached) and
+    // actually reach the backend StarDist plugin call, otherwise a second click
+    // with different slider values silently produces identical results.
+    let capturedBody = null;
+    context.WsiCsrf.csrfFetch = async (_url, options) => {
+        capturedBody = JSON.parse(options.body);
+        return { ok: true, json: async () => ({ nuclei: [] }) };
+    };
+    AnnotationAdapter.currentImageId = "slide-1";
+    const root = {
+        getElementById: (id) => {
+            if (id === "ai-prob-threshold") return { value: "0.77" };
+            if (id === "ai-nms-threshold") return { value: "0.55" };
+            if (id === "ai-max-nucleus-radius") return { value: "12" };
+            if (id === "ai-ray-count") return { value: "48" };
+            if (id === "ai-boundary-tightness") return { value: "0.6" };
+            if (id === "ai-model-override") return { value: "he" };
+            return null;
+        }
+    };
+    await AnnotationAdapter.runStarDistSegmentation({ root, viewer: null });
+    assert.ok(capturedBody, "expected runStarDistSegmentation to send a plugin request");
+    assert.equal(capturedBody.probability, 0.77);
+    assert.equal(capturedBody.nms, 0.55);
+    assert.equal(capturedBody.pluginId, "stardist-segmentation");
+
+    // Regression: "expose all StarDist parameters" — the advanced knobs (max nucleus
+    // radius, ray count/shape smoothness, boundary tightness, model override) must
+    // reach the backend exactly like probability/NMS, not silently drop on the floor.
+    assert.equal(capturedBody.maxNucleusRadius, 12);
+    assert.equal(capturedBody.rayCount, 48);
+    assert.equal(capturedBody.boundaryTightness, 0.6);
+    assert.equal(capturedBody.modelOverride, "he");
+
+    // Defaults apply when the advanced controls aren't present in the DOM.
+    const defaultsRoot = {
+        getElementById: (id) => {
+            if (id === "ai-prob-threshold") return { value: "0.5" };
+            if (id === "ai-nms-threshold") return { value: "0.4" };
+            return null;
+        }
+    };
+    await AnnotationAdapter.runStarDistSegmentation({ root: defaultsRoot, viewer: null });
+    assert.equal(capturedBody.maxNucleusRadius, AnnotationAdapter.AI_DEFAULT_MAX_NUCLEUS_RADIUS);
+    assert.equal(capturedBody.rayCount, AnnotationAdapter.AI_DEFAULT_RAY_COUNT);
+    assert.equal(capturedBody.boundaryTightness, AnnotationAdapter.AI_DEFAULT_BOUNDARY_TIGHTNESS);
+    assert.equal(capturedBody.modelOverride, AnnotationAdapter.AI_DEFAULT_MODEL_OVERRIDE);
+
+    // Regression: there was no dedicated Heat Map button — only a dropdown + "Run"
+    // combo that silently no-oped without nuclei segmented first, and no way to
+    // revert the color-coding once applied. The toggle must: skip re-segmenting when
+    // nuclei already exist, color every nucleus polygon, and cleanly revert on a
+    // second click without ever calling the network-backed segmentation path again.
+    {
+        const polygonA = { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
+        const polygonB = { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
+        AnnotationAdapter.aiNucleusOverlayParts = [polygonA, polygonB];
+        AnnotationAdapter.lastNucleiCircles = [{ centerX: 1, centerY: 1, radius: 2 }, { centerX: 5, centerY: 5, radius: 2 }];
+        AnnotationAdapter.heatMapActive = false;
+
+        let segmentCalls = 0;
+        const previousSegment = AnnotationAdapter.segmentCellNuclei;
+        AnnotationAdapter.segmentCellNuclei = async () => { segmentCalls += 1; };
+        const previousQuantify = AnnotationAdapter.runPerObjectPixelQuantifier;
+        AnnotationAdapter.runPerObjectPixelQuantifier = async () => ({
+            objects: [{ index: 0, key: 0.1 }, { index: 1, key: 0.9 }]
+        });
+
+        const heatMapButton = { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; }, textContent: "" };
+        const fakeRoot = { getElementById: (id) => (id === "ai-heatmap-toggle" ? heatMapButton : null) };
+
+        const turnedOn = await AnnotationAdapter.toggleHeatMap({ root: fakeRoot, viewer: null });
+        assert.equal(turnedOn, true, "toggling on with existing nuclei must report active");
+        assert.equal(segmentCalls, 0, "must not re-segment when nuclei already exist");
+        assert.notEqual(polygonA.attrs.fill, AnnotationAdapter.AI_NUCLEUS_DEFAULT_FILL,
+            "each nucleus must be recolored away from the default green fill");
+        assert.equal(heatMapButton.attrs["aria-pressed"], "true");
+        assert.equal(heatMapButton.textContent, "🌡️ Heat Map: ON");
+
+        const turnedOff = await AnnotationAdapter.toggleHeatMap({ root: fakeRoot, viewer: null });
+        assert.equal(turnedOff, false, "a second click must turn the heat map off");
+        assert.equal(polygonA.attrs.fill, AnnotationAdapter.AI_NUCLEUS_DEFAULT_FILL,
+            "turning off must restore the original default fill");
+        assert.equal(polygonA.attrs.stroke, AnnotationAdapter.AI_NUCLEUS_DEFAULT_STROKE,
+            "turning off must restore the original default stroke");
+        assert.equal(heatMapButton.attrs["aria-pressed"], "false");
+        assert.equal(heatMapButton.textContent, "🌡️ Heat Map");
+
+        AnnotationAdapter.aiNucleusOverlayParts = [];
+        AnnotationAdapter.lastNucleiCircles = [];
+        AnnotationAdapter.segmentCellNuclei = previousSegment;
+        AnnotationAdapter.runPerObjectPixelQuantifier = previousQuantify;
+    }
+
+    console.log("nuclei-stardist-tiles.test.js: ok");
+})().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+});

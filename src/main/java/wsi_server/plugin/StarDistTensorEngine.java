@@ -50,15 +50,57 @@ public final class StarDistTensorEngine {
     }
 
     /**
+     * Every user-tunable knob the fallback 32-ray engine loop actually reads.
+     * All fields are nullable; {@code null} preserves the pre-existing legacy
+     * default for that one parameter, so old callers (and the ONNX/TensorFlow
+     * native-model path, which ignores all of these) are unaffected.
+     */
+    public record Params(
+            Double probability,
+            Double nms,
+            Double maxNucleusRadius,
+            Integer rayCount,
+            Double boundaryTightness
+    ) {
+        public static final Params DEFAULT = new Params(null, null, null, null, null);
+    }
+
+    /**
      * Packs sample planes into little-endian float32 NHWC bytes
      * {@code [1, height, width, channels]} and runs the tensor engine.
+     * Uses every legacy adaptive/fixed default (see {@link Params#DEFAULT}).
      */
     public static List<NucleusPolygon> infer(PluginSampleGrid grid, boolean brightfield, Path weights) {
+        return infer(grid, brightfield, weights, Params.DEFAULT);
+    }
+
+    /**
+     * Same as {@link #infer(PluginSampleGrid, boolean, Path)} but lets the caller
+     * override every tunable parameter of the fallback star-convex engine loop
+     * (e.g. from the AI Labs panel's "Advanced StarDist Parameters" controls)
+     * instead of always relying on adaptive statistics / hardcoded defaults.
+     *
+     * @param params probability (0.05-0.95 fraction of the tile's peak intensity;
+     *               higher = stricter/fewer detections), nms (0.1-1.0 suppression
+     *               strength; higher = detections pushed farther apart / merged),
+     *               maxNucleusRadius (2-40px expected/max nucleus radius; controls
+     *               how far each of the 32 outline rays searches), rayCount (8-128
+     *               outline vertices per nucleus; higher = smoother polygons), and
+     *               boundaryTightness (0.4-0.98; higher = tighter outline hugging
+     *               only the brightest core, lower = looser/larger outline).
+     */
+    public static List<NucleusPolygon> infer(
+            PluginSampleGrid grid,
+            boolean brightfield,
+            Path weights,
+            Params params
+    ) {
         if (grid == null || grid.sampleWidth() <= 0 || grid.sampleHeight() <= 0) return List.of();
         float[][][] tensor = packNhwc(grid, brightfield);
         byte[] matrix = toFloat32Bytes(tensor);
         float[][][] activated = runTensorEngine(matrix, tensor, weights);
-        return polygonsFromProbability(grid, nuclearChannel(activated, brightfield), brightfield);
+        Params resolved = params == null ? Params.DEFAULT : params;
+        return polygonsFromProbability(grid, nuclearChannel(activated, brightfield), brightfield, resolved);
     }
 
     static float[][][] packNhwc(PluginSampleGrid grid, boolean brightfield) {
@@ -161,15 +203,27 @@ public final class StarDistTensorEngine {
     }
 
     static List<NucleusPolygon> polygonsFromProbability(PluginSampleGrid grid, float[] field, boolean brightfield) {
+        return polygonsFromProbability(grid, field, brightfield, Params.DEFAULT);
+    }
+
+    static List<NucleusPolygon> polygonsFromProbability(
+            PluginSampleGrid grid,
+            float[] field,
+            boolean brightfield,
+            Params params
+    ) {
         int width = grid.sampleWidth();
         int height = grid.sampleHeight();
         if (field == null || field.length < width * height) return List.of();
-        float cut = threshold(field, brightfield);
-        List<Peak> peaks = findPeaks(field, width, height, cut);
+        float cut = threshold(field, brightfield, params.probability());
+        int rayCount = resolveRayCount(params.rayCount());
+        float boundaryTightness = resolveBoundaryTightness(params.boundaryTightness());
+        List<Peak> peaks = findPeaks(field, width, height, cut, params.nms(), params.maxNucleusRadius());
         List<NucleusPolygon> polygons = new ArrayList<>();
         for (Peak peak : peaks) {
             if (polygons.size() >= MAX_NUCLEI) break;
-            List<NucleusPolygon.Vertex> vertices = starConvexVertices(grid, field, width, height, peak, cut);
+            List<NucleusPolygon.Vertex> vertices = starConvexVertices(
+                    grid, field, width, height, peak, cut, rayCount, boundaryTightness);
             if (vertices.size() < 3) continue;
             polygons.add(new NucleusPolygon(
                     polygons.size(),
@@ -186,13 +240,15 @@ public final class StarDistTensorEngine {
             int width,
             int height,
             Peak peak,
-            float threshold
+            float threshold,
+            int rayCount,
+            float boundaryTightness
     ) {
-        float cut = Math.max(0.05f, threshold * 0.82f);
+        float cut = Math.max(0.05f, threshold * boundaryTightness);
         float limit = Math.max(4f, peak.radius * 2.6f);
-        List<NucleusPolygon.Vertex> ring = new ArrayList<>(RAYS);
-        for (int ray = 0; ray < RAYS; ray++) {
-            double angle = (ray / (double) RAYS) * Math.PI * 2;
+        List<NucleusPolygon.Vertex> ring = new ArrayList<>(rayCount);
+        for (int ray = 0; ray < rayCount; ray++) {
+            double angle = (ray / (double) rayCount) * Math.PI * 2;
             double dx = Math.cos(angle);
             double dy = Math.sin(angle);
             double last = 1.5;
@@ -211,8 +267,11 @@ public final class StarDistTensorEngine {
         return ring;
     }
 
-    private static List<Peak> findPeaks(float[] field, int width, int height, float cut) {
+    private static List<Peak> findPeaks(
+            float[] field, int width, int height, float cut, Double nmsOverride, Double maxNucleusRadiusOverride
+    ) {
         int radius = 2;
+        float peakRadius = resolvePeakRadius(maxNucleusRadiusOverride);
         List<Peak> peaks = new ArrayList<>();
         for (int y = radius; y < height - radius; y++) {
             for (int x = radius; x < width - radius; x++) {
@@ -228,12 +287,12 @@ public final class StarDistTensorEngine {
                         }
                     }
                 }
-                if (max) peaks.add(new Peak(x, y, value, 6f));
+                if (max) peaks.add(new Peak(x, y, value, peakRadius));
             }
         }
         peaks.sort(Comparator.comparingDouble((Peak peak) -> peak.score).reversed());
         List<Peak> kept = new ArrayList<>();
-        double minDist2 = 25;
+        double minDist2 = resolveNmsMinDist2(nmsOverride);
         for (Peak peak : peaks) {
             boolean near = false;
             for (Peak other : kept) {
@@ -264,6 +323,62 @@ public final class StarDistTensorEngine {
         float mean = (float) (sum / count);
         float strict = brightfield ? 0.38f : 0.32f;
         return Math.max(0.12f, mean + (0.14f + strict * 0.42f) * Math.max(0.04f, max - mean));
+    }
+
+    /**
+     * Same adaptive threshold as {@link #threshold(float[], boolean)} unless the
+     * caller supplies an explicit probability override, in which case the cut is
+     * pinned to that fraction of the tile's own peak intensity so the UI slider
+     * has a direct, visible effect on detection count/size.
+     */
+    private static float threshold(float[] field, boolean brightfield, Double probabilityOverride) {
+        if (probabilityOverride == null || !Double.isFinite(probabilityOverride)) {
+            return threshold(field, brightfield);
+        }
+        float max = 0f;
+        for (float value : field) {
+            if (value > max) max = value;
+        }
+        if (max < 0.08f) return 1f;
+        double clamped = Math.max(0.05, Math.min(0.95, probabilityOverride));
+        return (float) Math.max(0.05, clamped * max);
+    }
+
+    /**
+     * Maps the 0.1-1.0 "overlap suppression" slider onto a minimum peak-to-peak
+     * distance (squared). {@code null} preserves the legacy fixed 5px radius.
+     */
+    private static double resolveNmsMinDist2(Double nmsOverride) {
+        if (nmsOverride == null || !Double.isFinite(nmsOverride)) return 25;
+        double clamped = Math.max(0.1, Math.min(1.0, nmsOverride));
+        double minDist = 2.5 + clamped * 7.5;
+        return minDist * minDist;
+    }
+
+    /**
+     * Expected/max nucleus radius in pixels; feeds directly into the outline ray
+     * search limit ({@code peak.radius * 2.6}) in {@link #starConvexVertices}.
+     * {@code null} preserves the legacy fixed 6px baseline.
+     */
+    private static float resolvePeakRadius(Double maxNucleusRadiusOverride) {
+        if (maxNucleusRadiusOverride == null || !Double.isFinite(maxNucleusRadiusOverride)) return 6f;
+        return (float) Math.max(2.0, Math.min(40.0, maxNucleusRadiusOverride));
+    }
+
+    /** Outline vertex count per nucleus. {@code null} preserves the legacy fixed 32 rays. */
+    private static int resolveRayCount(Integer rayCountOverride) {
+        if (rayCountOverride == null) return RAYS;
+        return Math.max(8, Math.min(128, rayCountOverride));
+    }
+
+    /**
+     * Fraction of the peak-detection cut used as the per-ray boundary-tracing cut;
+     * higher pulls the outline tighter around only the brightest core. {@code null}
+     * preserves the legacy fixed 0.82 multiplier.
+     */
+    private static float resolveBoundaryTightness(Double boundaryTightnessOverride) {
+        if (boundaryTightnessOverride == null || !Double.isFinite(boundaryTightnessOverride)) return 0.82f;
+        return (float) Math.max(0.4, Math.min(0.98, boundaryTightnessOverride));
     }
 
     private static float[] blur3(float[] src, int width, int height) {

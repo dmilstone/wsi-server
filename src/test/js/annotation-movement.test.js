@@ -180,7 +180,7 @@ assert.equal(AnnotationAdapter.selectedNativeAnnotationId, null,
 const keydownListeners = [];
 context.window.addEventListener = function(type, handler) { if (type === "keydown") keydownListeners.push(handler); };
 context.window._wsiQuPathShortcutsBound = false;
-const clickSpies = { "qp-tool-brush": 0, "qp-tool-zoom": 0 };
+const clickSpies = { "qp-tool-brush": 0, "qp-tool-zoom": 0, "toggle-detections-visibility-btn": 0 };
 context.document.getElementById = id => (id in clickSpies ? { click() { clickSpies[id] += 1; } } : null);
 context.document.activeElement = null;
 let contrastLaunched = 0;
@@ -203,6 +203,45 @@ assert.equal(contrastLaunched, 1, "\"c\" must open Brightness & Contrast");
 keydownListener(fakeKeyEvent("z"));
 assert.equal(clickSpies["qp-tool-zoom"], 1, "\"z\" must click the Zoom tool button");
 
+// "d" must toggle the detections visibility button (works independently of the
+// AI Labs panel — the button lives in the main toolbar, not inside that panel).
+keydownListener(fakeKeyEvent("d"));
+assert.equal(clickSpies["toggle-detections-visibility-btn"], 1,
+    "\"d\" must click the detections visibility toggle button");
+
 AnnotationAdapter.launchBrightnessContrastPalette = previousLaunch;
+
+// Regression: the detections visibility button and the "Clear Detections" button must
+// both work even when the AI Labs panel has never been opened/bound (no "ai-nuclei-visible"
+// element in the DOM at all).
+{
+    const detButton = { dataset: {}, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, setAttribute() {} };
+    const clearDetButton = { dataset: {}, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, setAttribute() {} };
+    const idMap = {
+        "toggle-detections-visibility-btn": detButton,
+        "clear-detections-only-btn": clearDetButton
+    };
+    const doc = { getElementById: id => idMap[id] || null };
+    AnnotationAdapter.bindLayerVisibilityAndSanitizeControls(doc);
+    assert.equal(detButton.dataset.detVisBound, "1");
+    assert.equal(clearDetButton.dataset.clearDetBound, "1");
+
+    let toggledTo = null;
+    const previousSetVisible = AnnotationAdapter.setNucleiOverlaysVisible;
+    AnnotationAdapter.setNucleiOverlaysVisible = (visible) => { toggledTo = visible; };
+    AnnotationAdapter.aiOverlayVisible = true;
+    AnnotationAdapter.aiNucleusOverlayElements = [{ style: {} }];
+    detButton.listeners.click({ preventDefault() {} });
+    assert.equal(toggledTo, false, "clicking the toolbar Det button must flip current visibility off");
+    AnnotationAdapter.setNucleiOverlaysVisible = previousSetVisible;
+
+    let cleared = null;
+    const previousClear = AnnotationAdapter.clearAiNucleiOverlay;
+    AnnotationAdapter.clearAiNucleiOverlay = (opts) => { cleared = opts; };
+    clearDetButton.listeners.click({ preventDefault() {} });
+    assert.ok(cleared && cleared.remove === true,
+        "Clear Detections button must call clearAiNucleiOverlay({ remove: true })");
+    AnnotationAdapter.clearAiNucleiOverlay = previousClear;
+}
 
 console.log("annotation movement checks passed");
