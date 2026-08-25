@@ -13,11 +13,38 @@ class AnnotationStore {
     static workstationUserIdCache = null;
 
     /**
+     * True when this page was loaded over the loopback address the server itself
+     * binds to (i.e. the operator's own machine, which is also the web host).
+     * That machine is treated as the single canonical "local" workstation identity —
+     * see {@link resolveWorkstationUserId} — while every other hostname/IP (a
+     * genuinely different physical workstation reaching the server over the network)
+     * gets its own generated, persisted id.
+     */
+    static isWebHostLoopback() {
+        try {
+            if (typeof window === "undefined" || !window.location) return false;
+            const hostname = String(window.location.hostname || "").toLowerCase();
+            return hostname === "" || hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+        } catch (error) {
+            return false;
+        }
+    }
+
+    /**
      * Stable per-browser workstation id for annotation ownership.
      * Restored from the previous store: native OSD annotation construction
      * calls this during {@code new AnnotationAdapter(...)}.
      */
     static resolveWorkstationUserId() {
+        // The web host's own browser always maps to "local" (see isWebHostLoopback),
+        // regardless of any stray per-browser id a prior session may have already
+        // generated and stored — this keeps annotations that existed before
+        // per-workstation isolation was wired up exactly where they already are.
+        if (this.isWebHostLoopback()) {
+            this.persistWorkstationIdentity("local", this.localStorageOrNull());
+            this.workstationUserIdCache = "local";
+            return this.workstationUserIdCache;
+        }
         if (this.workstationUserIdCache) return this.workstationUserIdCache;
 
         const storage = this.localStorageOrNull();
@@ -109,8 +136,13 @@ class AnnotationStore {
         if (!normalizedImageId) return Promise.resolve(null);
 
         if (!this.collectionCache.has(normalizedImageId)) {
+            // Slides/images are shared across everyone (ImageRegistry is global); only
+            // the annotations layered on top are workstation-scoped, via this header.
             const request = fetch(`/api/images/${encodeURIComponent(normalizedImageId)}/annotations`, {
-                headers: { "Accept": "application/json" }
+                headers: {
+                    "Accept": "application/json",
+                    [this.USER_HEADER]: this.resolveWorkstationUserId()
+                }
             }).then(async response => {
                 if (!response.ok) throw new Error(await AnnotationStore.responseError(response));
                 return response.json();
@@ -256,7 +288,11 @@ class AnnotationStore {
             try {
                 const response = await WsiCsrf.csrfFetch(`/api/images/${encodeURIComponent(imageId)}/annotations`, {
                     method: "PUT",
-                    headers: { "Accept": "application/json", "Content-Type": "application/json" },
+                    headers: {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        [AnnotationStore.USER_HEADER]: AnnotationStore.resolveWorkstationUserId()
+                    },
                     body: JSON.stringify(document)
                 });
                 if (!response.ok) throw new Error(await this.responseError(response));

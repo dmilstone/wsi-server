@@ -12,8 +12,8 @@
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
-    <script src="/annotation-store.js?v=20260817"></script>
-    <script src="/annotation-adapter.js?v=20260825-legend-fixes-tools-btn-removed"></script>
+    <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
+    <script src="/annotation-adapter.js?v=20260825-workstation-scoping"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260822-native-osd-svg"></script>
     <style>
@@ -3061,6 +3061,63 @@
             border-color: rgba(77, 148, 216, .55);
             color: #fff;
         }
+        /* Export/overview mini-buttons carry dark-charcoal (and one bold-red) SVG strokes,
+           so they need a light chip backdrop to stay legible against the dark toolbar rows
+           — same high-clarity QuPath treatment as the sandboxed secondary toolbar. */
+        #primary-export-visible-btn, #primary-export-annotation-btn, #primary-slide-overview-btn,
+        #sandbox-export-visible-btn, #sandbox-export-annotation-btn, #sandbox-slide-overview-btn,
+        #secondary-export-visible-btn, #secondary-export-annotation-btn, #secondary-slide-overview-btn {
+            padding: 4px 6px;
+            cursor: pointer;
+            border-radius: 4px;
+            background: #d9d9dc;
+            border: 1px solid #a8a8ae;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.75rem;
+            color: #222;
+        }
+        #primary-export-visible-btn:hover:not(:disabled), #primary-export-annotation-btn:hover:not(:disabled),
+        #primary-slide-overview-btn:hover:not(:disabled), #sandbox-export-visible-btn:hover:not(:disabled),
+        #sandbox-export-annotation-btn:hover:not(:disabled), #sandbox-slide-overview-btn:hover:not(:disabled),
+        #secondary-export-visible-btn:hover:not(:disabled), #secondary-export-annotation-btn:hover:not(:disabled),
+        #secondary-slide-overview-btn:hover:not(:disabled) {
+            background: #c7c7cc;
+        }
+        #primary-export-visible-btn:disabled, #primary-export-annotation-btn:disabled, #primary-slide-overview-btn:disabled,
+        #sandbox-export-visible-btn:disabled, #sandbox-export-annotation-btn:disabled, #sandbox-slide-overview-btn:disabled,
+        #secondary-export-visible-btn:disabled, #secondary-export-annotation-btn:disabled, #secondary-slide-overview-btn:disabled {
+            opacity: .4;
+            cursor: default;
+        }
+        #primary-slide-overview-btn[aria-pressed="true"], #sandbox-slide-overview-btn[aria-pressed="true"],
+        #secondary-slide-overview-btn[aria-pressed="true"] {
+            background: #cfe1f2;
+            border-color: #8fb3d1;
+        }
+        #annotation-context-menu button:hover {
+            background: #333;
+        }
+        /* Custom multi-edge resize grips for the keyboard shortcuts legend, replacing the
+           native single-corner `resize: both` handle (which also refuses to shrink below
+           its implicit min-content floor). */
+        #floating-shortcuts-legend { position: relative; }
+        #floating-shortcuts-legend .legend-resize-handle { position: absolute; z-index: 5; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="n"] { top: 0; left: 8px; right: 8px; height: 6px; cursor: n-resize; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="s"] { bottom: 0; left: 8px; right: 8px; height: 6px; cursor: s-resize; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="e"] { top: 8px; right: 0; bottom: 8px; width: 6px; cursor: e-resize; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="w"] { top: 8px; left: 0; bottom: 8px; width: 6px; cursor: w-resize; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="ne"] { top: 0; right: 0; width: 10px; height: 10px; cursor: ne-resize; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="nw"] { top: 0; left: 0; width: 10px; height: 10px; cursor: nw-resize; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="se"] { bottom: 0; right: 0; width: 10px; height: 10px; cursor: se-resize; }
+        #floating-shortcuts-legend .legend-resize-handle[data-edge="sw"] { bottom: 0; left: 0; width: 10px; height: 10px; cursor: sw-resize; }
+        /* Dashed outline marks a position-locked annotation; !important beats the shape's
+           own inline stroke-dasharray presentation attribute (CSS always outranks those). */
+        .osd-annotation-shape.is-annotation-locked {
+            stroke-dasharray: 4 3 !important;
+            cursor: default !important;
+        }
         #wand-config-dropdown {
             background: #222;
             color: #fff;
@@ -3136,9 +3193,24 @@
                     data-tooltip="(S) Selection Tool: Click a shape to select it, double-click to name it." aria-label="Selection" aria-pressed="false">🎯</button>
             <button type="button" class="qp-tool" id="primary-qp-tool-contrast" data-qp-tool="contrast"
                     data-tooltip="(C) Brightness &amp; Contrast Tool: Adjust display levels for the current image." aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
-            <button type="button" class="qp-tool" id="primary-qp-tool-zoom" data-qp-tool="zoom"
-                    data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">🔍</button>
-        </div>
+                <button type="button" class="qp-tool" id="primary-qp-tool-zoom" data-qp-tool="zoom"
+                        data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">🔍</button>
+                <button id="primary-export-visible-btn" class="toolbar-btn" type="button" disabled
+                        data-tooltip="Download full-resolution image of the region being viewed."
+                        aria-label="Export visible region">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                </button>
+                <button id="primary-export-annotation-btn" class="toolbar-btn" type="button" disabled
+                        data-tooltip="Download full-resolution image of the selected annotation."
+                        aria-label="Export selected annotation">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                </button>
+                <button id="primary-slide-overview-btn" class="toolbar-btn" type="button" disabled aria-pressed="false"
+                        data-tooltip="(Slide Overview) Open a persistent thumbnail navigator window tracking your position on the slide."
+                        aria-label="Slide overview">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cc0000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                </button>
+            </div>
         <div class="toolbar-ops-spacer" aria-hidden="true"></div>
         <div class="toolbar-group primary-right-group ops-display-group" role="group" aria-label="Utilities">
             <button id="primary-help-directory-link" class="toolbar-chip" type="button"
@@ -3178,10 +3250,10 @@
                         <button id="annotation-names" class="toolbar-button annotation-names" type="button" data-tooltip="Hide annotation names" title="Hide annotation names" aria-label="Hide annotation names" aria-pressed="true" disabled>Names</button>
                     </div>
                     <div class="toolbar-group export-group" role="group" aria-label="Export actions">
-                        <button id="export-visible-region" class="toolbar-button" type="button" data-tooltip="Export visible region&#10;Export the area currently visible in the viewer at native resolution" title="Export visible region — Export the area currently visible in the viewer at native resolution" aria-label="Export visible region" disabled>
+                        <button id="export-visible-region" class="toolbar-button" type="button" data-tooltip="Download full-resolution image of the region being viewed." title="Download full-resolution image of the region being viewed." aria-label="Export visible region" disabled>
                             <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10"/><path d="M8 5.5v5M5.8 8.2 8 5.8l2.2 2.4"/></svg>
                         </button>
-                        <button id="export-selected-annotation" class="toolbar-button" type="button" data-tooltip="Export selected annotation&#10;Export the selected annotation region" title="Export selected annotation — Export the selected annotation region" aria-label="Export selected annotation" disabled>
+                        <button id="export-selected-annotation" class="toolbar-button" type="button" data-tooltip="Download full-resolution image of the selected annotation." title="Download full-resolution image of the selected annotation." aria-label="Export selected annotation" disabled>
                             <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3V13.5H4z"/><path d="M9 2.5v3h3M6.5 9h3M6.5 11h3"/></svg>
                         </button>
                     </div>
@@ -3210,6 +3282,21 @@
                                 title="Tools — Show ImageJ-style annotation tools" aria-label="Tools"
                                 aria-pressed="false">🛠️ Tools</button>
                         <a id="pilot-feedback-link" class="toolbar-chip" href="/pilot-feedback/" title="Open pilot feedback (shortcut F in viewer)" aria-label="Feedback">Feedback</a>
+                        <button id="sandbox-export-visible-btn" class="toolbar-btn" type="button" disabled
+                                data-tooltip="Download full-resolution image of the region being viewed."
+                                aria-label="Export visible region">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                        </button>
+                        <button id="sandbox-export-annotation-btn" class="toolbar-btn" type="button" disabled
+                                data-tooltip="Download full-resolution image of the selected annotation."
+                                aria-label="Export selected annotation">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                        </button>
+                        <button id="sandbox-slide-overview-btn" class="toolbar-btn" type="button" disabled aria-pressed="false"
+                                data-tooltip="(Slide Overview) Open a persistent thumbnail navigator window tracking your position on the slide."
+                                aria-label="Slide overview">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cc0000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -3249,6 +3336,21 @@
                     data-tooltip="(C) Brightness &amp; Contrast Tool: Adjust display levels for the current image." aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
             <button type="button" class="qp-tool" id="qp-tool-zoom" data-qp-tool="zoom"
                     data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">🔍</button>
+            <button id="secondary-export-visible-btn" class="toolbar-btn" type="button" disabled
+                    data-tooltip="Download full-resolution image of the region being viewed."
+                    aria-label="Export visible region">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            </button>
+            <button id="secondary-export-annotation-btn" class="toolbar-btn" type="button" disabled
+                    data-tooltip="Download full-resolution image of the selected annotation."
+                    aria-label="Export selected annotation">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            </button>
+            <button id="secondary-slide-overview-btn" class="toolbar-btn" type="button" disabled aria-pressed="false"
+                    data-tooltip="(Slide Overview) Open a persistent thumbnail navigator window tracking your position on the slide."
+                    aria-label="Slide overview">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cc0000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+            </button>
         </div>
     </div>
 </header>
@@ -3676,11 +3778,13 @@
         </div>
     </div>
 </aside>
-<div id="floating-shortcuts-legend" class="floating-palette" style="display: none; position: fixed; z-index: 100015; width: 340px; height: 420px; background: #111; color: #fff; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); overflow: hidden; resize: both;">
+<div id="floating-shortcuts-legend" class="floating-palette" style="display: none; position: fixed; z-index: 100015; width: 340px; height: 420px; min-width: 160px; min-height: 56px; background: #111; color: #fff; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); overflow: hidden;">
     <div class="legend-header" style="padding: 8px 12px; background: #222; cursor: move; display: flex; align-items: center; border-bottom: 1px solid #333; font-weight: bold; font-size: 0.9rem;">
         <span>⌨️ Keyboard Shortcuts Reference</span>
+        <button type="button" id="floating-shortcuts-legend-minimize" class="fcp-close fcp-minimize" aria-label="Minimize keyboard shortcuts legend" title="Minimize"
+                style="margin-left: auto; background: none; border: none; color: #fff; cursor: pointer; font-weight: bold; padding: 0 6px;">–</button>
         <button type="button" id="floating-shortcuts-legend-close" class="fcp-close" aria-label="Close keyboard shortcuts legend"
-                style="margin-left: auto; background: none; border: none; color: #ff5555; cursor: pointer; font-weight: bold;">[X]</button>
+                style="background: none; border: none; color: #ff5555; cursor: pointer; font-weight: bold; padding: 0 6px;">[X]</button>
     </div>
     <div class="legend-body" style="padding: 12px; overflow-y: auto; font-size: 0.8rem; line-height: 1.5;">
         <table style="width: 100%; text-align: left; border-collapse: collapse;">
@@ -3697,10 +3801,27 @@
             <tr><td><b>B</b></td><td>Brush Tool (Freehand canvas painting sketch)</td></tr>
             <tr><td><b>W</b></td><td>Wand Tool (Local boundary threshold auto-trace)</td></tr>
             <tr><td><b>.</b></td><td>Points Tool (Multi-point structure tabulation)</td></tr>
-            <tr><td><b>S</b></td><td>Selection Mode (Drag shapes, input name labels)</td></tr>
-            <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
+                <tr><td><b>S</b></td><td>Selection Mode (Drag shapes, input name labels)</td></tr>
+                <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
+                <tr style="border-top: 1px solid #333;"><td>Vis</td><td>Export Visible Region (native-resolution image download)</td></tr>
+                <tr><td>Ant</td><td>Export Selected Annotation (native-resolution crop; select an annotation first)</td></tr>
+                <tr><td>Ovw</td><td>Toggle Slide Overview Thumbnail Navigator</td></tr>
+                <tr><td>Right-click</td><td>Lock/Unlock Position of that one annotation (on a shape)</td></tr>
+                <tr><td>–</td><td>Minimize/Expand this window (header only)</td></tr>
         </table>
     </div>
+    <div class="legend-resize-handle" data-edge="n"></div>
+    <div class="legend-resize-handle" data-edge="s"></div>
+    <div class="legend-resize-handle" data-edge="e"></div>
+    <div class="legend-resize-handle" data-edge="w"></div>
+    <div class="legend-resize-handle" data-edge="ne"></div>
+    <div class="legend-resize-handle" data-edge="nw"></div>
+    <div class="legend-resize-handle" data-edge="se"></div>
+    <div class="legend-resize-handle" data-edge="sw"></div>
+</div>
+<div id="annotation-context-menu" style="display: none; position: fixed; z-index: 100020; min-width: 190px; background: #1c1c1c; color: #fff; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.5); overflow: hidden; font-size: 0.85rem;">
+    <button type="button" id="annotation-context-menu-lock-toggle"
+            style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; color: #fff; cursor: pointer; font: inherit;">🔒 Lock Position</button>
 </div>
 <div id="channels" hidden></div>
 <footer class="status-bar" aria-live="polite">

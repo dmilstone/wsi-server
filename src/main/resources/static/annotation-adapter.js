@@ -3061,10 +3061,9 @@ class AnnotationAdapter {
         // Create/persist workstation id from localStorage before any canvas GET/PUT.
         this.workstationUserId = AnnotationAdapter.resolveWorkstationUserId();
 
-        // AnnotationStore owns lifecycle; this adapter supplies the fetch that
-        // always attaches X-WSI-User from localStorage for GET/PUT.
+        // AnnotationStore owns lifecycle and, internally, always attaches X-WSI-User
+        // (via AnnotationStore.resolveWorkstationUserId()) to its own GET/PUT calls.
         this.store = new AnnotationStore({
-            fetchImpl: (url, options) => AnnotationAdapter.workstationFetch(url, options),
             reconcileSavedCollection: (_local, saved) => {
                 this.reconcileSavedMetadata(saved);
                 return this.toBackendCollection();
@@ -3110,8 +3109,14 @@ class AnnotationAdapter {
 
     /**
      * Prefer the localStorage workstation id; otherwise create/persist via store.
+     * The web host's own loopback-accessed browser always wins as "local" (see
+     * AnnotationStore.isWebHostLoopback), even over a stray id a prior session may
+     * have already cached, so it keeps seeing annotations that predate this scoping.
      */
     static resolveWorkstationUserId() {
+        if (AnnotationStore.isWebHostLoopback()) {
+            return AnnotationStore.resolveWorkstationUserId();
+        }
         const fromStorage = AnnotationAdapter.readWorkstationIdFromLocalStorage();
         if (fromStorage) {
             AnnotationStore.persistWorkstationIdentity(
@@ -3193,6 +3198,17 @@ class AnnotationAdapter {
     static annotationLabelsVisible = true;
     static savedAnnotationsArray = [];
     static selectedNativeAnnotationId = null;
+    /** Multi-select set (shift-click). `selectedNativeAnnotationId` always tracks the most
+     *  recently touched member of this set (or null when empty) so existing single-target
+     *  code (drag, rename, name-editor) keeps working unchanged even when several shapes
+     *  are highlighted at once. */
+    static selectedNativeAnnotationIds = new Set();
+    /** Per-annotation position lock (right-click context menu). Persisted to localStorage
+     *  by id, independent of selection, so it survives reload as long as the backend keeps
+     *  returning the same annotation id. */
+    static LOCKED_ANNOTATIONS_STORAGE_KEY = "wsi.lockedAnnotationIds";
+    static lockedAnnotationIds = new Set();
+    static _lockedAnnotationsLoaded = false;
     static annotationEngine = null;
     static OSD_ANNOTATION_STROKE = "#FFD700";
     static OSD_ANNOTATION_FILL = "rgba(255, 215, 0, 0.22)";
@@ -3757,8 +3773,15 @@ class AnnotationAdapter {
         AnnotationAdapter.setSavedAnnotations(
             (AnnotationAdapter.savedAnnotationsArray || []).filter(item => item?.id !== id)
         );
+        AnnotationAdapter.selectedNativeAnnotationIds?.delete?.(id);
+        if (AnnotationAdapter.lockedAnnotationIds?.delete?.(id)) {
+            AnnotationAdapter.persistLockedAnnotationIds();
+        }
         if (AnnotationAdapter.selectedNativeAnnotationId === id) {
-            AnnotationAdapter.selectedNativeAnnotationId = null;
+            const remaining = AnnotationAdapter.selectedNativeAnnotationIds?.size
+                ? AnnotationAdapter.selectedNativeAnnotationIds.values().next().value
+                : null;
+            AnnotationAdapter.selectedNativeAnnotationId = remaining || null;
         }
         const node = typeof document !== "undefined"
             ? document.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`)
@@ -3803,6 +3826,7 @@ class AnnotationAdapter {
         AnnotationAdapter.bindMeasurementKeyboardEscape();
         AnnotationAdapter.bindSecondaryAnnotationToolbar();
         AnnotationAdapter.bindPrimaryUnifiedToolbar();
+        AnnotationAdapter.bindAnnotationContextMenu();
         AnnotationAdapter.bindLayerVisibilityAndSanitizeControls();
         AnnotationAdapter.bindQuPathKeyboardShortcuts();
         AnnotationAdapter.ensureCurrentActiveTool(AnnotationAdapter.currentActiveTool || "move");
@@ -3972,11 +3996,16 @@ class AnnotationAdapter {
         AnnotationAdapter.isolateFloatingPalettePointerEvents(element);
         element.style.position = "fixed";
         element.style.zIndex = String(options.zIndex || "9999");
+        // Callers that supply their own custom multi-edge resize handles (e.g. the
+        // keyboard shortcuts legend) pass resize: "none" so the browser's single
+        // corner-only native resize grip (with its own implicit min-content floor)
+        // doesn't fight with those handles or its own min-width/min-height below.
+        const resizeMode = options.resize || "both";
         if (typeof element.style.setProperty === "function") {
-            element.style.setProperty("resize", "both", "important");
+            element.style.setProperty("resize", resizeMode, "important");
             element.style.setProperty("overflow", "hidden", "important");
         } else {
-            element.style.resize = "both";
+            element.style.resize = resizeMode;
             element.style.overflow = "hidden";
         }
         element.style.minWidth = options.minWidth || "17.5rem";
@@ -5804,6 +5833,84 @@ class AnnotationAdapter {
         }
 
         AnnotationAdapter.bindGlobalUiTooltip(doc);
+        AnnotationAdapter.bindExportOverviewProxyButtons(doc);
+        return true;
+    }
+
+    /**
+     * The primary toolbar and the sandboxed legacy toolbar each need their own "Vis" /
+     * "Ant" / "Ovw" export & overview buttons, but there is exactly one real, working
+     * implementation of each action (`#export-visible-region`, `#export-selected-annotation`,
+     * `#slide-overview-button` — native-resolution server-backed export, already wired to
+     * the live native-OSD annotation selection state). Rather than re-implement a second,
+     * divergent client-side screenshot/crop pipeline, every new button below is a thin proxy
+     * that forwards its click to the real button and mirrors its disabled/aria-pressed chrome,
+     * so both rows always reflect one single source of truth.
+     */
+    static EXPORT_OVERVIEW_PROXY_MAP = {
+        "primary-export-visible-btn": "export-visible-region",
+        "sandbox-export-visible-btn": "export-visible-region",
+        "secondary-export-visible-btn": "export-visible-region",
+        "primary-export-annotation-btn": "export-selected-annotation",
+        "sandbox-export-annotation-btn": "export-selected-annotation",
+        "secondary-export-annotation-btn": "export-selected-annotation",
+        "primary-slide-overview-btn": "slide-overview-button",
+        "sandbox-slide-overview-btn": "slide-overview-button",
+        "secondary-slide-overview-btn": "slide-overview-button"
+    };
+
+    static syncExportOverviewProxyChrome(proxyId, targetId, doc) {
+        const proxy = doc?.getElementById?.(proxyId);
+        const target = doc?.getElementById?.(targetId);
+        if (!proxy || !target) return false;
+        proxy.disabled = Boolean(target.disabled);
+        const pressed = target.getAttribute?.("aria-pressed");
+        if (pressed != null) proxy.setAttribute?.("aria-pressed", pressed);
+        return true;
+    }
+
+    static bindExportOverviewProxyButtons(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc?.getElementById) return false;
+
+        const targetsSeen = new Set();
+        for (const [proxyId, targetId] of Object.entries(AnnotationAdapter.EXPORT_OVERVIEW_PROXY_MAP)) {
+            const proxy = doc.getElementById(proxyId);
+            const target = doc.getElementById(targetId);
+            if (!proxy || !target) continue;
+
+            if (proxy.dataset?.exportProxyBound !== "1") {
+                proxy.addEventListener("click", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (target.disabled) return;
+                    target.click();
+                    AnnotationAdapter.syncExportOverviewProxyChrome(proxyId, targetId, doc);
+                });
+                if (proxy.dataset) proxy.dataset.exportProxyBound = "1";
+            }
+            AnnotationAdapter.syncExportOverviewProxyChrome(proxyId, targetId, doc);
+            targetsSeen.add(targetId);
+        }
+
+        // A single MutationObserver per real target keeps every proxy pointed at it
+        // (primary + sandbox) in sync whenever the host page enables/disables it or
+        // flips its pressed state (image load, annotation selection change, overview
+        // toggle), without needing to touch that page's own call sites.
+        if (typeof MutationObserver === "function") {
+            for (const targetId of targetsSeen) {
+                const target = doc.getElementById(targetId);
+                if (!target || target.dataset?.exportProxyObserved === "1") continue;
+                const observer = new MutationObserver(() => {
+                    for (const [pId, tId] of Object.entries(AnnotationAdapter.EXPORT_OVERVIEW_PROXY_MAP)) {
+                        if (tId === targetId) AnnotationAdapter.syncExportOverviewProxyChrome(pId, tId, doc);
+                    }
+                });
+                observer.observe(target, { attributes: true, attributeFilter: ["disabled", "aria-pressed"] });
+                if (target.dataset) target.dataset.exportProxyObserved = "1";
+            }
+        }
         return true;
     }
 
@@ -5853,9 +5960,21 @@ class AnnotationAdapter {
             });
             if (closeBtn.dataset) closeBtn.dataset.legendCloseBound = "1";
         }
-        // Scale the reference table's text with the panel's own size (the corner
-        // `resize: both` handle), instead of a fixed 0.8rem that either overflows or
-        // stays tiny as a pathologist drags the window bigger.
+        const minimizeBtn = palette.querySelector("#floating-shortcuts-legend-minimize")
+            || doc?.getElementById?.("floating-shortcuts-legend-minimize");
+        if (minimizeBtn && minimizeBtn.dataset?.legendMinimizeBound !== "1") {
+            minimizeBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.toggleFloatingShortcutsLegendMinimized(doc);
+            });
+            if (minimizeBtn.dataset) minimizeBtn.dataset.legendMinimizeBound = "1";
+        }
+        AnnotationAdapter.bindFloatingShortcutsLegendResize(palette);
+        // Scale the reference table's text with the panel's own size (now driven by the
+        // custom multi-edge resize handles above, not the old corner-only native grip),
+        // instead of a fixed 0.8rem that either overflows or stays tiny/oversized as a
+        // pathologist drags the window to a very different size.
         if (typeof ResizeObserver === "function" && palette.dataset?.legendResizeBound !== "1") {
             const body = palette.querySelector(".legend-body");
             const baseWidth = 340;
@@ -5866,7 +5985,7 @@ class AnnotationAdapter {
                 const width = entry?.contentRect?.width || palette.clientWidth || baseWidth;
                 const height = entry?.contentRect?.height || palette.clientHeight || baseHeight;
                 const scale = Math.min(width / baseWidth, height / baseHeight);
-                const clamped = Math.max(0.75, Math.min(2.5, scale));
+                const clamped = Math.max(0.35, Math.min(2.5, scale));
                 if (body?.style) body.style.fontSize = `${(baseFontRem * clamped).toFixed(3)}rem`;
             });
             observer.observe(palette);
@@ -5875,13 +5994,153 @@ class AnnotationAdapter {
         return palette;
     }
 
+    static toggleFloatingShortcutsLegendMinimized(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const palette = doc?.getElementById?.("floating-shortcuts-legend");
+        if (!palette?.classList) return false;
+        palette.classList.toggle("legend-minimized");
+        return AnnotationAdapter.syncFloatingShortcutsLegendMinimizedUi(palette, doc);
+    }
+
+    /** Collapses the legend to just its header strip (mirrors the existing z-stack
+     *  palette's minimize pattern) by clamping max-height rather than touching the
+     *  actual width/height style — so whatever size the custom resize handles left it
+     *  at is exactly what comes back on expand, with nothing to snapshot/restore. */
+    static syncFloatingShortcutsLegendMinimizedUi(palette = null, root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const node = palette || doc?.getElementById?.("floating-shortcuts-legend");
+        if (!node) return false;
+        const minimized = Boolean(node.classList?.contains?.("legend-minimized"));
+        const header = node.querySelector?.(".legend-header");
+        const headerHeight = header?.offsetHeight || 34;
+        if (node.style) {
+            node.style.maxHeight = minimized ? `${headerHeight}px` : "none";
+            node.style.overflow = "hidden";
+        }
+        const body = node.querySelector?.(".legend-body");
+        if (body?.style) body.style.display = minimized ? "none" : "";
+        // Height-adjusting handles (top/bottom/corners) are moot while collapsed to a
+        // header strip; leave the two side handles live so width stays adjustable.
+        const handles = node.querySelectorAll?.(".legend-resize-handle") || [];
+        handles.forEach?.(hnd => {
+            const edge = hnd.getAttribute?.("data-edge") || "";
+            const affectsHeight = edge.includes("n") || edge.includes("s");
+            if (hnd.style) hnd.style.display = (minimized && affectsHeight) ? "none" : "";
+        });
+        const btn = doc?.getElementById?.("floating-shortcuts-legend-minimize");
+        if (btn) {
+            btn.setAttribute("aria-pressed", String(minimized));
+            btn.setAttribute("title", minimized ? "Expand" : "Minimize");
+            btn.setAttribute("aria-label", minimized ? "Expand keyboard shortcuts legend" : "Minimize keyboard shortcuts legend");
+            btn.textContent = minimized ? "+" : "–";
+        }
+        return true;
+    }
+
+    /**
+     * Custom multi-edge/corner resize for the shortcuts legend, replacing the native
+     * CSS `resize: both` (which only offers a single bottom-right grip and refuses to
+     * shrink below the element's implicit min-content floor). Deliberately does not
+     * clamp position to the viewport, matching the same "let the user drag it wherever,
+     * including partially off-screen" philosophy as bindLiberatedPaletteDrag.
+     */
+    static bindFloatingShortcutsLegendResize(palette, options = {}) {
+        if (!palette || palette.dataset?.legendResizeDragBound === "1") return false;
+        const MIN_WIDTH = Number(options.minWidth) || 140;
+        const MIN_HEIGHT = Number(options.minHeight) || 50;
+        const handles = palette.querySelectorAll?.(".legend-resize-handle") || [];
+        handles.forEach(handle => {
+            const edge = String(handle.getAttribute?.("data-edge") || "");
+            let start = null;
+
+            const onMove = event => {
+                if (!start || !palette.style) return;
+                const point = event?.touches?.[0] || event;
+                const dx = Number(point.clientX) - start.x;
+                const dy = Number(point.clientY) - start.y;
+                let width = start.width;
+                let height = start.height;
+                if (edge.includes("e")) width = start.width + dx;
+                if (edge.includes("w")) width = start.width - dx;
+                if (edge.includes("s")) height = start.height + dy;
+                if (edge.includes("n")) height = start.height - dy;
+                width = Math.max(MIN_WIDTH, width);
+                height = Math.max(MIN_HEIGHT, height);
+                // Re-derive left/top from the clamped width/height so the OPPOSITE edge
+                // stays put once the min-size floor kicks in, instead of jumping.
+                const left = edge.includes("w") ? (start.left + start.width - width) : start.left;
+                const top = edge.includes("n") ? (start.top + start.height - height) : start.top;
+                if (edge.includes("w") || edge.includes("n")) {
+                    palette.style.left = `${left}px`;
+                    palette.style.top = `${top}px`;
+                    palette.style.right = "auto";
+                    palette.style.bottom = "auto";
+                }
+                if (edge.includes("e") || edge.includes("w")) palette.style.width = `${width}px`;
+                if (edge.includes("n") || edge.includes("s")) palette.style.height = `${height}px`;
+            };
+
+            const onUp = event => {
+                start = null;
+                if (typeof window !== "undefined") {
+                    window.removeEventListener("pointermove", onMove, true);
+                    window.removeEventListener("pointerup", onUp, true);
+                    window.removeEventListener("pointercancel", onUp, true);
+                    window.removeEventListener("mousemove", onMove, true);
+                    window.removeEventListener("mouseup", onUp, true);
+                }
+                if (typeof handle.releasePointerCapture === "function" && event?.pointerId != null) {
+                    try { handle.releasePointerCapture(event.pointerId); } catch (_error) { /* ignore */ }
+                }
+            };
+
+            const onDown = event => {
+                if (event.button != null && event.button !== 0) return;
+                const rect = palette.getBoundingClientRect?.();
+                if (!rect) return;
+                const point = event?.touches?.[0] || event;
+                start = {
+                    x: Number(point.clientX), y: Number(point.clientY),
+                    left: rect.left, top: rect.top, width: rect.width, height: rect.height
+                };
+                if (typeof window !== "undefined") {
+                    window.addEventListener("pointermove", onMove, true);
+                    window.addEventListener("pointerup", onUp, true);
+                    window.addEventListener("pointercancel", onUp, true);
+                    window.addEventListener("mousemove", onMove, true);
+                    window.addEventListener("mouseup", onUp, true);
+                }
+                if (typeof handle.setPointerCapture === "function" && event.pointerId != null) {
+                    try { handle.setPointerCapture(event.pointerId); } catch (_error) { /* ignore */ }
+                }
+                event.preventDefault?.();
+                event.stopPropagation?.();
+            };
+
+            handle.addEventListener("pointerdown", onDown);
+            handle.addEventListener("mousedown", onDown);
+        });
+        if (palette.dataset) palette.dataset.legendResizeDragBound = "1";
+        return true;
+    }
+
     static openFloatingShortcutsLegend(root = null) {
         const doc = AnnotationAdapter._documentFromRoot(root)
             || (typeof document !== "undefined" ? document : null);
         const palette = doc?.getElementById?.("floating-shortcuts-legend");
         if (!doc || !palette) return false;
         AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
-        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "340px", minHeight: "420px" });
+        // Deliberately low CSS min-width/min-height (not the usual larger per-palette
+        // default) plus resize: "none" — this window ships its own custom multi-edge
+        // resize handles below, which can shrink it much further than the native
+        // corner-only grip would ever have allowed.
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, {
+            minWidth: "160px",
+            minHeight: "56px",
+            resize: "none"
+        });
         if (palette.style) palette.style.flexDirection = "column";
         const cascaded = AnnotationAdapter.getAntiOverlapPosition(100, 100, 340, 420, "floating-shortcuts-legend", doc);
         if (palette.style) {
@@ -6161,6 +6420,9 @@ class AnnotationAdapter {
         AnnotationAdapter.activeImageJTool = name === "move" ? "pan" : name;
         AnnotationAdapter.syncQuPathToolChrome(name);
         AnnotationAdapter.cancelQuPathDrawSession({ keepTool: true });
+        // Switching to the Move tool is the deliberate "step away from editing" gesture,
+        // so it also clears any lingering annotation selection (single or multi-select).
+        if (name === "move") AnnotationAdapter.deselectNativeAnnotationShape();
         if (name === "wand") {
             try { AnnotationAdapter.hideAnnotationEditorPopup(null, { commit: false }); } catch (_error) { /* ignore */ }
             AnnotationAdapter.openFloatingWandPalette();
@@ -6245,12 +6507,16 @@ class AnnotationAdapter {
             if (hit) {
                 event.preventDefault();
                 event.stopPropagation();
-                AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"));
+                AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"), {
+                    additive: Boolean(event.shiftKey)
+                });
                 return;
             }
             // Clicking away (in the viewer, but not on a shape) reverts the selection highlight,
             // as long as this was a genuine click and not the mouseup end of a pan/drag.
-            if (AnnotationAdapter.selectedNativeAnnotationId
+            const hasSelection = Boolean(AnnotationAdapter.selectedNativeAnnotationId)
+                || Boolean(AnnotationAdapter.selectedNativeAnnotationIds?.size);
+            if (hasSelection
                 && AnnotationAdapter.quPathEventOnViewer(event)
                 && !AnnotationAdapter.wasQuPathClickADrag(event)) {
                 AnnotationAdapter.deselectNativeAnnotationShape();
@@ -6319,21 +6585,207 @@ class AnnotationAdapter {
         nodes.forEach?.(node => node.classList?.remove?.("is-annotation-selected"));
     }
 
-    static selectNativeAnnotationShape(id) {
+    /**
+     * Plain click (options.additive falsy) replaces the whole selection with just `id`.
+     * Shift-click (options.additive true) adds `id` to the existing selection, or — if it
+     * is already selected — removes just that one shape, leaving the rest selected (the
+     * standard multi-select toggle convention).
+     */
+    static selectNativeAnnotationShape(id, options = {}) {
         if (!id) return false;
-        AnnotationAdapter.clearNativeAnnotationHighlights();
-        AnnotationAdapter.selectedNativeAnnotationId = id;
+        if (!(AnnotationAdapter.selectedNativeAnnotationIds instanceof Set)) {
+            AnnotationAdapter.selectedNativeAnnotationIds = new Set();
+        }
         const doc = typeof document !== "undefined" ? document : null;
-        const node = doc?.querySelector?.(`[data-annotation-id="${id}"]`);
-        node?.classList?.add?.("is-annotation-selected");
+        const set = AnnotationAdapter.selectedNativeAnnotationIds;
+        const additive = Boolean(options.additive);
+
+        if (additive && set.has(id)) {
+            set.delete(id);
+            doc?.querySelector?.(`[data-annotation-id="${id}"]`)?.classList?.remove?.("is-annotation-selected");
+            const remaining = set.size ? set.values().next().value : null;
+            AnnotationAdapter.selectedNativeAnnotationId = remaining;
+            AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
+            return true;
+        }
+
+        if (!additive) {
+            AnnotationAdapter.clearNativeAnnotationHighlights();
+            set.clear();
+        }
+        set.add(id);
+        AnnotationAdapter.selectedNativeAnnotationId = id;
+        doc?.querySelector?.(`[data-annotation-id="${id}"]`)?.classList?.add?.("is-annotation-selected");
+        AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
         return true;
     }
 
-    /** Reverts the selection highlight and clears selectedNativeAnnotationId. */
+    /** Reverts every selection highlight (single or multi) and clears both
+     *  selectedNativeAnnotationId and selectedNativeAnnotationIds. */
     static deselectNativeAnnotationShape() {
-        if (!AnnotationAdapter.selectedNativeAnnotationId) return false;
+        const hasSelection = Boolean(AnnotationAdapter.selectedNativeAnnotationId)
+            || Boolean(AnnotationAdapter.selectedNativeAnnotationIds?.size);
+        if (!hasSelection) return false;
         AnnotationAdapter.clearNativeAnnotationHighlights();
         AnnotationAdapter.selectedNativeAnnotationId = null;
+        AnnotationAdapter.selectedNativeAnnotationIds?.clear?.();
+        AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
+        return true;
+    }
+
+    /** Lazily hydrates lockedAnnotationIds from localStorage exactly once. */
+    static ensureLockedAnnotationIdsLoaded() {
+        if (AnnotationAdapter._lockedAnnotationsLoaded) return AnnotationAdapter.lockedAnnotationIds;
+        AnnotationAdapter._lockedAnnotationsLoaded = true;
+        try {
+            const raw = typeof localStorage !== "undefined"
+                ? localStorage.getItem(AnnotationAdapter.LOCKED_ANNOTATIONS_STORAGE_KEY)
+                : null;
+            const list = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(list)) list.forEach(id => AnnotationAdapter.lockedAnnotationIds.add(id));
+        } catch (_error) { /* ignore corrupt/unavailable storage */ }
+        return AnnotationAdapter.lockedAnnotationIds;
+    }
+
+    static persistLockedAnnotationIds() {
+        try {
+            if (typeof localStorage !== "undefined") {
+                localStorage.setItem(
+                    AnnotationAdapter.LOCKED_ANNOTATIONS_STORAGE_KEY,
+                    JSON.stringify(Array.from(AnnotationAdapter.lockedAnnotationIds))
+                );
+            }
+        } catch (_error) { /* ignore quota/availability errors */ }
+    }
+
+    static isAnnotationLocked(id) {
+        if (!id) return false;
+        AnnotationAdapter.ensureLockedAnnotationIdsLoaded();
+        return AnnotationAdapter.lockedAnnotationIds.has(id);
+    }
+
+    /** Locks/unlocks position-drag for exactly one annotation id, without touching any
+     *  other annotation's lock state. Mirrors the change onto that shape's DOM node
+     *  (visual "is-annotation-locked" class) and persists it to localStorage. */
+    static setAnnotationLocked(id, locked) {
+        if (!id) return false;
+        AnnotationAdapter.ensureLockedAnnotationIdsLoaded();
+        if (locked) AnnotationAdapter.lockedAnnotationIds.add(id);
+        else AnnotationAdapter.lockedAnnotationIds.delete(id);
+        AnnotationAdapter.persistLockedAnnotationIds();
+        const doc = typeof document !== "undefined" ? document : null;
+        doc?.querySelector?.(`[data-annotation-id="${id}"]`)
+            ?.classList?.toggle?.("is-annotation-locked", Boolean(locked));
+        return true;
+    }
+
+    static toggleAnnotationLocked(id) {
+        if (!id) return false;
+        AnnotationAdapter.setAnnotationLocked(id, !AnnotationAdapter.isAnnotationLocked(id));
+        return true;
+    }
+
+    /** Positions and reveals the right-click "Lock/Unlock Position" menu for one or more
+     *  annotation ids (a plain right-click targets just that one shape; right-clicking a
+     *  shape that is part of the current multi-selection targets the whole group instead —
+     *  see the contextmenu listener in attachAnnotationShapeOverlay). The button label
+     *  reflects whether every targeted id is already locked ("all locked" → offers to
+     *  unlock all; anything else → offers to lock all, including the already-locked ones,
+     *  which is a harmless no-op for those). */
+    static openAnnotationContextMenu(ids, clientX, clientY, root = null) {
+        const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+        if (!list.length) return false;
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("annotation-context-menu");
+        if (!menu) return false;
+        if (menu.dataset) menu.dataset.targetAnnotationIds = JSON.stringify(list);
+        const toggleBtn = doc.getElementById("annotation-context-menu-lock-toggle");
+        if (toggleBtn) {
+            const allLocked = list.every(id => AnnotationAdapter.isAnnotationLocked(id));
+            const suffix = list.length > 1 ? ` (${list.length} Selected)` : "";
+            toggleBtn.textContent = (allLocked ? "🔓 Unlock Position" : "🔒 Lock Position") + suffix;
+        }
+        if (menu.style) {
+            menu.style.display = "block";
+            const vw = doc.documentElement?.clientWidth
+                || (typeof window !== "undefined" ? window.innerWidth : 0) || 0;
+            const vh = doc.documentElement?.clientHeight
+                || (typeof window !== "undefined" ? window.innerHeight : 0) || 0;
+            const width = menu.offsetWidth || 190;
+            const height = menu.offsetHeight || 40;
+            const left = Math.max(0, Math.min(Number(clientX) || 0, vw - width - 4));
+            const top = Math.max(0, Math.min(Number(clientY) || 0, vh - height - 4));
+            menu.style.left = `${left}px`;
+            menu.style.top = `${top}px`;
+        }
+        return true;
+    }
+
+    static closeAnnotationContextMenu(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("annotation-context-menu");
+        if (!menu) return false;
+        if (menu.style) menu.style.display = "none";
+        if (menu.dataset) delete menu.dataset.targetAnnotationIds;
+        return true;
+    }
+
+    static bindAnnotationContextMenu(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("annotation-context-menu");
+        if (!menu || menu.dataset?.contextMenuBound === "1") return false;
+        const toggleBtn = doc.getElementById("annotation-context-menu-lock-toggle");
+        if (toggleBtn) {
+            toggleBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                let ids = [];
+                try { ids = JSON.parse(menu.dataset?.targetAnnotationIds || "[]"); } catch (_error) { ids = []; }
+                if (Array.isArray(ids) && ids.length) {
+                    const allLocked = ids.every(id => AnnotationAdapter.isAnnotationLocked(id));
+                    const nextLocked = !allLocked;
+                    ids.forEach(id => AnnotationAdapter.setAnnotationLocked(id, nextLocked));
+                }
+                AnnotationAdapter.closeAnnotationContextMenu(doc);
+            });
+        }
+        doc.addEventListener("click", event => {
+            if (!menu.style || menu.style.display === "none") return;
+            if (event.target?.closest?.("#annotation-context-menu")) return;
+            AnnotationAdapter.closeAnnotationContextMenu(doc);
+        }, true);
+        doc.addEventListener("contextmenu", event => {
+            if (!menu.style || menu.style.display === "none") return;
+            if (event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay, #annotation-context-menu")) return;
+            AnnotationAdapter.closeAnnotationContextMenu(doc);
+        }, true);
+        doc.addEventListener("keydown", event => {
+            if (event.key === "Escape") AnnotationAdapter.closeAnnotationContextMenu(doc);
+        });
+        if (menu.dataset) menu.dataset.contextMenuBound = "1";
+        return true;
+    }
+
+    /** The click-to-select flow above only toggles a highlight class + the static
+     *  selectedNativeAnnotationId — it deliberately does NOT call the annotation
+     *  engine's own notifySelectionChanged() (that also pops open the name editor,
+     *  which would reintroduce the "popup on single click" regression fixed earlier).
+     *  So the "Export Annotation" toolbar button's disabled state, which index.html
+     *  only recomputes via that same notifySelectionChanged() callback, never learns
+     *  about clicks made through this path. This mirrors just that one piece of state
+     *  directly onto the real button, which — via the export/overview MutationObserver
+     *  proxy wiring — also keeps every duplicate button (primary/sandbox/secondary) in sync. */
+    static refreshExportSelectedAnnotationButtonState() {
+        const doc = typeof document !== "undefined" ? document : null;
+        const button = doc?.getElementById?.("export-selected-annotation");
+        if (!button) return false;
+        const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        const selectedCount = engine?.getSelectedAnnotations?.()?.length ?? 0;
+        const visible = engine ? Boolean(engine.annotationsVisible) : Boolean(AnnotationAdapter.vectorOutlinesVisible);
+        button.disabled = !(visible && selectedCount === 1);
         return true;
     }
 
@@ -6360,7 +6812,15 @@ class AnnotationAdapter {
         }
         const hit = event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay");
         if (hit) {
-            AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"));
+            // Skip the shift-held case here: the document "click" handler right below is the
+            // single place that runs the additive add/remove toggle, so it doesn't get invoked
+            // twice per shift-click (mousedown + click on the same shape), which would otherwise
+            // add-then-immediately-remove it. A plain (non-shift) select is idempotent, so it is
+            // safe/harmless to also pre-select here on mousedown (keeps a fast click+drag feeling
+            // instantly responsive).
+            if (!event.shiftKey) {
+                AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"));
+            }
             return true;
         }
         if (tool === "move" || tool === "selection" || tool === "browser" || tool === "contrast") {
@@ -6468,8 +6928,17 @@ class AnnotationAdapter {
             return true;
         }
         const tool = AnnotationAdapter.currentActiveTool || "move";
-        if (tool !== "polygon" && tool !== "polyline") return false;
-        return AnnotationAdapter.handleQuPathClickPathInput(event, { finish: true });
+        if (tool === "polygon" || tool === "polyline") {
+            return AnnotationAdapter.handleQuPathClickPathInput(event, { finish: true });
+        }
+        // Double-click on empty canvas space (no shape hit, not mid polygon/polyline trace)
+        // is the other deliberate "deselect everything" gesture.
+        const hasSelection = Boolean(AnnotationAdapter.selectedNativeAnnotationId)
+            || Boolean(AnnotationAdapter.selectedNativeAnnotationIds?.size);
+        if (hasSelection && AnnotationAdapter.quPathEventOnViewer(event)) {
+            AnnotationAdapter.deselectNativeAnnotationShape();
+        }
+        return false;
     }
 
     static appendPolygonTraceVertex(point, tool) {
@@ -6804,7 +7273,8 @@ class AnnotationAdapter {
                 adapter.annotationCreated(AnnotationAdapter.unifiedRecordToW3c(entry));
             }
         } catch (_error) { /* overlay already stored */ }
-        AnnotationAdapter.selectedNativeAnnotationId = id;
+        // A freshly committed shape becomes the sole selection (clears any prior multi-select).
+        AnnotationAdapter.selectNativeAnnotationShape(id);
         const fromToolbar = Boolean(event?.target?.closest?.(
             "#secondary-annotation-toolbar, header, #qp-tool-wand, #wand-config-dropdown, #floating-wand-palette, button.qp-tool, button.toolbar-btn"
         ));
@@ -6874,6 +7344,7 @@ class AnnotationAdapter {
         if (node.classList && typeof node.classList.add === "function") {
             node.classList.add("annotation-shape-overlay");
             node.classList.add("osd-annotation-shape");
+            if (AnnotationAdapter.isAnnotationLocked(id)) node.classList.add("is-annotation-locked");
         }
         if (node.style) {
             node.style.pointerEvents = "auto";
@@ -6884,6 +7355,20 @@ class AnnotationAdapter {
                 event.preventDefault();
                 event.stopPropagation();
                 AnnotationAdapter.selectNativeAnnotationShape(id);
+            });
+            // Right-click (or Ctrl-click/two-finger-tap, which browsers already translate
+            // into this same native "contextmenu" DOM event on one-button trackpads — no
+            // extra wiring needed for that) targets the whole current multi-selection when
+            // this shape is already part of a shift-clicked group of 2+; otherwise it falls
+            // back to targeting (and selecting) just this one shape, as before.
+            node.addEventListener("contextmenu", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                const selectedIds = AnnotationAdapter.selectedNativeAnnotationIds;
+                const isPartOfGroup = selectedIds instanceof Set && selectedIds.size > 1 && selectedIds.has(id);
+                const targetIds = isPartOfGroup ? Array.from(selectedIds) : [id];
+                if (!isPartOfGroup) AnnotationAdapter.selectNativeAnnotationShape(id);
+                AnnotationAdapter.openAnnotationContextMenu(targetIds, event.clientX, event.clientY);
             });
         }
         const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
@@ -6912,6 +7397,7 @@ class AnnotationAdapter {
                 // shape hits first), so dragging a shape is safe to allow in both "move" and the
                 // dedicated "selection" tool — not "selection" only.
                 if (window.currentActiveTool !== "selection" && window.currentActiveTool !== "move") return;
+                if (AnnotationAdapter.isAnnotationLocked(shapeObject?.id)) return;
                 let delta = viewer.viewport.deltaPointsFromPixels(event.delta);
                 AnnotationAdapter.updateShapeGeometryPosition(shapeObject, delta, event.delta);
             }
@@ -7035,7 +7521,9 @@ class AnnotationAdapter {
             ? AnnotationAdapter.savedAnnotationsArray
             : [];
         const entry = list.find(item => item && item.id === id) || { id, type: "rectangle", name: null };
-        AnnotationAdapter.selectedNativeAnnotationId = id;
+        // Opening the name editor for a shape makes it the sole selection too (clears any
+        // prior multi-select) — editing one annotation's name at a time is unambiguous.
+        AnnotationAdapter.selectNativeAnnotationShape(id);
         const annotation = AnnotationAdapter.quPathEntryToAnnotationStub(entry);
         const editor = AnnotationAdapter.annotationEngine?.nameEditor
             || AnnotationAdapter.annotationSpike?.nameEditor;
@@ -12286,13 +12774,13 @@ class NativeOsdAnnotationEngine {
     }
 
     getSelectedAnnotations() {
-        const id = AnnotationAdapter.selectedNativeAnnotationId;
+        const ids = (AnnotationAdapter.selectedNativeAnnotationIds instanceof Set
+            && AnnotationAdapter.selectedNativeAnnotationIds.size)
+            ? Array.from(AnnotationAdapter.selectedNativeAnnotationIds)
+            : (AnnotationAdapter.selectedNativeAnnotationId ? [AnnotationAdapter.selectedNativeAnnotationId] : []);
+        if (!ids.length) return [];
         const live = this.annotator?.getAnnotations?.() || [];
-        if (id) {
-            const found = live.find(item => item?.id === id);
-            return found ? [found] : [];
-        }
-        return [];
+        return ids.map(id => live.find(item => item?.id === id)).filter(Boolean);
     }
 
     notifySelectionChanged() {

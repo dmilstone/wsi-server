@@ -311,7 +311,11 @@ assert.match(adapterSource, /measurement-popup-close/);
 assert.match(adapterSource, /document\.body\.appendChild\(palette\)/);
 assert.match(adapterSource, /position = "fixed"/);
 assert.match(adapterSource, /zIndex \|\| "9999"/);
-assert.match(adapterSource, /setProperty\("resize", "both"/);
+// applyLiberatedFloatingStyle defaults to the native "both" resize grip, but callers
+// that bring their own custom multi-edge resize handles (e.g. the keyboard shortcuts
+// legend) can opt out via options.resize: "none".
+assert.match(adapterSource, /const resizeMode = options\.resize \|\| "both"/);
+assert.match(adapterSource, /setProperty\("resize", resizeMode/);
 assert.match(adapterSource, /viewer\.world\.getItemAt/);
 assert.match(adapterSource, /item\.setOpacity/);
 assert.match(adapterSource, /CHANNEL_LEVEL_MAX = 58831/);
