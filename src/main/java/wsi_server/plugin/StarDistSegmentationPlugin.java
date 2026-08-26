@@ -71,9 +71,17 @@ public class StarDistSegmentationPlugin implements WsiPlugin {
         );
         List<NucleusPolygon> nuclei = StarDistTensorEngine.infer(
                 grid, brightfield, weights, request.starDistParams());
+        // NATIVE_MODEL_IMPLEMENTED is currently always false (see StarDistTensorEngine):
+        // the trained-model path is an unimplemented stub, so every call runs the
+        // 32-ray heuristic below regardless of `weightsName`/`weights`. Report that
+        // truthfully to API callers instead of implying `weightsName` actually ran --
+        // see PluginResult.segmentationEngine() and docs/adr/0001-*.md.
+        String segmentationEngine = StarDistTensorEngine.NATIVE_MODEL_IMPLEMENTED
+                ? weightsName
+                : StarDistTensorEngine.FALLBACK_ENGINE_LABEL;
         return new PluginResult(
                 ID,
-                TITLE + " (" + weightsName + ")",
+                TITLE + " (" + segmentationEngine + ")",
                 grid.imageX(),
                 grid.imageY(),
                 grid.imageWidth(),
@@ -84,7 +92,8 @@ public class StarDistSegmentationPlugin implements WsiPlugin {
                 0,
                 List.of(),
                 List.of(),
-                nuclei
+                nuclei,
+                segmentationEngine
         );
     }
 

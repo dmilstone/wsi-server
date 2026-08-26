@@ -12107,6 +12107,26 @@ class AnnotationAdapter {
         return selected.length ? selected : names;
     }
 
+    /**
+     * Resolves the "Segmentation Channel" AI Labs dropdown (`#ai-seg-channel`) to the
+     * channel list sent to the backend StarDist plugin. "default" preserves the prior
+     * behavior of segmenting on whatever channels are currently visible in the
+     * Brightness & Contrast panel; a specific "1"/"2"/"3" choice restricts detection to
+     * that single channel by name so it survives BioFormatsTileService's channel
+     * resolution unambiguously (a bare numeric token there is read as a raw 0-based
+     * channel index, not this 1-based dropdown's index, so we must send the channel
+     * *name* instead of the raw dropdown value).
+     */
+    static resolveSegmentationChannels(channelValue) {
+        const raw = channelValue == null ? "default" : String(channelValue).trim().toLowerCase();
+        const byDropdownValue = { "1": 0, "2": 1, "3": 2 };
+        if (Object.prototype.hasOwnProperty.call(byDropdownValue, raw)) {
+            const name = AnnotationAdapter.FLUORESCENT_CHANNEL_NAMES[byDropdownValue[raw]];
+            if (name) return [name];
+        }
+        return AnnotationAdapter.visiblePluginChannels();
+    }
+
     static nucleiFootprintsForPlugin(circles) {
         const list = Array.isArray(circles) ? circles : AnnotationAdapter.lastNucleiCircles || [];
         const footprints = [];
@@ -12551,7 +12571,7 @@ class AnnotationAdapter {
             height: Math.max(1, Math.floor(Number(bounds?.height) || 1)),
             channels: AnnotationAdapter.isRgbSeriesView(AnnotationAdapter.imageMetadata, AnnotationAdapter.currentSeries)
                 ? ["R", "G", "B"]
-                : AnnotationAdapter.visiblePluginChannels(),
+                : AnnotationAdapter.resolveSegmentationChannels(config.channel),
             pluginId: "stardist-segmentation",
             series: Number(AnnotationAdapter.currentSeries) || 0,
             z: Number(AnnotationAdapter.currentZ) || 0,

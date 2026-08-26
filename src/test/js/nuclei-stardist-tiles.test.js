@@ -309,6 +309,50 @@ assert.match(html, /Force H&amp;E \/ brightfield model/);
     assert.equal(capturedBody.boundaryTightness, AnnotationAdapter.AI_DEFAULT_BOUNDARY_TIGHTNESS);
     assert.equal(capturedBody.modelOverride, AnnotationAdapter.AI_DEFAULT_MODEL_OVERRIDE);
 
+    // Regression: the "Segmentation Channel" dropdown (#ai-seg-channel) was read into
+    // config.channel but never actually reached the backend request -- the payload
+    // always sent whatever channels happened to be visible in the Brightness &
+    // Contrast panel, silently ignoring the dropdown entirely. Choosing a specific
+    // channel must now restrict detection to only that channel; "default" must keep
+    // the prior visible-channels behavior unchanged.
+    const channelRoot = {
+        getElementById: (id) => {
+            if (id === "ai-prob-threshold") return { value: "0.5" };
+            if (id === "ai-nms-threshold") return { value: "0.4" };
+            if (id === "ai-seg-channel") return { value: "1" };
+            return null;
+        }
+    };
+    await AnnotationAdapter.runStarDistSegmentation({ root: channelRoot, viewer: null });
+    // Arrays crossing the VM-context boundary aren't `instanceof` the same realm's
+    // Array, which trips up assert/strict's deepEqual; compare joined content instead.
+    assert.equal(capturedBody.channels.join(","), "DAPI",
+        "choosing Channel 1 (DAPI/Blue) must restrict segmentation to only that channel");
+
+    const greenChannelRoot = {
+        getElementById: (id) => {
+            if (id === "ai-prob-threshold") return { value: "0.5" };
+            if (id === "ai-nms-threshold") return { value: "0.4" };
+            if (id === "ai-seg-channel") return { value: "2" };
+            return null;
+        }
+    };
+    await AnnotationAdapter.runStarDistSegmentation({ root: greenChannelRoot, viewer: null });
+    assert.equal(capturedBody.channels.join(","), "FITC",
+        "choosing Channel 2 (Green) must restrict segmentation to only that channel");
+
+    const defaultChannelRoot = {
+        getElementById: (id) => {
+            if (id === "ai-prob-threshold") return { value: "0.5" };
+            if (id === "ai-nms-threshold") return { value: "0.4" };
+            if (id === "ai-seg-channel") return { value: "default" };
+            return null;
+        }
+    };
+    await AnnotationAdapter.runStarDistSegmentation({ root: defaultChannelRoot, viewer: null });
+    assert.equal(capturedBody.channels.join(","), AnnotationAdapter.visiblePluginChannels().join(","),
+        "\"Default Viewport\" must keep segmenting on whatever channels are visible in Brightness & Contrast");
+
     // Regression: there was no dedicated Heat Map button — only a dropdown + "Run"
     // combo that silently no-oped without nuclei segmented first, and no way to
     // revert the color-coding once applied. The toggle must: skip re-segmenting when

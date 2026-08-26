@@ -10,11 +10,21 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Dual-model StarDist controller. Viewport planes are packed into an NHWC
- * float tensor and passed through the ONNX / TensorFlow Java session when
- * {@code stardist_2d_versatile_fluo} or {@code stardist_2d_versatile_he}
- * weights are present. Missing native runtimes fall through to the same
- * 32-ray star-convex engine loop on that tensor.
+ * <b>This is NOT stock/upstream StarDist.</b> It is a from-scratch, custom Java
+ * approximation of a StarDist-style detector (per-pixel peak-finding + 32-ray
+ * star-convex boundary tracing), named after and loosely modeled on the real
+ * algorithm, but it is not the published StarDist neural network and does not
+ * reproduce its accuracy characteristics. See {@code docs/adr/0001-stardist-is-a-custom-fallback-heuristic.md}
+ * for the full rationale and implications for any external tooling that expects
+ * a standard StarDist model/output here.
+ * <p>
+ * Viewport planes are packed into an NHWC float tensor and {@link #runTensorEngine}
+ * is <em>intended</em> to pass that tensor through a real ONNX / TensorFlow Java
+ * session when {@code stardist_2d_versatile_fluo} or {@code stardist_2d_versatile_he}
+ * weights are present. As of now that native-model path ({@link #tryNativeSession})
+ * is an unimplemented detection stub — see {@link #NATIVE_MODEL_IMPLEMENTED} — so
+ * every call, regardless of environment or installed weights, runs the 32-ray
+ * star-convex heuristic loop below instead of a trained model's output.
  */
 public final class StarDistTensorEngine {
 
@@ -22,6 +32,63 @@ public final class StarDistTensorEngine {
     public static final String HE_WEIGHTS = "stardist_2d_versatile_he";
     public static final int RAYS = 32;
     public static final int MAX_NUCLEI = 2500;
+
+    /**
+     * {@code true} once {@link #tryNativeSession} actually executes a trained-model
+     * forward pass (an ONNX {@code OrtSession.run(...)} or TensorFlow
+     * {@code SavedModelBundle} runner call) and returns its real output instead of
+     * unconditionally returning {@code null}. Today this is always {@code false}:
+     * {@code tryNativeSession} only checks whether the ONNX Runtime / TensorFlow
+     * Java classes are on the classpath and whether a weights file/directory
+     * exists at the resolved path — it never calls the inference API itself, so
+     * installing real weights currently changes nothing about the output.
+     * {@link StarDistSegmentationPlugin} reports this to API clients via
+     * {@code PluginResult.segmentationEngine()} so any caller (including other
+     * software integrating with this server) can detect the actual engine in use
+     * without relying on documentation alone. Flip this the moment
+     * {@code tryNativeSession} genuinely runs a forward pass.
+     */
+    public static final boolean NATIVE_MODEL_IMPLEMENTED = false;
+
+    /**
+     * Machine-readable label reported to API callers (via
+     * {@code PluginResult.segmentationEngine()}) whenever {@link #NATIVE_MODEL_IMPLEMENTED}
+     * is {@code false} -- i.e. always, today.
+     */
+    public static final String FALLBACK_ENGINE_LABEL = "stardist-fallback-heuristic";
+
+    /**
+     * Minimum peak "prominence" (a candidate's own value minus the mean of its
+     * immediate local-max search ring), expressed as a fraction of the region's
+     * detection cut. A bare local-maximum test alone (the loop below) accepts any
+     * pixel that is merely the single brightest one in its 5x5 window; on smooth,
+     * low-contrast textured tissue (fibrous stroma, tissue edges, faint background
+     * noise) that produces a dense field of only-marginally-brighter "peaks" packed
+     * close together, each spawning its own tiny outline — the tangled/over-segmented
+     * mesh seen on non-nuclear textured regions. Requiring real local contrast filters
+     * those out while leaving genuine, sharply-defined nucleus centers untouched.
+     */
+    private static final float PEAK_PROMINENCE_FRACTION = 0.05f;
+
+    /**
+     * A boundary-tracing ray must drop to at most this fraction of its own peak's
+     * brightness to count as "outside" the nucleus (a half-max-style criterion).
+     * Without this, a peak sitting inside a broader, locally-elevated-background
+     * region (e.g. a diffuse non-nuclear marker channel, or higher baseline stain
+     * intensity) can satisfy the flat global cut for a very long distance, tracing
+     * the boundary of that whole broader region instead of the individual nucleus.
+     */
+    private static final float RAY_RELATIVE_DROPOFF = 0.55f;
+
+    /**
+     * Caps any single ray's length to this multiple of the peak's own median ray
+     * length. Real nuclei are reasonably star-convex/compact; when one or two rays
+     * happen to bridge into a touching neighbor or a stray bright pixel they can
+     * shoot out far past their neighbors, producing a spiky, self-intersecting
+     * outline. Clamping relative to the peak's own median keeps moderate, genuine
+     * anisotropy (elongated nuclei) intact while suppressing outlier spikes.
+     */
+    private static final double RAY_OUTLIER_MEDIAN_FACTOR = 2.2;
 
     private StarDistTensorEngine() {
     }
@@ -142,10 +209,11 @@ public final class StarDistTensorEngine {
     }
 
     /**
-     * ONNX ({@code ai.onnxruntime.OrtEnvironment}) or TensorFlow Java
-     * ({@code org.tensorflow.SavedModelBundle}) session when those APIs and
-     * the selected weights are on the process. Otherwise the packed matrix is
-     * decoded and consumed by the 32-ray engine loop.
+     * Placeholder hook for a future real ONNX ({@code ai.onnxruntime.OrtEnvironment})
+     * or TensorFlow Java ({@code org.tensorflow.SavedModelBundle}) inference call.
+     * See {@link #NATIVE_MODEL_IMPLEMENTED}: {@link #tryNativeSession} currently
+     * always returns {@code null} (see below), so this unconditionally falls through
+     * to the 32-ray heuristic loop today, regardless of {@code weights}.
      */
     static float[][][] runTensorEngine(byte[] matrix, float[][][] tensor, Path weights) {
         if (weights != null && matrix != null && matrix.length > 0) {
@@ -155,11 +223,20 @@ public final class StarDistTensorEngine {
         return tensor;
     }
 
+    /**
+     * NOT YET A REAL MODEL CALL. This only detects whether the ONNX Runtime /
+     * TensorFlow Java classes are on the classpath and whether a plausible weights
+     * file/directory exists — it deliberately stops short of actually invoking
+     * {@code OrtSession.run(...)} or a TensorFlow {@code SavedModelBundle} runner,
+     * and always returns {@code null} either way. Update {@link #NATIVE_MODEL_IMPLEMENTED}
+     * to {@code true} (and {@code PluginResult.segmentationEngine()}'s caller in
+     * {@link StarDistSegmentationPlugin}) once this actually runs a forward pass.
+     */
     private static float[][][] tryNativeSession(byte[] matrix, float[][][] tensor, Path weights) {
         try {
             Class.forName("ai.onnxruntime.OrtEnvironment");
-            // Weights are selected and the NHWC buffer is ready for OrtSession.run.
-            // Native bindings are optional; absence must not fail segmentation.
+            // Weights are selected and the NHWC buffer is ready for OrtSession.run,
+            // but that call is not yet implemented -- see the Javadoc above.
             if (Files.isRegularFile(weights) && weights.getFileName().toString().endsWith(".onnx")) {
                 return null;
             }
@@ -244,9 +321,12 @@ public final class StarDistTensorEngine {
             int rayCount,
             float boundaryTightness
     ) {
-        float cut = Math.max(0.05f, threshold * boundaryTightness);
+        // Bound the boundary-tracing cut to this specific peak's own brightness (not
+        // just the flat global cut) so a nucleus sitting inside a broader, locally
+        // brighter region still gets an outline sized to itself, not to that region.
+        float cut = Math.max(Math.max(0.05f, threshold * boundaryTightness), (float) (peak.score * RAY_RELATIVE_DROPOFF));
         float limit = Math.max(4f, peak.radius * 2.6f);
-        List<NucleusPolygon.Vertex> ring = new ArrayList<>(rayCount);
+        double[] lengths = new double[rayCount];
         for (int ray = 0; ray < rayCount; ray++) {
             double angle = (ray / (double) rayCount) * Math.PI * 2;
             double dx = Math.cos(angle);
@@ -259,6 +339,16 @@ public final class StarDistTensorEngine {
                 if (field[y * width + x] < cut) break;
                 last = r;
             }
+            lengths[ray] = last;
+        }
+        double median = median(lengths);
+        double outlierCap = Math.max(median * RAY_OUTLIER_MEDIAN_FACTOR, 2.5);
+        List<NucleusPolygon.Vertex> ring = new ArrayList<>(rayCount);
+        for (int ray = 0; ray < rayCount; ray++) {
+            double angle = (ray / (double) rayCount) * Math.PI * 2;
+            double dx = Math.cos(angle);
+            double dy = Math.sin(angle);
+            double last = Math.min(lengths[ray], outlierCap);
             ring.add(new NucleusPolygon.Vertex(
                     grid.imageXOf((int) Math.round(peak.x + dx * last)),
                     grid.imageYOf((int) Math.round(peak.y + dy * last))
@@ -267,7 +357,15 @@ public final class StarDistTensorEngine {
         return ring;
     }
 
-    private static List<Peak> findPeaks(
+    private static double median(double[] values) {
+        if (values.length == 0) return 0;
+        double[] sorted = values.clone();
+        java.util.Arrays.sort(sorted);
+        int mid = sorted.length / 2;
+        return sorted.length % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2.0 : sorted[mid];
+    }
+
+    static List<Peak> findPeaks(
             float[] field, int width, int height, float cut, Double nmsOverride, Double maxNucleusRadiusOverride
     ) {
         int radius = 2;
@@ -278,16 +376,25 @@ public final class StarDistTensorEngine {
                 float value = field[y * width + x];
                 if (value < cut) continue;
                 boolean max = true;
+                double neighborSum = 0;
+                int neighborCount = 0;
                 for (int dy = -radius; dy <= radius && max; dy++) {
                     for (int dx = -radius; dx <= radius; dx++) {
                         if (dx == 0 && dy == 0) continue;
-                        if (field[(y + dy) * width + (x + dx)] > value) {
+                        float neighbor = field[(y + dy) * width + (x + dx)];
+                        if (neighbor > value) {
                             max = false;
                             break;
                         }
+                        neighborSum += neighbor;
+                        neighborCount += 1;
                     }
                 }
-                if (max) peaks.add(new Peak(x, y, value, peakRadius));
+                if (!max) continue;
+                // Prominence gate — see PEAK_PROMINENCE_FRACTION.
+                double neighborMean = neighborCount == 0 ? 0 : neighborSum / neighborCount;
+                if (value - neighborMean < cut * PEAK_PROMINENCE_FRACTION) continue;
+                peaks.add(new Peak(x, y, value, peakRadius));
             }
         }
         peaks.sort(Comparator.comparingDouble((Peak peak) -> peak.score).reversed());
