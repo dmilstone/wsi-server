@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python3 "$(dirname "$0")/wsi_ingest_daemon.py" "$@"

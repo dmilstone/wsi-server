@@ -8,3 +8,11 @@ export WSI_INGEST_MIN_QUIET_SECONDS=120
 # staging: /Users/dm026/wsi-ingest-staging
 # production: /Users/dm026/wsi-slides
 # quiet time: 120 seconds
+
+# Optional: only used by the unattended daemon (ops/wsi-ingest-daemon), never by
+# manual ops/wsi-ingest or ops/wsi-ops-dashboard use. All have defaults; only set
+# these to override them.
+# export WSI_INGEST_DAEMON_POLL_SECONDS=30
+# export WSI_INGEST_DAEMON_INTEGRITY_RETRY_LIMIT=5
+# export WSI_INGEST_DAEMON_REFRESH_URL="http://127.0.0.1:8080"
+# export WSI_INGEST_DAEMON_LOG="/path/to/staging/.wsi-ingest-control/daemon/daemon.log.jsonl"

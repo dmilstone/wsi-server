@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-import argparse, ctypes, errno, fcntl, hashlib, json, os, platform, secrets, stat, sys, tempfile, time
+import argparse, ctypes, errno, hashlib, json, os, platform, secrets, stat, sys, tempfile, time
 from pathlib import Path
+# fcntl/msvcrt are both stdlib but each only exists on its own platform family;
+# importing the wrong one unconditionally would break the module at import time.
+if platform.system() == 'Windows':
+    import msvcrt
+else:
+    import fcntl
 
 PROD_MARKER='.wsi-environment-production'; MARKER_PREFIX='.wsi-environment-'; CONTROL='.wsi-ingest-control'; VERSION=1
 WSI_EXTS={'.vsi','.svs','.ndpi','.czi','.lif','.ome.tif','.ome.tiff','.tif','.tiff'}
@@ -86,13 +92,40 @@ def load(c,name,create=True):
     s,m,j,r,l=state_files(c,name) if create else state_paths(c,name)
     if not s.exists() or not m.exists(): raise Fail('state','sealed state not found')
     return json.load(open(s)), json.load(open(m)), (json.load(open(j)) if j.exists() else None)
+def _acquire_lock(f):
+    # Windows msvcrt.locking() cannot lock a bare directory handle the way flock() can,
+    # and that combination (raw fd, Windows) only occurs below in the narrow case where
+    # promote --dry-run runs before anything has ever been sealed in this staging root -
+    # i.e. nothing yet exists to race against. Not yet exercised on a real Windows host;
+    # verify there before relying on this behavior in production.
+    if platform.system() == 'Windows':
+        if isinstance(f, int):
+            return
+        try:
+            f.seek(0); msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            raise Fail('lock','another ingestion operation holds the lock')
+    else:
+        try: fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise Fail('lock','another ingestion operation holds the lock')
+
+def _release_lock(f):
+    if platform.system() == 'Windows':
+        if isinstance(f, int):
+            return
+        try:
+            f.seek(0); msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    else:
+        fcntl.flock(f, fcntl.LOCK_UN)
+
 def lock(c,create=True):
     if create:
         *_,lp=state_files(c,'_'); f=open(lp,'a+')
     else:
         *_,lp=state_paths(c,'_'); f=open(lp,'a+') if lp.exists() else os.open(c['staging'], os.O_RDONLY)
-    try: fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB)
-    except BlockingIOError: raise Fail('lock','another ingestion operation holds the lock')
+    _acquire_lock(f)
     return f
 
 
@@ -179,6 +212,18 @@ def atomic_rename_noreplace(src,dst):
     elif system=='Darwin':
         libc=ctypes.CDLL('libc.dylib', use_errno=True); RENAME_EXCL=0x00000004
         rc=libc.renamex_np(ctypes.c_char_p(os.fsencode(src)), ctypes.c_char_p(os.fsencode(dst)), ctypes.c_uint(RENAME_EXCL))
+    elif system=='Windows':
+        # MoveFileExW without MOVEFILE_REPLACE_EXISTING already refuses to overwrite an
+        # existing destination and is atomic for a rename within the same volume - the
+        # direct Windows equivalent of RENAME_NOREPLACE/RENAME_EXCL above. Not yet
+        # exercised on a real Windows host; verify there before relying on it in production.
+        kernel32=ctypes.WinDLL('kernel32', use_last_error=True)
+        ok=kernel32.MoveFileExW(ctypes.c_wchar_p(str(src)), ctypes.c_wchar_p(str(dst)), ctypes.c_uint(0))
+        if not ok:
+            err=ctypes.get_last_error()
+            if err in (183, 80): raise Fail('collision','destination already exists')#ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS
+            raise Fail('filesystem', ctypes.FormatError(err))
+        return
     else:
         raise Fail('platform','atomic no-replace directory rename unavailable')
     if rc!=0:
@@ -188,7 +233,7 @@ def atomic_rename_noreplace(src,dst):
 
 def close_lock(lf):
     try:
-        fcntl.flock(lf, fcntl.LOCK_UN)
+        _release_lock(lf)
     finally:
         if hasattr(lf,'close'): lf.close()
         else: os.close(lf)

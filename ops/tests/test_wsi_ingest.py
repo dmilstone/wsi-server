@@ -128,4 +128,43 @@ class IngestTests(unittest.TestCase):
     def test_no_force_option_and_lock(self):
         p=self.invoke('promote','--force','case'); self.assertNotEqual(p.returncode,0)
 
+    # The following two tests exercise the Windows-only code paths added to
+    # atomic_rename_noreplace() and the lock helpers by mocking platform.system()
+    # and the Win32 calls, since this suite only runs on macOS/Linux. They confirm
+    # the Python-side control flow and error-code mapping are correct; they cannot
+    # confirm real Win32 behavior and must be re-verified on an actual Windows host
+    # before this path is relied on in production.
+    def test_windows_atomic_rename_success_and_collision(self):
+        calls=[]
+        fake_kernel32=mock.Mock()
+        fake_kernel32.MoveFileExW=mock.Mock(side_effect=lambda *a: calls.append(a) or 1)
+        with mock.patch('wsi_ingest.platform.system',return_value='Windows'), \
+             mock.patch('wsi_ingest.ctypes.WinDLL',return_value=fake_kernel32,create=True):
+            wi.atomic_rename_noreplace('src','dst')
+        self.assertEqual(len(calls),1)
+        fake_kernel32.MoveFileExW=mock.Mock(return_value=0)
+        with mock.patch('wsi_ingest.platform.system',return_value='Windows'), \
+             mock.patch('wsi_ingest.ctypes.WinDLL',return_value=fake_kernel32,create=True), \
+             mock.patch('wsi_ingest.ctypes.get_last_error',return_value=183,create=True):
+            with self.assertRaises(wi.Fail) as ctx: wi.atomic_rename_noreplace('src','dst')
+        self.assertEqual(ctx.exception.cat,'collision')
+
+    def test_windows_lock_helpers_use_msvcrt(self):
+        fake_msvcrt=mock.Mock(LK_NBLCK=1,LK_UNLCK=0)
+        f=io.StringIO(); f.fileno=lambda:7
+        with mock.patch('wsi_ingest.platform.system',return_value='Windows'), \
+             mock.patch.dict(sys.modules,{'msvcrt':fake_msvcrt}), \
+             mock.patch('wsi_ingest.msvcrt',fake_msvcrt,create=True):
+            wi._acquire_lock(f)
+            fake_msvcrt.locking.assert_called_with(7,1,1)
+            wi._release_lock(f)
+            fake_msvcrt.locking.assert_called_with(7,0,1)
+            fake_msvcrt.locking=mock.Mock(side_effect=OSError())
+            with self.assertRaises(wi.Fail) as ctx: wi._acquire_lock(f)
+            self.assertEqual(ctx.exception.cat,'lock')
+        # a raw directory fd (int) cannot be locked the same way on Windows; the
+        # narrow pre-first-seal dry-run case is a documented no-op there instead.
+        with mock.patch('wsi_ingest.platform.system',return_value='Windows'):
+            wi._acquire_lock(5); wi._release_lock(5)
+
 if __name__=='__main__': unittest.main()

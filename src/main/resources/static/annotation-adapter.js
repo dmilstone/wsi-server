@@ -190,7 +190,7 @@ class AnnotationAdapter {
     static EMPTY_VIEWPORT_GUIDANCE =
         "Use the dropdown menu on the left to select slides for viewing.";
     /** When true, left-column slide rows show async macro label thumbnails. */
-    static slideLabelThumbsEnabled = false;
+    static slideLabelThumbsEnabled = true;
     static slideLabelThumbObserver = null;
     /** Invalidates in-flight sidebar OCR when the case list is rebuilt. */
     static sidebarOcrBatchGeneration = 0;
@@ -528,9 +528,87 @@ class AnnotationAdapter {
             thumb.hidden = true;
             thumb.remove();
         }
+        // The rotate button lives in .slide-actions-col, a sibling of the slot
+        // removed above, not inside it -- so it must be cleaned up explicitly or
+        // it survives as an orphan and loadSlideLabelThumbs() appends a duplicate
+        // next time labels are shown again (repeated toggling stacks up N copies).
+        for (const rotate of scope.querySelectorAll(".slide-label-rotate")) {
+            rotate.remove();
+        }
         for (const button of scope.querySelectorAll(".image-button")) {
             button.classList.remove("has-slide-label-thumb");
         }
+        // A DOM node removed out from under the pointer does not reliably fire
+        // mouseleave, so drop any open hover preview explicitly here too.
+        AnnotationAdapter.hideSidebarLabelHoverPreview(
+            typeof document !== "undefined" ? document : null
+        );
+    }
+
+    /**
+     * Lazily create the single shared hover-preview panel used to show a large
+     * rendering of a sidebar slide-label thumbnail while the pointer rests on
+     * it. One instance is reused for every row rather than one per row.
+     */
+    static ensureSidebarLabelHoverPreview(doc) {
+        if (!doc) return null;
+        let panel = doc.getElementById("sidebar-label-hover-preview");
+        if (panel) return panel;
+        panel = doc.createElement("div");
+        panel.id = "sidebar-label-hover-preview";
+        panel.className = "sidebar-label-hover-preview";
+        panel.hidden = true;
+        panel.setAttribute("aria-hidden", "true");
+        const img = doc.createElement("img");
+        img.id = "sidebar-label-hover-preview-image";
+        img.alt = "Slide label preview";
+        panel.append(img);
+        (doc.body || doc.documentElement)?.append?.(panel);
+        return panel;
+    }
+
+    /**
+     * Show a large version of a sidebar label thumbnail on hover, at the
+     * slide's current saved rotation. Loads the same full-resolution route
+     * as the persistent Slide Overview window's own label image, not the
+     * small ?max=160 thumbnail already on screen, so it isn't blown up blurry.
+     */
+    static showSidebarLabelHoverPreview(doc, imageId, anchorRect) {
+        if (!doc || !imageId) return;
+        const panel = AnnotationAdapter.ensureSidebarLabelHoverPreview(doc);
+        const img = panel?.querySelector?.("img");
+        if (!panel || !img) return;
+        if (img.dataset.imageId !== String(imageId)) {
+            img.dataset.imageId = String(imageId);
+            img.src = `/api/images/${encodeURIComponent(imageId)}/label.png`;
+        }
+        const degrees = AnnotationAdapter.getSlideLabelRotation(imageId);
+        img.style.setProperty("--label-rotation", `${degrees}deg`);
+
+        panel.hidden = false;
+        const win = doc.defaultView || (typeof window !== "undefined" ? window : null);
+        const viewportWidth = Number(win?.innerWidth) || 1200;
+        const viewportHeight = Number(win?.innerHeight) || 800;
+        const panelWidth = Number(panel.offsetWidth) || 420;
+        const panelHeight = Number(panel.offsetHeight) || 420;
+        const rect = anchorRect || { left: 0, top: 0, right: 0, bottom: 0 };
+        let left = Number(rect.right) + 14;
+        let top = Number(rect.top);
+        if (left + panelWidth > viewportWidth - 10) {
+            left = Math.max(10, Number(rect.left) - panelWidth - 14);
+        }
+        if (top + panelHeight > viewportHeight - 10) {
+            top = Math.max(10, viewportHeight - panelHeight - 10);
+        }
+        if (top < 10) top = 10;
+        if (left < 10) left = 10;
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+    }
+
+    static hideSidebarLabelHoverPreview(doc) {
+        const panel = doc?.getElementById?.("sidebar-label-hover-preview");
+        if (panel) panel.hidden = true;
     }
 
     /**
@@ -585,12 +663,24 @@ class AnnotationAdapter {
                 thumb.alt = "Slide label";
                 thumb.decoding = "async";
 
+                wrap.addEventListener("mouseenter", () => {
+                    AnnotationAdapter.showSidebarLabelHoverPreview(doc, imageId, wrap.getBoundingClientRect());
+                });
+                wrap.addEventListener("mouseleave", () => {
+                    AnnotationAdapter.hideSidebarLabelHoverPreview(doc);
+                });
+
                 wrap.append(thumb);
                 slot.append(wrap);
                 const info = AnnotationAdapter.ensureSlideInfoBlock(button, doc);
                 if (info && typeof button.insertBefore === "function") button.insertBefore(slot, info);
                 else button.append(slot);
                 const actions = button.querySelector(".slide-actions-col");
+                // Defensive de-dup: this creation branch should only ever run once per
+                // row, but if a stale rotate button from a previous cycle was ever left
+                // behind (e.g. by a future code path that doesn't go through
+                // clearSlideLabelThumbs), drop it rather than stacking another one on.
+                for (const stale of button.querySelectorAll(".slide-label-rotate")) stale.remove();
                 if (actions) actions.append(rotate);
                 else slot.append(rotate);
                 AnnotationAdapter.ensureRowOcrScanButton(actions || slot, button, doc);
@@ -1033,6 +1123,7 @@ class AnnotationAdapter {
             targetNode.classList.add("ocr-result-ready");
         }
         targetNode.textContent = marker;
+        if ("title" in targetNode) targetNode.title = marker;
         AnnotationAdapter.enableOcrResultTextSelection(targetNode);
     }
 
@@ -1104,7 +1195,7 @@ class AnnotationAdapter {
         scan.className = "ocr-row-scan-btn";
         scan.title = "Force OCR Scan";
         scan.setAttribute("aria-label", "Force OCR Scan");
-        scan.textContent = "🔍 Scan";
+        scan.textContent = "🔍";
         scan.addEventListener("click", event => {
             event.preventDefault();
             event.stopPropagation();
@@ -1149,12 +1240,14 @@ class AnnotationAdapter {
                 AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
                 return marker;
             }
-            AnnotationAdapter.clearSidecarText(targetNode);
-            return "";
+            // A single-angle client-side rescan is far more failure-prone than the
+            // server-side OCR pipeline that normally populates this field (sidecar
+            // metadata). Finding nothing here does not mean the existing value is
+            // wrong -- leave it exactly as it was rather than wiping good data.
+            return targetNode.textContent || "";
         } catch (error) {
             console.error("[wsi-ocr] manual rotation-synced scan failed", cacheKey, error);
-            AnnotationAdapter.clearSidecarText(targetNode);
-            return "";
+            return targetNode.textContent || "";
         } finally {
             if (scanBtn) {
                 scanBtn.disabled = false;
@@ -3822,6 +3915,18 @@ class AnnotationAdapter {
             AnnotationAdapter.bindViewportHomeOnOpen(AnnotationAdapter.viewer);
             AnnotationAdapter.bindAiVectorOverlayHandlers(AnnotationAdapter.viewer);
             AnnotationAdapter.bindOpenSeadragonCanvasKeyIntercept(AnnotationAdapter.viewer);
+            AnnotationAdapter.bindQuPathZoomFitResize();
+            // Defensive reset: OSD's viewport flip state is a toggle that persists on this
+            // single reused viewer instance across every slide switch for the whole session.
+            // Force it off here so a stray flip (however it happened) can never silently
+            // carry forward and desync the tile image from annotation overlays, which are
+            // positioned independently and are never affected by the flip transform.
+            try {
+                if (AnnotationAdapter.viewer.viewport
+                    && typeof AnnotationAdapter.viewer.viewport.setFlip === "function") {
+                    AnnotationAdapter.viewer.viewport.setFlip(false);
+                }
+            } catch (ignored) { }
         }
         AnnotationAdapter.bindMeasurementKeyboardEscape();
         AnnotationAdapter.bindSecondaryAnnotationToolbar();
@@ -4995,8 +5100,8 @@ class AnnotationAdapter {
             // Target all active visible floating panels
             let activePanels = [];
             if (document && typeof document.querySelectorAll === "function") {
-                activePanels = Array.from(document.querySelectorAll('.floating-palette, [id^="floating-"], #floating-zstack-palette'))
-                    .filter(p => p !== panel && p.id !== currentPanelId && p.style.display !== 'none' && p.style.visibility !== 'hidden');
+                activePanels = Array.from(document.querySelectorAll('.floating-palette, [id^="floating-"], #floating-zstack-palette, #slide-overview'))
+                    .filter(p => p !== panel && p.id !== currentPanelId && p.style.display !== 'none' && p.style.visibility !== 'hidden' && !p.hidden);
             } else if (document && typeof document.getElementById === "function") {
                 const ids = [
                     "floating-channel-palette",
@@ -5004,7 +5109,8 @@ class AnnotationAdapter {
                     "floating-admin-palette",
                     "floating-zstack-palette",
                     "floating-measurement-palette",
-                    "floating-wand-palette"
+                    "floating-wand-palette",
+                    "slide-overview"
                 ];
                 activePanels = ids
                     .filter(id => id !== currentPanelId)
@@ -5072,6 +5178,37 @@ class AnnotationAdapter {
             Number(boxH) || 200,
             String(panelId || "")
         );
+    }
+
+    /**
+     * Enrolls the persistent "Slide Overview" thumbnail-navigator window into
+     * the same anti-overlap cascade as the floating palettes, so opening it
+     * never stacks it directly on top of an already-open palette (and vice
+     * versa, since getAntiOverlapPosition's occupant scan also includes
+     * #slide-overview). Uses the viewport-relative origin helper because the
+     * window is position:fixed, matching the other floating palettes.
+     */
+    static positionSlideOverviewWindow(root = null) {
+        const origin = AnnotationAdapter.viewerClientLaunchOrigin(root);
+        if (!origin) return false;
+        const doc = origin.doc;
+        const panel = doc?.getElementById?.("slide-overview");
+        if (!panel?.style) return false;
+        const width = Number(panel.offsetWidth) || parseFloat(panel.style?.width) || 440;
+        const height = Number(panel.offsetHeight) || parseFloat(panel.style?.height) || 300;
+        const cascaded = AnnotationAdapter.getAntiOverlapPosition(
+            origin.left,
+            origin.top,
+            width,
+            height,
+            "slide-overview",
+            doc
+        );
+        panel.style.left = `${cascaded.left}px`;
+        panel.style.top = `${cascaded.top}px`;
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+        return true;
     }
 
     static positionFloatingChannelPalette(root = null) {
@@ -5760,6 +5897,10 @@ class AnnotationAdapter {
                     AnnotationAdapter.launchBrightnessContrastPalette(doc);
                     return;
                 }
+                if (String(tool || "").toLowerCase() === "zoomfit") {
+                    AnnotationAdapter.toggleQuPathZoomFit(doc);
+                    return;
+                }
                 AnnotationAdapter.activateQuPathTool(tool, {
                     button: btn,
                     event
@@ -5771,6 +5912,7 @@ class AnnotationAdapter {
         AnnotationAdapter.bindQuPathToolPointers();
         AnnotationAdapter.bindWandConfigDropdown(doc);
         AnnotationAdapter.bindBrightnessContrastLaunchers(doc);
+        AnnotationAdapter.bindQuPathMagnificationControl(doc);
         AnnotationAdapter.installViewerToolAlias();
         AnnotationAdapter.bindGlobalUiTooltip(doc);
         return true;
@@ -5825,6 +5967,10 @@ class AnnotationAdapter {
                 const tool = btn.getAttribute("data-qp-tool") || btn.getAttribute("data-ij-tool");
                 if (String(tool || "").toLowerCase() === "contrast") {
                     AnnotationAdapter.launchBrightnessContrastPalette(doc);
+                    return;
+                }
+                if (String(tool || "").toLowerCase() === "zoomfit") {
+                    AnnotationAdapter.toggleQuPathZoomFit(doc);
                     return;
                 }
                 AnnotationAdapter.activateQuPathTool(tool, { button: btn, event });
@@ -6318,6 +6464,17 @@ class AnnotationAdapter {
         }
         viewer.addHandler("canvas-key", function(event) {
             let key = event.originalEvent?.key?.toLowerCase?.() || "";
+            // "f" and "r"/"R" are also OSD's own built-in shortcuts for flip/rotate — block
+            // them outright (not just redirected to a toolbar button like the others below)
+            // so a stray keypress can never silently mirror or rotate the tile image out
+            // from under annotations, which are positioned independently and never move.
+            if (key === "f") {
+                event.preventDefaultAction = true;
+                if (typeof event.originalEvent?.preventDefault === "function") {
+                    event.originalEvent.preventDefault();
+                }
+                return;
+            }
             if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "t", "_", "-", "."].includes(key)) {
                 event.preventDefaultAction = true; // Suppresses OSD's default pan/zoom behavior on these keys
                 if (typeof event.originalEvent?.preventDefault === "function") {
@@ -6472,9 +6629,12 @@ class AnnotationAdapter {
         // Covers both the always-visible primary toolbar's duplicate tool buttons and the
         // sandboxed secondary toolbar's originals so their pressed/active chrome never
         // drifts out of sync with each other, whichever one the user actually clicked.
+        // "Zoom to Fit" is an independent lock toggle (like real QuPath), not a mutually
+        // exclusive drawing tool, so it's excluded here — see bindQuPathZoomFitToggle,
+        // which owns its own aria-pressed state instead.
         const buttons = doc?.querySelectorAll?.(
-            "#secondary-annotation-toolbar .qp-tool, #secondary-annotation-toolbar .ij-tool, "
-            + "#primary-unified-toolbar .qp-tool, #primary-unified-toolbar .ij-tool"
+            "#secondary-annotation-toolbar .qp-tool:not(.qp-zoomfit-toggle), #secondary-annotation-toolbar .ij-tool, "
+            + "#primary-unified-toolbar .qp-tool:not(.qp-zoomfit-toggle), #primary-unified-toolbar .ij-tool"
         );
         if (!buttons) return false;
         for (const btn of buttons) {
@@ -6486,6 +6646,126 @@ class AnnotationAdapter {
             }
             btn.setAttribute("aria-pressed", String(mapped === tool));
         }
+        return true;
+    }
+
+    /**
+     * "Zoom to Fit" — matched from real QuPath's toolbar: an independent lock toggle
+     * (not a mutually-exclusive drawing tool) that snaps to the home view and disables
+     * manual scroll-wheel zoom while active. Both toolbar instances share one boolean
+     * via `.qp-zoomfit-toggle` rather than participating in syncQuPathToolChrome's
+     * single-active-tool bookkeeping.
+     */
+    static zoomFitActive = false;
+
+    static toggleQuPathZoomFit(doc = null) {
+        const document_ = AnnotationAdapter._documentFromRoot(doc);
+        AnnotationAdapter.zoomFitActive = !AnnotationAdapter.zoomFitActive;
+        const active = AnnotationAdapter.zoomFitActive;
+        document_?.querySelectorAll?.(".qp-zoomfit-toggle")?.forEach(btn => {
+            btn.setAttribute("aria-pressed", String(active));
+        });
+        const viewer = AnnotationAdapter.viewer;
+        if (viewer?.viewport) {
+            if (active) {
+                try { viewer.viewport.goHome(true); } catch (_error) { /* ignore */ }
+            }
+            [viewer.gestureSettingsMouse, viewer.gestureSettingsTouch, viewer.gestureSettingsPen].forEach(settings => {
+                if (settings) settings.scrollToZoom = !active;
+            });
+        }
+        return active;
+    }
+
+    /** Keeps the "Zoom to Fit" lock honest across container/window resizes. */
+    static bindQuPathZoomFitResize() {
+        const viewer = AnnotationAdapter.viewer;
+        if (!viewer || typeof viewer.addHandler !== "function" || viewer._wsiZoomFitResizeBound) return false;
+        viewer.addHandler("resize", () => {
+            if (!AnnotationAdapter.zoomFitActive) return;
+            try { viewer.viewport.goHome(true); } catch (_error) { /* ignore */ }
+        });
+        viewer._wsiZoomFitResizeBound = true;
+        return true;
+    }
+
+    /** Matches real QuPath's "10.0x"-style magnification readout format. */
+    static formatMagnificationLabel(viewer) {
+        const activeViewer = viewer || AnnotationAdapter.viewer;
+        if (!activeViewer?.viewport) return null;
+        const currentZoom = activeViewer.viewport.getZoom(true);
+        const homeZoom = activeViewer.viewport.getHomeZoom();
+        if (!(homeZoom > 0) || !Number.isFinite(currentZoom)) return null;
+        const displayZoom = currentZoom / homeZoom;
+        return `${displayZoom.toFixed(displayZoom < 10 ? 2 : 1)}x`;
+    }
+
+    /** Called on every zoom/pan/open tick (see index.html's updateViewerStatus). */
+    static refreshMagnificationLabels(viewer) {
+        const doc = typeof document !== "undefined" ? document : null;
+        if (!doc?.querySelectorAll) return;
+        const label = AnnotationAdapter.formatMagnificationLabel(viewer);
+        if (label == null) return;
+        doc.querySelectorAll(".qp-magnification:not(.is-editing)").forEach(el => {
+            el.textContent = label;
+        });
+    }
+
+    /**
+     * QuPath's "Magnification" box: double-click opens an inline numeric editor; Enter
+     * jumps the viewer to that exact magnification (relative to the fitted home zoom),
+     * Escape/blur cancels/commits respectively. See docs: double-click the "10.0x" box.
+     */
+    static bindQuPathMagnificationControl(doc = null) {
+        const document_ = AnnotationAdapter._documentFromRoot(doc);
+        if (!document_?.querySelectorAll) return false;
+        document_.querySelectorAll(".qp-magnification").forEach(el => {
+            if (el.dataset && el.dataset.magBound === "1") return;
+            el.addEventListener("dblclick", event => {
+                event.preventDefault();
+                AnnotationAdapter.beginMagnificationEdit(el);
+            });
+            if (el.dataset) el.dataset.magBound = "1";
+        });
+        return true;
+    }
+
+    static beginMagnificationEdit(button) {
+        if (!button || button.classList.contains("is-editing")) return false;
+        const viewer = AnnotationAdapter.viewer;
+        if (!viewer?.viewport) return false;
+        const doc = button.ownerDocument || document;
+        const currentText = String(button.textContent || "").replace(/x$/i, "").trim();
+        button.classList.add("is-editing");
+        button.textContent = "";
+        const input = doc.createElement("input");
+        input.type = "text";
+        input.inputMode = "decimal";
+        input.className = "qp-magnification-input";
+        input.value = currentText;
+        button.appendChild(input);
+        input.focus();
+        input.select();
+
+        let settled = false;
+        const finish = commit => {
+            if (settled) return;
+            settled = true;
+            if (commit) {
+                const parsed = parseFloat(input.value);
+                const homeZoom = viewer.viewport.getHomeZoom();
+                if (Number.isFinite(parsed) && parsed > 0 && homeZoom > 0) {
+                    try { viewer.viewport.zoomTo(parsed * homeZoom); } catch (_error) { /* ignore */ }
+                }
+            }
+            button.classList.remove("is-editing");
+            button.textContent = AnnotationAdapter.formatMagnificationLabel(viewer) || `${currentText}x`;
+        };
+        input.addEventListener("keydown", event => {
+            if (event.key === "Enter") { event.preventDefault(); finish(true); }
+            else if (event.key === "Escape") { event.preventDefault(); finish(false); }
+        });
+        input.addEventListener("blur", () => finish(true));
         return true;
     }
 

@@ -317,30 +317,6 @@
             width: 100%;
             min-width: 0;
         }
-        #show-slide-labels {
-            flex: 1 1 auto;
-            min-width: 4.5rem;
-            max-width: none;
-            min-height: 32px;
-            padding: 4px 8px;
-            border: 1px solid rgba(255,255,255,.14);
-            border-radius: 7px;
-            background: rgba(255,255,255,.04);
-            color: var(--text-secondary);
-            font-size: 11px;
-            font-weight: 700;
-            cursor: pointer;
-            display: inline-flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            white-space: normal;
-            word-break: break-word;
-            line-height: 1.1;
-            overflow: visible;
-        }
         #show-slide-labels:hover { color: var(--text); background: var(--surface-hover); }
         #show-slide-labels[aria-pressed="true"] {
             color: #dff0ff;
@@ -428,6 +404,35 @@
             pointer-events: none;
         }
         .slide-label-thumb[hidden] { display: none !important; }
+        /* Large hover-preview of a sidebar label thumbnail. Non-interactive
+           (pointer-events: none) so it never intercepts the click that would
+           otherwise land on the thumbnail/row underneath it. */
+        .sidebar-label-hover-preview {
+            position: fixed;
+            z-index: 9990;
+            display: grid;
+            place-items: center;
+            width: min(46vw, 560px);
+            height: min(70vh, 560px);
+            padding: 14px;
+            box-sizing: border-box;
+            border: 1px solid rgba(255,255,255,.22);
+            border-radius: 10px;
+            background: rgba(5,7,10,.95);
+            box-shadow: 0 14px 38px rgba(0,0,0,.55);
+            pointer-events: none;
+        }
+        .sidebar-label-hover-preview[hidden] { display: none !important; }
+        .sidebar-label-hover-preview img {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            background: #05070a;
+            transform: rotate(var(--label-rotation, 90deg));
+            transform-origin: center center;
+        }
         .sidebar-label-slot > .slide-label-rotate {
             position: absolute;
             top: 0;
@@ -565,25 +570,27 @@
         }
         .slide-second-row {
             display: flex;
-            flex-direction: row;
-            justify-content: space-between;
-            align-items: center;
+            /* Stacked, not side-by-side: the epitope text gets the row's full
+               width on its own line, and the rotate/scan icons sit on a third
+               line below it instead of competing with the text for space. */
+            flex-direction: column;
+            align-items: stretch;
             width: 100%;
-            gap: 8px;
+            gap: 3px;
         }
         .slide-epitope-col {
             text-align: left;
             font-size: 0.95rem;
             min-width: 0;
-            flex: 1 1 auto;
+            width: 100%;
         }
         .slide-actions-col {
             display: flex;
             flex-direction: row;
-            gap: 8px;
-            justify-content: flex-end;
+            gap: 6px;
+            justify-content: flex-start;
             align-items: center;
-            flex: 0 0 auto;
+            width: 100%;
         }
         .slide-actions-col > .slide-label-rotate,
         .slide-actions-col > .ocr-row-scan-btn,
@@ -599,16 +606,16 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.8rem;
-            font-weight: 700;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            font-size: 12px;
             line-height: 1;
-            padding: 4px 10px;
-            border-radius: 12px;
+            border-radius: 6px;
             border: 1px solid rgba(255,255,255,0.25);
             background: rgba(255,255,255,0.1);
             color: #dff0ff;
             cursor: pointer;
-            max-height: 24px;
             box-sizing: border-box;
             white-space: nowrap;
         }
@@ -639,7 +646,13 @@
             user-select: none !important;
             cursor: pointer !important;
             z-index: auto;
-            overflow: visible;
+            /* Truncate with an ellipsis instead of word-break wrapping: in a
+               narrow sidebar the epitope column can shrink enough that wrapped
+               text collapses into a near-vertical character stack, which then
+               overlaps and shifts the rotate/scan buttons beside it. */
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
         }
         .overview-ocr-scan {
             position: absolute;
@@ -1578,7 +1591,11 @@
         }
 
         .slide-overview {
-            position: absolute;
+            /* position: fixed (not absolute) so its on-screen box uses the same
+               viewport coordinate space as the other floating palettes -- this
+               is required for it to participate in AnnotationAdapter's shared
+               anti-overlap cascade (see positionSlideOverviewWindow()). */
+            position: fixed;
             top: 16px;
             left: 16px;
             z-index: 24;
@@ -3005,6 +3022,41 @@
             border-color: #8fb3d1;
             color: #222;
         }
+        /* QuPath's "Magnification" box (double-click to type an exact zoom level) and its
+           "Zoom to Fit" lock toggle, both matched from real QuPath toolbar artwork. */
+        #secondary-annotation-toolbar .qp-magnification {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 3.6ch;
+            margin: 0 2px;
+            padding: 0.3em 0.5em;
+            border: none;
+            border-radius: 0.35em;
+            background: transparent;
+            color: #222;
+            font: inherit;
+            font-size: 0.85em;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+            cursor: pointer;
+        }
+        #secondary-annotation-toolbar .qp-magnification:hover {
+            background: rgba(0,0,0,.08);
+        }
+        #secondary-annotation-toolbar .qp-magnification.is-editing {
+            background: #fff;
+            border: 1px solid #8fb3d1;
+            padding: 0.1em 0.3em;
+        }
+        #secondary-annotation-toolbar .qp-zoomfit-toggle {
+            border-color: #a8a8ae;
+        }
+        #secondary-annotation-toolbar .qp-zoomfit-toggle[aria-pressed="true"] {
+            background: #cfe1f2;
+            border-color: #8fb3d1;
+        }
         .wsi-qp-draw-overlay {
             position: absolute !important;
             inset: 0 !important;
@@ -3029,6 +3081,17 @@
             align-items: center;
             position: relative;
             flex: 0 0 auto;
+        }
+        .qp-magnification-input {
+            width: 4.2ch;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: inherit;
+            font: inherit;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+            padding: 0;
         }
         /* Primary Unified Toolbar (Row 1, visible by default): same high-clarity vector
            glyphs as the sandboxed secondary toolbar's .qp-tool set, but restyled for the
@@ -3060,6 +3123,43 @@
             background: rgba(77, 148, 216, .28);
             border-color: rgba(77, 148, 216, .55);
             color: #fff;
+        }
+        /* QuPath's "Magnification" box (double-click to type an exact zoom level) and its
+           "Zoom to Fit" lock toggle, restyled for the dark header chrome — see the matching
+           light-theme rules under #secondary-annotation-toolbar for the QuPath original. */
+        #primary-unified-toolbar .qp-magnification {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 3.6ch;
+            margin: 0 2px;
+            padding: 0.3em 0.5em;
+            border: none;
+            border-radius: 0.5em;
+            background: transparent;
+            color: rgba(255,255,255,.88);
+            font: inherit;
+            font-size: 0.85em;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+            cursor: pointer;
+        }
+        #primary-unified-toolbar .qp-magnification:hover {
+            background: rgba(255,255,255,.10);
+            color: #fff;
+        }
+        #primary-unified-toolbar .qp-magnification.is-editing {
+            background: rgba(255,255,255,.12);
+            border: 1px solid rgba(77,148,216,.55);
+            padding: 0.1em 0.3em;
+        }
+        #primary-unified-toolbar .qp-zoomfit-toggle {
+            border-color: rgba(255,255,255,.28);
+        }
+        #primary-unified-toolbar .qp-zoomfit-toggle[aria-pressed="true"] {
+            background: rgba(77, 148, 216, .28);
+            border-color: rgba(77, 148, 216, .55);
         }
         /* Export/overview mini-buttons carry dark-charcoal (and one bold-red) SVG strokes,
            so they need a light chip backdrop to stay legible against the dark toolbar rows
@@ -3167,6 +3267,9 @@
                         <option value="" selected>-- Select Slides --</option>
                         <option value="__all_slides__">All Slides</option>
                     </select>
+                    <button id="show-slide-labels" class="toolbar-button sidebar-browser-toggle" type="button" aria-pressed="true"
+                            title="Hide Label: hide slide label thumbnails in the slide list, including the rotate and force-scan controls"
+                            aria-label="Hide slide label thumbnails">🏷️</button>
                 </div>
             </div>
         </div>
@@ -3193,8 +3296,16 @@
                     data-tooltip="(S) Selection Tool: Click a shape to select it, double-click to name it." aria-label="Selection" aria-pressed="false">🎯</button>
             <button type="button" class="qp-tool" id="primary-qp-tool-contrast" data-qp-tool="contrast"
                     data-tooltip="(C) Brightness &amp; Contrast Tool: Adjust display levels for the current image." aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
+                <button type="button" class="qp-magnification" id="primary-qp-magnification"
+                        data-tooltip="Magnification: Double-click to type an exact zoom level and jump to it." aria-label="Current magnification">1.00x</button>
+                <button type="button" class="qp-tool qp-zoomfit-toggle" id="primary-qp-tool-zoomfit" data-qp-tool="zoomfit"
+                        data-tooltip="Zoom to Fit: Return to the original default first-load view of the slide. Scroll-wheel zoom is disabled while this is active." aria-label="Zoom to fit" aria-pressed="false">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="3.5"/><path d="M9.2 9.2 13.5 13.5"/><circle cx="6.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg>
+                </button>
                 <button type="button" class="qp-tool" id="primary-qp-tool-zoom" data-qp-tool="zoom"
-                        data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">🔍</button>
+                        data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">
+                    <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="3.5"/><path d="M9.2 9.2 13.5 13.5"/></svg>
+                </button>
                 <button id="primary-export-visible-btn" class="toolbar-btn" type="button" disabled
                         data-tooltip="Download full-resolution image of the region being viewed."
                         aria-label="Export visible region">
@@ -3334,8 +3445,16 @@
                     data-tooltip="(S) Selection Tool: Click a shape to select it, double-click to name it." aria-label="Selection" aria-pressed="false">🎯</button>
             <button type="button" class="qp-tool" id="qp-tool-contrast" data-qp-tool="contrast"
                     data-tooltip="(C) Brightness &amp; Contrast Tool: Adjust display levels for the current image." aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
+            <button type="button" class="qp-magnification" id="qp-magnification"
+                    data-tooltip="Magnification: Double-click to type an exact zoom level and jump to it." aria-label="Current magnification">1.00x</button>
+            <button type="button" class="qp-tool qp-zoomfit-toggle" id="qp-tool-zoomfit" data-qp-tool="zoomfit"
+                    data-tooltip="Zoom to Fit: Return to the original default first-load view of the slide. Scroll-wheel zoom is disabled while this is active." aria-label="Zoom to fit" aria-pressed="false">
+                <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="3.5"/><path d="M9.2 9.2 13.5 13.5"/><circle cx="6.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg>
+            </button>
             <button type="button" class="qp-tool" id="qp-tool-zoom" data-qp-tool="zoom"
-                    data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">🔍</button>
+                    data-tooltip="(Z) Zoom Tool: Click a region to zoom in. Shift-click a region to zoom out." aria-label="Zoom" aria-pressed="false">
+                <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="3.5"/><path d="M9.2 9.2 13.5 13.5"/></svg>
+            </button>
             <button id="secondary-export-visible-btn" class="toolbar-btn" type="button" disabled
                     data-tooltip="Download full-resolution image of the region being viewed."
                     aria-label="Export visible region">
@@ -4187,7 +4306,10 @@
         const next = !AnnotationAdapter.slideLabelThumbsEnabled;
         AnnotationAdapter.setSlideLabelThumbsEnabled(next, imageListElement);
         showSlideLabelsButton.setAttribute("aria-pressed", String(next));
-        showSlideLabelsButton.textContent = next ? "Hide Label" : "Show Label";
+        showSlideLabelsButton.title = next
+            ? "Hide Label: hide slide label thumbnails in the slide list, including the rotate and force-scan controls"
+            : "Show Label: reveal slide label thumbnails in the slide list, including the rotate and force-scan controls";
+        showSlideLabelsButton.setAttribute("aria-label", next ? "Hide slide label thumbnails" : "Show slide label thumbnails");
         // When enabling labels, re-apply hybrid markers over the visible case list.
         if (next && Array.isArray(catalogImages) && catalogImages.length) {
             AnnotationAdapter.scheduleSidebarClinicalOcrBatch(imageListElement, catalogImages);
@@ -4380,6 +4502,9 @@
         slideOverview.hidden = !visible;
         slideOverviewButton.setAttribute("aria-pressed", String(visible));
         if (visible) {
+            // Re-derive its position every time it opens (not just once) so it
+            // reacts to whichever floating palettes happen to be open right now.
+            AnnotationAdapter.positionSlideOverviewWindow(document);
             refreshSlideOverview();
             AnnotationAdapter.syncMainWindowSlideLabelRotation(
                 AnnotationAdapter.getSlideLabelRotation(selectedImage?.id),
@@ -5416,6 +5541,7 @@
         const homeZoom = viewer.viewport.getHomeZoom();
         const displayZoom = homeZoom > 0 ? currentZoom / homeZoom : 1;
         zoomStatus.textContent = `${displayZoom.toFixed(displayZoom < 10 ? 2 : 1)}×`;
+        AnnotationAdapter.refreshMagnificationLabels(viewer);
         updateScaleBar();
     }
 
