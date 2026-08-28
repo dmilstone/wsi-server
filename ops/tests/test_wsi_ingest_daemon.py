@@ -220,6 +220,99 @@ class DaemonTests(unittest.TestCase):
         ok, detail = wd.probe_integrity(d)
         self.assertFalse(ok)
 
+    # --- sidecar OCR (post-promotion clinical-marker automation) --------------
+
+    def test_promotion_queues_dataset_for_sidecar_ocr(self):
+        self.make_dataset('case'); self.seal('case')
+        c = engine.cfg()
+        fake = fake_run_ingest({'observe': Result(0), 'promote-dry-run': Result(0), 'promote-step': Result(0)})
+        sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 5)
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.run_pending_sidecar_ocr') as run_pending:
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '', sidecar_ledger)
+        self.assertEqual(sidecar_ledger.pending_names(), ['case'])
+        run_pending.assert_called_once()
+
+    def test_dataset_sidecar_resolved_distinguishes_placeholder_from_real_status(self):
+        d = self.pr / 'case'; d.mkdir()
+        (d / 'slide.vsi').write_text('x')
+        self.assertFalse(wd.dataset_sidecar_resolved(d))  # no sidecar written yet
+        (d / 'slide.metadata.json').write_text(json.dumps({'status': 'synchronized_via_retro_sweep'}))
+        self.assertFalse(wd.dataset_sidecar_resolved(d))  # server never actually answered
+        (d / 'slide.metadata.json').write_text(
+            json.dumps({'clinicalMarker': 'if.IgG', 'status': 'updated_via_epitope_ocr'}))
+        self.assertTrue(wd.dataset_sidecar_resolved(d))
+
+    def test_run_sidecar_ocr_scopes_to_only_dir_and_forwards_server_url(self):
+        c = engine.cfg()
+        (self.pr / 'case').mkdir()
+        captured = {}
+
+        def fake_subprocess_run(cmd, **kwargs):
+            captured['cmd'] = cmd
+            return Result(0, 'ok')
+
+        with mock.patch('wsi_ingest_daemon.subprocess.run', side_effect=fake_subprocess_run):
+            wd.run_sidecar_ocr(c, 'case', 'http://127.0.0.1:8080')
+        cmd = captured['cmd']
+        self.assertIn('--only-dir', cmd)
+        self.assertEqual(cmd[cmd.index('--only-dir') + 1], str(c['production'] / 'case'))
+        self.assertIn('--server-url', cmd)
+        self.assertEqual(cmd[cmd.index('--server-url') + 1], 'http://127.0.0.1:8080')
+
+    def test_pending_sidecar_ocr_resolves_and_clears_ledger(self):
+        d = self.pr / 'case'; d.mkdir()
+        (d / 'slide.vsi').write_text('x')
+        c = engine.cfg()
+        sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 5)
+        sidecar_ledger.add('case')
+
+        def fake_ocr(c_arg, name, server_url, timeout=120):
+            (d / 'slide.metadata.json').write_text(
+                json.dumps({'clinicalMarker': 'if.IgG', 'status': 'updated_via_epitope_ocr'}))
+            return Result(0, 'ok')
+
+        with mock.patch('wsi_ingest_daemon.run_sidecar_ocr', side_effect=fake_ocr):
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+        self.assertEqual(sidecar_ledger.pending_names(), [])
+        events = [e['event'] for e in self.log_lines(c)]
+        self.assertIn('sidecar_resolved', events)
+
+    def test_pending_sidecar_ocr_retries_then_escalates(self):
+        d = self.pr / 'case'; d.mkdir()
+        (d / 'slide.vsi').write_text('x')
+        c = engine.cfg()
+        sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 2)
+        sidecar_ledger.add('case')
+        with mock.patch('wsi_ingest_daemon.run_sidecar_ocr', return_value=Result(0, 'pending')):
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+        self.assertTrue(sidecar_ledger.is_escalated('case'))
+        with mock.patch('wsi_ingest_daemon.run_sidecar_ocr') as ocr:
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+        ocr.assert_not_called()
+        self.assertEqual(sidecar_ledger.pending_names(), [])
+        events = [e['event'] for e in self.log_lines(c)]
+        self.assertIn('sidecar_escalated_skip', events)
+
+    def test_pending_sidecar_ocr_drops_missing_dataset_directory(self):
+        c = engine.cfg()
+        sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 5)
+        sidecar_ledger.add('ghost')
+        with mock.patch('wsi_ingest_daemon.run_sidecar_ocr') as ocr:
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+        ocr.assert_not_called()
+        self.assertEqual(sidecar_ledger.pending_names(), [])
+
+    def test_no_refresh_url_skips_sidecar_step_entirely(self):
+        c = engine.cfg()
+        sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 5)
+        sidecar_ledger.add('case')
+        with mock.patch('wsi_ingest_daemon.run_sidecar_ocr') as ocr:
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, '')
+        ocr.assert_not_called()
+        self.assertEqual(sidecar_ledger.pending_names(), ['case'])
+
     # --- pause / stop control -------------------------------------------------
 
     def test_pause_sentinel_prevents_new_work(self):

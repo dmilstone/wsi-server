@@ -417,6 +417,16 @@ def parse_args(argv=None):
         default=os.environ.get("WSI_IMAGE_DIRECTORY", "/Users/dm026/wsi-slides"),
         help="Root directory of WSI containers",
     )
+    parser.add_argument(
+        "--only-dir",
+        default="",
+        help="Restrict the sweep to slide files under this one directory (absolute, "
+             "or relative to --slides-dir), instead of walking the whole tree -- e.g. "
+             "for an automated caller that just promoted a single dataset and wants "
+             "its sidecar written without paying for a full retro-sweep. Image ids "
+             "are still computed relative to the full --slides-dir root, so they stay "
+             "identical to what a full sweep (or the running server) would produce.",
+    )
     parser.add_argument("--force", action="store_true", help="Re-OCR slides that already have a token")
     parser.add_argument(
         "--server-url",
@@ -442,6 +452,15 @@ def main(argv=None) -> int:
         print(f"[ERROR] slides directory does not exist: {root}", file=sys.stderr)
         return 1
 
+    scan_root = root
+    if args.only_dir:
+        scan_root = Path(args.only_dir).expanduser()
+        if not scan_root.is_absolute():
+            scan_root = root / scan_root
+        if not scan_root.is_dir():
+            print(f"[ERROR] --only-dir does not exist: {scan_root}", file=sys.stderr)
+            return 1
+
     backend = ocr_backend_available()
     ocr_enabled = bool(backend)
     if not ocr_enabled:
@@ -457,8 +476,11 @@ def main(argv=None) -> int:
         args.session = session
         print(f"Logged in to {args.server_url} for label.png")
 
-    slides = iter_slides(root)
-    print(f"Updating if.epitope sidecars under {root} ({len(slides)} slides, ocr={backend or 'off'})")
+    # iter_slides walks only scan_root (cheap when --only-dir narrows it to one
+    # freshly-promoted dataset), but update_slide() below always computes image
+    # ids relative to the full root, so ids match the running server exactly.
+    slides = iter_slides(scan_root)
+    print(f"Updating if.epitope sidecars under {scan_root} ({len(slides)} slides, ocr={backend or 'off'})")
     counts = {"keep": 0, "write": 0, "pending": 0, "missing": 0}
     for slide in slides:
         try:

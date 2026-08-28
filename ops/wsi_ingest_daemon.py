@@ -15,10 +15,26 @@ only decides *when* to run those existing commands, and adds:
     own size/mtime/inode quiescence check, which cannot by itself detect a file
     that stopped changing while still truncated;
   - a best-effort notification to the running viewer so a promoted slide can
-    appear without a server restart (see ImageRegistry's own live discovery).
+    appear without a server restart (see ImageRegistry's own live discovery);
+  - a best-effort clinical-marker sidecar OCR pass, via the pre-existing,
+    unmodified ops/retro_build_metadata.py, scoped to just the one dataset
+    that was promoted (--only-dir) rather than a full-tree retro-sweep. This
+    is deliberately NOT run inline immediately after promotion: the server's
+    /api/images/{id}/label.png route requires the image to already be in
+    ImageRegistry's published snapshot (it throws "Unknown image id"
+    otherwise), and that snapshot only updates asynchronously, some time
+    after the /api/images/refresh notification above returns. Running OCR
+    inline would just race that and fail on the very first attempt. Instead
+    a promoted dataset is queued in a small on-disk ledger and retried on
+    each subsequent pass (bounded by --sidecar-retry-limit) until either a
+    sidecar with a resolved status is written, or the retry budget is spent
+    -- at which point ops/retro_build_metadata.py's own full manual sweep
+    (or the sidebar's per-row Force Scan button) remains the fallback.
 
-ops/wsi_ingest.py and ops/wsi_ops_dashboard.py are both left completely
-unmodified in their control flow by this script. Either remains a fully
+ops/wsi_ingest.py, ops/wsi_ops_dashboard.py, and ops/retro_build_metadata.py
+are all left completely unmodified in their own control flow by this script
+(retro_build_metadata.py only gained a new, purely additive --only-dir flag
+so this daemon can scope it to one dataset). Any of the three remains a fully
 independent manual fallback if this daemon is stopped, paused, or never
 started at all.
 
@@ -27,8 +43,16 @@ wsi_ingest.py, plus:
 
   WSI_INGEST_DAEMON_POLL_SECONDS           default 30
   WSI_INGEST_DAEMON_INTEGRITY_RETRY_LIMIT  default 5
+  WSI_INGEST_DAEMON_SIDECAR_RETRY_LIMIT    default 6 (passes, not seconds)
   WSI_INGEST_DAEMON_REFRESH_URL            e.g. http://127.0.0.1:8080 (optional)
   WSI_INGEST_DAEMON_LOG                    default <staging>/.wsi-ingest-control/daemon/daemon.log.jsonl
+
+The sidecar OCR step reuses --refresh-url as retro_build_metadata.py's
+--server-url (same running viewer), and otherwise inherits this process's
+environment unchanged -- so WSI_USER / WSI_PASSWORD / WSI_ANNOTATOR_PASSWORD
+set for the daemon are picked up by retro_build_metadata.py exactly as they
+would be for a manual invocation. If --refresh-url is not configured, the
+sidecar step is skipped entirely (no server to fetch label.png from).
 
 Control (create/remove these empty files while the daemon is running):
 
@@ -48,6 +72,8 @@ PAUSE_SENTINEL = "pause"
 STOP_SENTINEL = "stop"
 DEFAULT_POLL_SECONDS = 30
 DEFAULT_INTEGRITY_RETRY_LIMIT = 5
+DEFAULT_SIDECAR_RETRY_LIMIT = 6
+SIDECAR_UNRESOLVED_STATUSES = ("pending_epitope", "synchronized_via_retro_sweep")
 TIFF_LIKE_SUFFIXES = (".svs", ".ndpi", ".tif", ".tiff", ".ome.tif", ".ome.tiff")
 OTHER_WSI_SUFFIXES = (".vsi", ".czi", ".lif")
 TIFF_LE_MAGIC = b"II*\x00"
@@ -61,7 +87,15 @@ def _load_engine():
     return module
 
 
+def _load_retro_metadata():
+    spec = importlib.util.spec_from_file_location("wsi_retro_metadata", str(HERE / "retro_build_metadata.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 engine = _load_engine()
+retro_metadata = _load_retro_metadata()
 
 
 def short_hash(name):
@@ -250,6 +284,143 @@ class IntegrityLedger:
         return self._load().get(key, 0) >= self.retry_limit
 
 
+class SidecarLedger:
+    """Worklist of promoted datasets whose clinical-marker sidecar OCR has not
+    yet resolved, plus a per-dataset attempt counter. Unlike IntegrityLedger
+    (keyed by a hash, used only within the pass that already has `name` in
+    scope), this ledger has to reconstruct a real filesystem path on a later
+    pass, so it is keyed by the actual dataset name -- not a hash of it. That
+    is consistent with wsi_ingest.py's own state/journal files, which already
+    store real names on disk in this same control directory (chmod 0600);
+    only *logged* events stay hash-only, via short_hash() at each call site."""
+
+    def __init__(self, path, retry_limit):
+        self.path = path
+        self.retry_limit = retry_limit
+
+    def _load(self):
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save(self, data):
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, sort_keys=True))
+        os.chmod(tmp, 0o600)
+        tmp.replace(self.path)
+        os.chmod(self.path, 0o600)
+
+    def add(self, name):
+        data = self._load()
+        if name not in data:
+            data[name] = {"attempts": 0}
+            self._save(data)
+
+    def pending_names(self):
+        return sorted(self._load().keys())
+
+    def record_attempt(self, name):
+        data = self._load()
+        entry = data.get(name) or {"attempts": 0}
+        entry["attempts"] = entry.get("attempts", 0) + 1
+        data[name] = entry
+        self._save(data)
+        return entry["attempts"]
+
+    def is_escalated(self, name):
+        return self._load().get(name, {}).get("attempts", 0) >= self.retry_limit
+
+    def clear(self, name):
+        data = self._load()
+        if name in data:
+            del data[name]
+            self._save(data)
+
+
+def dataset_sidecar_resolved(dataset_dir):
+    """True once every slide container under dataset_dir has a sidecar whose
+    status shows an OCR attempt actually reached a resolution (a real marker,
+    or a fetch that genuinely completed and found nothing) -- False if any
+    slide is missing a sidecar entirely, or still carries one of the two
+    "never actually resolved" placeholder statuses retro_build_metadata.py
+    itself writes while it could not reach the server yet."""
+    resolved_any = False
+    for slide_path in retro_metadata.iter_slides(dataset_dir):
+        meta_path = retro_metadata.metadata_path_for_slide(slide_path)
+        if not meta_path.is_file():
+            return False
+        try:
+            payload = json.loads(meta_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("status") or "") in SIDECAR_UNRESOLVED_STATUSES:
+            return False
+        resolved_any = True
+    return resolved_any
+
+
+def run_sidecar_ocr(c, name, server_url, timeout=120):
+    """Best-effort, out-of-process call into the unmodified
+    ops/retro_build_metadata.py, scoped to just this one promoted dataset
+    directory via --only-dir. Returns a subprocess.CompletedProcess, or None
+    if the script could not even be started."""
+    script = HERE / "retro_build_metadata.py"
+    if not script.is_file():
+        return None
+    cmd = [
+        sys.executable, str(script),
+        "--slides-dir", str(c["production"]),
+        "--only-dir", str(c["production"] / name),
+    ]
+    if server_url:
+        cmd += ["--server-url", server_url]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def run_pending_sidecar_ocr(c, sidecar_ledger, server_url):
+    """Retries the sidecar OCR step for every dataset still queued from a
+    prior pass's promotion, dropping each one once its sidecar resolves or
+    its retry budget (--sidecar-retry-limit) is spent."""
+    if not server_url:
+        return
+    for name in sidecar_ledger.pending_names():
+        key = short_hash(name)
+        dataset_dir = c["production"] / name
+        if not dataset_dir.is_dir():
+            # Promoted directory renamed/removed out from under us by
+            # something else -- nothing left here to retry.
+            sidecar_ledger.clear(name)
+            continue
+        if dataset_sidecar_resolved(dataset_dir):
+            log_event(c, "sidecar_resolved", dataset=key)
+            sidecar_ledger.clear(name)
+            continue
+        if sidecar_ledger.is_escalated(name):
+            log_event(c, "sidecar_escalated_skip", dataset=key)
+            sidecar_ledger.clear(name)
+            continue
+        result = run_sidecar_ocr(c, name, server_url)
+        attempt = sidecar_ledger.record_attempt(name)
+        if result is None:
+            log_event(c, "sidecar_ocr_not_run", dataset=key, attempt=attempt)
+            continue
+        if result.returncode != 0:
+            log_event(c, "sidecar_ocr_failed", dataset=key, attempt=attempt,
+                       detail=(result.stderr or "").strip()[-300:])
+            continue
+        if dataset_sidecar_resolved(dataset_dir):
+            log_event(c, "sidecar_resolved", dataset=key, attempt=attempt)
+            sidecar_ledger.clear(name)
+        else:
+            log_event(c, "sidecar_pending", dataset=key, attempt=attempt)
+
+
 def notify_server_refresh(base_url, timeout=5):
     if not base_url:
         return None
@@ -262,7 +433,7 @@ def notify_server_refresh(base_url, timeout=5):
         return str(error)
 
 
-def run_pass(c, ledger, refresh_url):
+def run_pass(c, ledger, refresh_url, sidecar_ledger=None):
     for name in list_candidate_datasets(c["staging"]):
         if name in dict(engine.state_records(c)):
             continue
@@ -324,6 +495,8 @@ def run_pass(c, ledger, refresh_url):
         promoted = run_ingest(["promote", "--step", name], confirmation="PROMOTE")
         if promoted.returncode == 0:
             log_event(c, "promoted", dataset=key)
+            if sidecar_ledger is not None:
+                sidecar_ledger.add(name)
             error = notify_server_refresh(refresh_url)
             if error:
                 log_event(c, "refresh_notify_failed", dataset=key, detail=error)
@@ -331,6 +504,9 @@ def run_pass(c, ledger, refresh_url):
             category = failure_category(promoted.stderr)
             if category not in ("stability", "lock"):
                 log_event(c, "promote_failed", dataset=key, category=category)
+
+    if sidecar_ledger is not None:
+        run_pending_sidecar_ocr(c, sidecar_ledger, refresh_url)
 
 
 def main(argv=None):
@@ -340,6 +516,8 @@ def main(argv=None):
                          default=int(os.environ.get("WSI_INGEST_DAEMON_POLL_SECONDS", DEFAULT_POLL_SECONDS)))
     parser.add_argument("--integrity-retry-limit", type=int,
                          default=int(os.environ.get("WSI_INGEST_DAEMON_INTEGRITY_RETRY_LIMIT", DEFAULT_INTEGRITY_RETRY_LIMIT)))
+    parser.add_argument("--sidecar-retry-limit", type=int,
+                         default=int(os.environ.get("WSI_INGEST_DAEMON_SIDECAR_RETRY_LIMIT", DEFAULT_SIDECAR_RETRY_LIMIT)))
     parser.add_argument("--refresh-url", default=os.environ.get("WSI_INGEST_DAEMON_REFRESH_URL", ""))
     args = parser.parse_args(argv)
 
@@ -353,6 +531,7 @@ def main(argv=None):
         return 1
 
     ledger = IntegrityLedger(daemon_control_dir(c) / "integrity-failures.json", args.integrity_retry_limit)
+    sidecar_ledger = SidecarLedger(daemon_control_dir(c) / "sidecar-pending.json", args.sidecar_retry_limit)
     log_event(c, "daemon_start", interval_seconds=args.interval)
     try:
         while True:
@@ -364,7 +543,7 @@ def main(argv=None):
                 log_event(c, "daemon_paused")
             else:
                 try:
-                    run_pass(c, ledger, args.refresh_url)
+                    run_pass(c, ledger, args.refresh_url, sidecar_ledger)
                 except engine.Fail as error:
                     log_event(c, "pass_failed", category=error.cat)
                 except Exception as error:  # noqa: BLE001 - top-level supervisor, must never die from a per-pass fault
