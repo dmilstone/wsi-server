@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -79,6 +80,26 @@ class SecurityCsrfTests {
                 .andExpect(jsonPath("$.token").isNotEmpty())
                 .andExpect(jsonPath("$.headerName").isNotEmpty())
                 .andExpect(jsonPath("$.parameterName").isNotEmpty());
+    }
+
+    @Test
+    void loopbackIngestRefreshDoesNotNeedSessionOrCsrf() throws Exception {
+        mockMvc.perform(post("/api/images/refresh")
+                        .with(request -> {
+                            request.setRemoteAddr("127.0.0.1");
+                            return request;
+                        }))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void remoteIngestRefreshWithoutAuthIsRejected() throws Exception {
+        mockMvc.perform(post("/api/images/refresh")
+                        .with(request -> {
+                            request.setRemoteAddr("198.51.100.10");
+                            return request;
+                        }))
+                .andExpect(status().isForbidden());
     }
 
     @Test

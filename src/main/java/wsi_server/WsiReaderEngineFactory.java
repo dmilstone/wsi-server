@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 import java.nio.file.Path;
 
 /**
- * Routes a catalogued slide to Bio-Formats or the OpenSlide stub.
+ * Routes a catalogued slide to Bio-Formats or the OpenSlide brightfield engine.
  */
 @Component
 public class WsiReaderEngineFactory {

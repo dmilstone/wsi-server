@@ -100,6 +100,8 @@ class AnnotationAdapter {
 
     /** RGB H&E / IHC series must use composite tiles, not per-channel lighter stacks. */
     static isRgbSeriesView(metadata, series) {
+        const modality = String(metadata?.modality || AnnotationAdapter.currentModality || "").toUpperCase();
+        if (modality === "FLUORESCENCE") return false;
         if (metadata && metadata.rgb === true) return true;
         if (AnnotationAdapter.isBrightfieldSlide(metadata)) return true;
         const profiles = Array.isArray(metadata?.seriesProfiles) ? metadata.seriesProfiles : [];
@@ -1323,6 +1325,7 @@ class AnnotationAdapter {
         button.dataset.imageName = image.name || "";
         button.dataset.imagePath = image.relativePath || "";
         button.dataset.clinicalMarker = image.clinicalMarker || "";
+        button.dataset.ocrAttempted = image.ocrAttempted ? "1" : "";
         button.dataset.slideLabel = title;
         button.title = image.relativePath || image.name || "";
         const info = doc.createElement("div");
@@ -1454,7 +1457,8 @@ class AnnotationAdapter {
                 id: key,
                 name: button.dataset?.imageName,
                 relativePath: button.dataset?.imagePath,
-                clinicalMarker: button.dataset?.clinicalMarker
+                clinicalMarker: button.dataset?.clinicalMarker,
+                ocrAttempted: button.dataset?.ocrAttempted === "1"
             };
             const marker = AnnotationAdapter.clinicalMarkerFromImage(catalogImage) || existing;
             const cachedEmptyMiss = AnnotationAdapter.hasOcrSessionCacheEntry(key)
@@ -1462,11 +1466,18 @@ class AnnotationAdapter {
                     AnnotationAdapter.readOcrSessionCache(key) || ""
                 );
             const thorough = Boolean(AnnotationAdapter.ocrThoroughAttempt?.has?.(key));
+            // Server-side OCR (ops/retro_build_metadata.py, run by the ingestion daemon)
+            // already scanned this slide's label at least once. If it found nothing, the
+            // label genuinely has no readable marker -- there's no reason for every page
+            // load to pay for a slow, sequential client-side Tesseract re-scan of the same
+            // dead end. Trust that result the same way `cachedEmptyMiss && thorough` does
+            // for a marker this browser tab already scanned itself.
+            const serverAlreadyAttemptedOcr = catalogImage.ocrAttempted === true;
             if (marker) {
                 AnnotationAdapter.renderOcrClinicalMarker(targetNode, marker);
             } else {
                 AnnotationAdapter.clearSidecarText(targetNode);
-                if (allowBrowserFallback && !(cachedEmptyMiss && thorough)) {
+                if (allowBrowserFallback && !serverAlreadyAttemptedOcr && !(cachedEmptyMiss && thorough)) {
                     missing.push(button);
                 }
             }
@@ -1580,6 +1591,16 @@ class AnnotationAdapter {
             AnnotationAdapter.renderOcrClinicalMarker(controls.result, marker);
             AnnotationAdapter.paintSelectedRowEpitope(image, marker, doc);
             return marker;
+        }
+        // Server-side OCR (ops/retro_build_metadata.py) already scanned this slide's
+        // label and found nothing -- don't pay for a multi-second full-resolution
+        // Tesseract sweep on every single slide open, only to reconfirm the same
+        // dead end. This runs synchronously with the viewer opening, so it was a
+        // major (and entirely avoidable) contributor to "the low power view loads
+        // slowly" on freshly-ingested slides that simply have no readable label text.
+        if (image?.ocrAttempted === true) {
+            AnnotationAdapter.clearSidecarText(controls.result);
+            return "";
         }
         void AnnotationAdapter.ocrSelectedImageIfMissing(image, controls.result, doc);
         return "";
@@ -2438,7 +2459,7 @@ class AnnotationAdapter {
         const rows = doc?.getElementById?.("floating-channel-palette-rows");
         if (rows && typeof rows.replaceChildren === "function") rows.replaceChildren();
         else if (rows) rows.innerHTML = "";
-        const scaleMax = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        const scaleMax = AnnotationAdapter.channelLevelScale();
         const min = doc?.getElementById?.("fcp-min");
         const max = doc?.getElementById?.("fcp-max");
         const gamma = doc?.getElementById?.("fcp-gamma");
@@ -2454,9 +2475,13 @@ class AnnotationAdapter {
         const minOut = doc?.getElementById?.("fcp-min-value");
         const maxOut = doc?.getElementById?.("fcp-max-value");
         const gammaOut = doc?.getElementById?.("fcp-gamma-value");
+        const scaleMinLabel = doc?.getElementById?.("fcp-scale-min");
+        const scaleMaxLabel = doc?.getElementById?.("fcp-scale-max");
         if (minOut) minOut.textContent = "0";
         if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(scaleMax);
         if (gammaOut) gammaOut.textContent = "1.00";
+        if (scaleMinLabel) scaleMinLabel.textContent = "0";
+        if (scaleMaxLabel) scaleMaxLabel.textContent = AnnotationAdapter.formatChannelLevel(scaleMax);
         return true;
     }
 
@@ -3960,8 +3985,29 @@ class AnnotationAdapter {
         return button;
     }
 
-    static CHANNEL_LEVEL_MAX = 58831;
+    static BIT8_INTENSITY_SCALE = 255;
     static BIT16_INTENSITY_SCALE = 65535;
+    /** Default 16-bit slider ceiling. Prefer {@link channelLevelScale} for the active image. */
+    static CHANNEL_LEVEL_MAX = 65535;
+
+    /**
+     * Intensity range for B&C sliders, histogram, and the viewport window filter.
+     * 8-bit RGB / brightfield series use 0–255; planar fluorescence uses 0–65535.
+     * A leftover 58831 ceiling (one prior auto-window white point) made the
+     * initial min/max thumbs sit at the far left of an 8-bit slide.
+     */
+    static channelLevelScale(source) {
+        const metadata = source || AnnotationAdapter.imageMetadata;
+        const series = Number.isFinite(Number(source?.series))
+            ? Number(source.series)
+            : AnnotationAdapter.currentSeries;
+        const intensityMax = Number(metadata?.intensityMax);
+        if (Number.isFinite(intensityMax) && intensityMax > 0) return intensityMax;
+        if (AnnotationAdapter.isRgbSeriesView(metadata, series)) {
+            return AnnotationAdapter.BIT8_INTENSITY_SCALE;
+        }
+        return AnnotationAdapter.BIT16_INTENSITY_SCALE;
+    }
     static CHANNEL_PALETTE_LUT_COLORS = {
         BLUE: "#438cff",
         GREEN: "#3bd671",
@@ -3991,9 +4037,9 @@ class AnnotationAdapter {
 
     static placeholderPaletteChannels() {
         return [
-            { index: 0, name: "Cyan", lut: "CYAN", visible: true, black: 0, white: AnnotationAdapter.CHANNEL_LEVEL_MAX, gamma: 1, opacity: 1 },
-            { index: 1, name: "Green", lut: "GREEN", visible: true, black: 0, white: AnnotationAdapter.CHANNEL_LEVEL_MAX, gamma: 1, opacity: 1 },
-            { index: 2, name: "Red", lut: "RED", visible: true, black: 0, white: AnnotationAdapter.CHANNEL_LEVEL_MAX, gamma: 1, opacity: 1 }
+            { index: 0, name: "Cyan", lut: "CYAN", visible: true, black: 0, white: AnnotationAdapter.channelLevelScale(), gamma: 1, opacity: 1 },
+            { index: 1, name: "Green", lut: "GREEN", visible: true, black: 0, white: AnnotationAdapter.channelLevelScale(), gamma: 1, opacity: 1 },
+            { index: 2, name: "Red", lut: "RED", visible: true, black: 0, white: AnnotationAdapter.channelLevelScale(), gamma: 1, opacity: 1 }
         ];
     }
 
@@ -5415,7 +5461,7 @@ class AnnotationAdapter {
             const minOut = palette.querySelector?.("#fcp-min-value") || doc?.getElementById?.("fcp-min-value");
             const maxOut = palette.querySelector?.("#fcp-max-value") || doc?.getElementById?.("fcp-max-value");
             const gammaOut = palette.querySelector?.("#fcp-gamma-value") || doc?.getElementById?.("fcp-gamma-value");
-            const scaleMax = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+            const scaleMax = AnnotationAdapter.channelLevelScale();
             if (min) {
                 min.max = String(scaleMax);
                 min.value = String(Math.max(0, Math.min(scaleMax, Number(selected.black) || 0)));
@@ -5428,6 +5474,10 @@ class AnnotationAdapter {
             if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min?.value || selected.black);
             if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max?.value || selected.white);
             if (gammaOut) gammaOut.textContent = Number(gamma?.value || selected.gamma || 1).toFixed(2);
+            const scaleMinLabel = palette.querySelector?.("#fcp-scale-min") || doc?.getElementById?.("fcp-scale-min");
+            const scaleMaxLabel = palette.querySelector?.("#fcp-scale-max") || doc?.getElementById?.("fcp-scale-max");
+            if (scaleMinLabel) scaleMinLabel.textContent = "0";
+            if (scaleMaxLabel) scaleMaxLabel.textContent = AnnotationAdapter.formatChannelLevel(scaleMax);
             AnnotationAdapter.drawChannelPaletteHistogram(doc);
         }
         return true;
@@ -5450,6 +5500,7 @@ class AnnotationAdapter {
                 AnnotationAdapter.displayController?.getCurrentZ?.()
             );
         }
+        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer);
         AnnotationAdapter.displayController?.syncChannelControls?.();
         AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: false });
         AnnotationAdapter.syncFloatingChannelPalette(root);
@@ -5459,7 +5510,7 @@ class AnnotationAdapter {
     static readChannelPaletteSliders(root = null) {
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const palette = AnnotationAdapter.resolvePaletteNode(doc);
-        const scaleMax = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        const scaleMax = AnnotationAdapter.channelLevelScale();
         let min = parseFloat(palette?.querySelector?.("#fcp-min")?.value
             ?? doc?.getElementById?.("fcp-min")?.value
             ?? 0);
@@ -5473,7 +5524,7 @@ class AnnotationAdapter {
         if (!Number.isFinite(max)) max = scaleMax;
         if (!Number.isFinite(gamma) || gamma <= 0) gamma = 1;
         min = Math.max(0, Math.min(scaleMax - 1, min));
-        max = Math.max(min + (1 / AnnotationAdapter.BIT16_INTENSITY_SCALE), Math.min(scaleMax, max));
+        max = Math.max(min + (1 / scaleMax), Math.min(scaleMax, max));
         gamma = Math.max(0.2, Math.min(4, gamma));
         return { min, max, gamma };
     }
@@ -5495,7 +5546,7 @@ class AnnotationAdapter {
         if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max);
         if (gammaOut) gammaOut.textContent = Number(gamma).toFixed(2);
         const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
-        AnnotationAdapter.applyViewportTileContrastFilter(viewer, min, max, gamma);
+        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma);
         if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
         if (!options.live) {
             AnnotationAdapter.drawChannelPaletteHistogram(doc);
@@ -5513,18 +5564,19 @@ class AnnotationAdapter {
     }
 
     /**
-     * Map channel-window slider values onto the 16-bit (0–65535) intensity
-     * baseline as float multipliers for OpenSeadragon canvas filters.
+     * Map channel-window slider values onto the active image's intensity
+     * baseline (0–255 for RGB, 0–65535 for 16-bit fluorescence) as float
+     * multipliers for OpenSeadragon canvas filters.
      * Never pass raw integer slider strings into contrast()/brightness().
      */
-    static mapChannelWindowToFloatFilter(min, max, gamma) {
-        const scale = AnnotationAdapter.BIT16_INTENSITY_SCALE;
-        const lo = Math.max(0, Math.min(1, parseFloat(min) / scale));
-        const hi = Math.max(lo + (1 / scale), Math.min(1, parseFloat(max) / scale));
+    static mapChannelWindowToFloatFilter(min, max, gamma, scale) {
+        const resolved = Number(scale) > 0 ? Number(scale) : AnnotationAdapter.channelLevelScale();
+        const lo = Math.max(0, Math.min(1, parseFloat(min) / resolved));
+        const hi = Math.max(lo + (1 / resolved), Math.min(1, parseFloat(max) / resolved));
         const slope = 1 / (hi - lo);
         const intercept = -lo * slope;
         const exponent = Math.max(0.2, Math.min(4, parseFloat(gamma) || 1));
-        return { lo, hi, slope, intercept, exponent, scale };
+        return { lo, hi, slope, intercept, exponent, scale: resolved };
     }
 
     static applyFloat16BitWindowProcessor(context, mapped) {
@@ -5548,6 +5600,133 @@ class AnnotationAdapter {
             }
         }
         context.putImageData(image, 0, 0);
+        return true;
+    }
+
+    /**
+     * Per-channel 8-bit window + visibility for an RGB composite tile.
+     * Canvas R/G/B are display channels 0/1/2. Hidden channels go to 0;
+     * each visible channel uses its own min/max/gamma on a 0–255 scale.
+     */
+    static rgbCompositeChannelMaps(channels) {
+        const scale = AnnotationAdapter.BIT8_INTENSITY_SCALE;
+        const list = Array.isArray(channels) ? channels : [];
+        return [0, 1, 2].map(index => {
+            const channel = list.find(item => Number(item?.index) === index) || list[index];
+            if (channel && channel.visible === false) {
+                return { visible: false, lo: 0, range: scale, exponent: 1 };
+            }
+            const black = Math.max(0, Number(channel?.black) || 0);
+            const white = Math.max(black + 1, Number(channel?.white) || scale);
+            return {
+                visible: true,
+                lo: Math.min(scale, black),
+                range: Math.max(1, Math.min(scale, white) - black),
+                exponent: Math.max(0.2, Math.min(4, Number(channel?.gamma) || 1))
+            };
+        });
+    }
+
+    static applyRgbCompositeWindowProcessor(context, maps) {
+        if (!context?.canvas || typeof context.getImageData !== "function") return false;
+        const width = Number(context.canvas.width) || 0;
+        const height = Number(context.canvas.height) || 0;
+        if (width < 1 || height < 1) return false;
+        const planes = Array.isArray(maps) && maps.length ? maps : AnnotationAdapter.rgbCompositeChannelMaps();
+        const image = context.getImageData(0, 0, width, height);
+        const data = image.data;
+        for (let i = 0; i < data.length; i += 4) {
+            for (let c = 0; c < 3; c += 1) {
+                const map = planes[c] || planes[0];
+                if (!map || map.visible === false) {
+                    data[i + c] = 0;
+                    continue;
+                }
+                let t = (data[i + c] - map.lo) / map.range;
+                if (t < 0) t = 0;
+                else if (t > 1) t = 1;
+                data[i + c] = Math.pow(t, map.exponent || 1) * 255;
+            }
+        }
+        context.putImageData(image, 0, 0);
+        return true;
+    }
+
+    /**
+     * RGB composite: window and show/hide each color independently.
+     * Fluorescence: keep the selected-channel window as a viewport preview.
+     */
+    static applyViewportChannelDisplayFilter(viewer, min, max, gamma) {
+        const host = viewer || AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        const metadata = AnnotationAdapter.displayController?.getMetadata?.() || AnnotationAdapter.imageMetadata;
+        const series = AnnotationAdapter.displayController?.getCurrentSeries?.()
+            ?? AnnotationAdapter.currentSeries;
+        if (AnnotationAdapter.isRgbSeriesView(metadata, series)) {
+            return AnnotationAdapter.applyViewportRgbChannelFilter(host);
+        }
+        let lo = min;
+        let hi = max;
+        let exp = gamma;
+        if (!Number.isFinite(Number(lo)) || !Number.isFinite(Number(hi))) {
+            const sliders = AnnotationAdapter.readChannelPaletteSliders();
+            lo = sliders.min;
+            hi = sliders.max;
+            exp = sliders.gamma;
+        }
+        return AnnotationAdapter.applyViewportTileContrastFilter(host, lo, hi, exp);
+    }
+
+    static applyViewportRgbChannelFilter(viewer) {
+        const canvas = viewer?.drawer?.canvas || viewer?.canvas?.querySelector?.("canvas") || viewer?.canvas;
+        if (!canvas?.style) return false;
+        const maps = AnnotationAdapter.rgbCompositeChannelMaps(AnnotationAdapter.paletteChannelList());
+        const owner = canvas.ownerDocument || (typeof document !== "undefined" ? document : null);
+        const svgIds = [
+            ["fcp-window-func-r", "fcp-gamma-func-r", 0],
+            ["fcp-window-func-g", "fcp-gamma-func-g", 1],
+            ["fcp-window-func-b", "fcp-gamma-func-b", 2]
+        ];
+        for (const [windowId, gammaId, index] of svgIds) {
+            const map = maps[index];
+            const windowFn = owner?.getElementById?.(windowId);
+            const gammaFn = owner?.getElementById?.(gammaId);
+            if (windowFn?.setAttribute) {
+                if (!map || map.visible === false) {
+                    windowFn.setAttribute("type", "linear");
+                    windowFn.setAttribute("slope", "0");
+                    windowFn.setAttribute("intercept", "0");
+                } else {
+                    const slope = (255 / map.range).toFixed(8);
+                    const intercept = (-map.lo / map.range).toFixed(8);
+                    windowFn.setAttribute("type", "linear");
+                    windowFn.setAttribute("slope", slope);
+                    windowFn.setAttribute("intercept", intercept);
+                }
+            }
+            if (gammaFn?.setAttribute) {
+                gammaFn.setAttribute("type", "gamma");
+                gammaFn.setAttribute("amplitude", "1");
+                gammaFn.setAttribute("exponent", String((map && map.visible !== false ? map.exponent : 1) || 1));
+                gammaFn.setAttribute("offset", "0");
+            }
+        }
+        if (typeof viewer?.setFilterOptions === "function") {
+            viewer.setFilterOptions({
+                loadMode: "sync",
+                filters: {
+                    processors: [
+                        (context, callback) => {
+                            AnnotationAdapter.applyRgbCompositeWindowProcessor(context, maps);
+                            if (typeof callback === "function") callback();
+                        }
+                    ]
+                }
+            });
+            canvas.style.filter = "";
+        } else {
+            canvas.style.filter = "url(#fcp-gamma-filter)";
+        }
+        if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
         return true;
     }
 
@@ -5608,7 +5787,7 @@ class AnnotationAdapter {
         const channels = Math.max(1, Number(block.channels) || 1);
         const channel = Math.max(0, Math.min(channels - 1, Number(channelIndex) || 0));
         const start = channel * plane;
-        const scale = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        const scale = AnnotationAdapter.channelLevelScale();
         for (let i = 0; i < plane; i += 1) {
             const value = Number(block.values[start + i]) || 0;
             const bin = Math.max(0, Math.min(binCount - 1, Math.floor((value / scale) * binCount)));
@@ -5654,14 +5833,15 @@ class AnnotationAdapter {
     static syntheticHistogram(channel, binCount = 256) {
         const bins = new Array(binCount).fill(0);
         const black = Math.max(0, Number(channel?.black) || 0);
-        const white = Math.max(black + 1, Number(channel?.white) || AnnotationAdapter.CHANNEL_LEVEL_MAX);
-        const peak = Math.max(1, Math.min(binCount - 2, Math.floor((black / AnnotationAdapter.CHANNEL_LEVEL_MAX) * binCount) + 8));
+        const scale = AnnotationAdapter.channelLevelScale();
+        const white = Math.max(black + 1, Number(channel?.white) || scale);
+        const peak = Math.max(1, Math.min(binCount - 2, Math.floor((black / scale) * binCount) + 8));
         for (let i = 0; i < binCount; i += 1) {
             const t = (i - peak) / 18;
             const spread = (i - peak) / 70;
             bins[i] = Math.exp(-t * t) * 120 + (i > peak ? Math.exp(-(spread * spread)) * 40 : 0);
-            if (i < Math.floor((black / AnnotationAdapter.CHANNEL_LEVEL_MAX) * binCount)
-                || i > Math.floor((white / AnnotationAdapter.CHANNEL_LEVEL_MAX) * binCount)) {
+            if (i < Math.floor((black / scale) * binCount)
+                || i > Math.floor((white / scale) * binCount)) {
                 bins[i] *= 0.35;
             }
         }
@@ -5692,7 +5872,7 @@ class AnnotationAdapter {
             const h = (bins[i] / maxBin) * (height - 2);
             ctx.fillRect(i * barWidth, height - h, Math.max(1, barWidth), h);
         }
-        const scale = AnnotationAdapter.CHANNEL_LEVEL_MAX;
+        const scale = AnnotationAdapter.channelLevelScale();
         const minX = ((Number(channel?.black) || 0) / scale) * width;
         const maxX = ((Number(channel?.white) || scale) / scale) * width;
         ctx.strokeStyle = "#fff";

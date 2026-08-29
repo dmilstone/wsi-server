@@ -29,7 +29,20 @@ only decides *when* to run those existing commands, and adds:
     each subsequent pass (bounded by --sidecar-retry-limit) until either a
     sidecar with a resolved status is written, or the retry budget is spent
     -- at which point ops/retro_build_metadata.py's own full manual sweep
-    (or the sidebar's per-row Force Scan button) remains the fallback.
+    (or the sidebar's per-row Force Scan button) remains the fallback;
+  - an opt-in (WSI_INGEST_AUTOBATCH_ENABLED) "hot folder" front end, see
+    ops/wsi_ingest_autobatch.py, for a staging directory a scanner writes
+    into continuously all day instead of one manually-named, one-shot
+    batch. Any staging directory carrying a ".wsi-autobatch" marker file is
+    treated as such: loose files are grouped into per-slide units, each
+    unit is auto-relocated into its own temp staging directory once stable,
+    and that temp directory is handed to the exact same, unmodified seal/
+    observe/promote loop below as if a human had created it. After
+    promotion, this daemon merges the temp wrapper's contents back into
+    production/<origin-folder-name>/ (mirroring the origin's own name from
+    staging), so the dated/organized layout survives promotion. Directories
+    without the marker are completely untouched by this and keep working
+    exactly as they do today.
 
 ops/wsi_ingest.py, ops/wsi_ops_dashboard.py, and ops/retro_build_metadata.py
 are all left completely unmodified in their own control flow by this script
@@ -46,6 +59,7 @@ wsi_ingest.py, plus:
   WSI_INGEST_DAEMON_SIDECAR_RETRY_LIMIT    default 6 (passes, not seconds)
   WSI_INGEST_DAEMON_REFRESH_URL            e.g. http://127.0.0.1:8080 (optional)
   WSI_INGEST_DAEMON_LOG                    default <staging>/.wsi-ingest-control/daemon/daemon.log.jsonl
+  WSI_INGEST_AUTOBATCH_ENABLED             default off (0/false); see above
 
 The sidecar OCR step reuses --refresh-url as retro_build_metadata.py's
 --server-url (same running viewer), and otherwise inherits this process's
@@ -75,9 +89,19 @@ DEFAULT_INTEGRITY_RETRY_LIMIT = 5
 DEFAULT_SIDECAR_RETRY_LIMIT = 6
 SIDECAR_UNRESOLVED_STATUSES = ("pending_epitope", "synchronized_via_retro_sweep")
 TIFF_LIKE_SUFFIXES = (".svs", ".ndpi", ".tif", ".tiff", ".ome.tif", ".ome.tiff")
-OTHER_WSI_SUFFIXES = (".vsi", ".czi", ".lif")
+OTHER_WSI_SUFFIXES = (".vsi", ".czi", ".lif", ".mrxs")
 TIFF_LE_MAGIC = b"II*\x00"
 TIFF_BE_MAGIC = b"MM\x00*"
+# Classic TIFF's IFD offset is a 4-byte field, which cannot address past 4GiB
+# -- so any modern, large .svs/.ndpi (routinely several GB) is written as
+# BigTIFF instead: same byte-order marker but magic number 43 (+) rather than
+# 42 (*), an 8-byte offset-size field, and an 8-byte (not 4-byte) first IFD
+# offset. A probe that only recognizes classic TIFF magic misreads every
+# such file as corrupt ("missing TIFF byte-order magic") and permanently
+# escalates it after retry_limit passes, even though it is a perfectly valid
+# slide the server's own Bio-Formats/OpenSlide reader opens without issue.
+BIGTIFF_LE_MAGIC = b"II+\x00"
+BIGTIFF_BE_MAGIC = b"MM\x00+"
 
 
 def _load_engine():
@@ -94,8 +118,16 @@ def _load_retro_metadata():
     return module
 
 
+def _load_autobatch():
+    spec = importlib.util.spec_from_file_location("wsi_ingest_autobatch", str(HERE / "wsi_ingest_autobatch.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 engine = _load_engine()
 retro_metadata = _load_retro_metadata()
+autobatch = _load_autobatch()
 
 
 def short_hash(name):
@@ -185,13 +217,21 @@ def probe_tiff_integrity(path):
     try:
         size = path.stat().st_size
         with open(path, "rb") as f:
-            header = f.read(8)
+            header = f.read(16)
             if len(header) < 8:
                 return False, "file shorter than a TIFF header"
             if header[:4] == TIFF_LE_MAGIC:
                 ifd_offset = int.from_bytes(header[4:8], "little")
             elif header[:4] == TIFF_BE_MAGIC:
                 ifd_offset = int.from_bytes(header[4:8], "big")
+            elif header[:4] == BIGTIFF_LE_MAGIC:
+                if len(header) < 16:
+                    return False, "file shorter than a BigTIFF header"
+                ifd_offset = int.from_bytes(header[8:16], "little")
+            elif header[:4] == BIGTIFF_BE_MAGIC:
+                if len(header) < 16:
+                    return False, "file shorter than a BigTIFF header"
+                ifd_offset = int.from_bytes(header[8:16], "big")
             else:
                 return False, "missing TIFF byte-order magic"
             if ifd_offset <= 0 or ifd_offset >= size:
@@ -433,7 +473,51 @@ def notify_server_refresh(base_url, timeout=5):
         return str(error)
 
 
-def run_pass(c, ledger, refresh_url, sidecar_ledger=None):
+def merge_promoted_autobatch_dataset(c, merge_ledger, name):
+    """If `name` was promoted from an autobatch temp wrapper (see
+    wsi_ingest_autobatch.py), merge its contents into
+    production/<origin-folder-name>/ -- creating that shared folder on its
+    first arrival -- and return the origin name for everything downstream
+    (sidecar OCR, refresh) to use instead. Returns `name` unchanged for an
+    ordinary, manually-named batch that autobatch never touched.
+
+    A crash between individual item moves needs no separate recovery branch:
+    the ledger entry is only cleared once the temp wrapper is fully drained,
+    so a resumed pass just moves whatever items are still left in it."""
+    origin = merge_ledger.pending().get(name)
+    if origin is None:
+        return name
+    key = short_hash(name)
+    src_dir = c["production"] / name
+    dest_dir = c["production"] / origin
+    if src_dir.is_dir():
+        dest_dir.mkdir(exist_ok=True)
+        blocked = False
+        for item in sorted(src_dir.iterdir()):
+            target = dest_dir / item.name
+            if target.exists():
+                blocked = True
+                log_event(c, "autobatch_merge_collision", dataset=key, origin=short_hash(origin))
+                continue
+            engine.atomic_rename_noreplace(item, target)
+        if blocked:
+            return name  # leave the ledger entry + remaining item(s) for the next pass / a human
+        try:
+            src_dir.rmdir()
+        except OSError:
+            pass
+    merge_ledger.clear(name)
+    log_event(c, "autobatch_merged", dataset=key, origin=short_hash(origin))
+    return origin
+
+
+def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=None, autobatch_merge_ledger=None):
+    if autobatch.enabled() and autobatch_tracking is not None and autobatch_merge_ledger is not None:
+        autobatch.scan_and_relocate(
+            c, engine, autobatch_tracking, autobatch_merge_ledger,
+            log=lambda event, **fields: log_event(c, event, **fields),
+        )
+
     for name in list_candidate_datasets(c["staging"]):
         if name in dict(engine.state_records(c)):
             continue
@@ -495,8 +579,11 @@ def run_pass(c, ledger, refresh_url, sidecar_ledger=None):
         promoted = run_ingest(["promote", "--step", name], confirmation="PROMOTE")
         if promoted.returncode == 0:
             log_event(c, "promoted", dataset=key)
+            sidecar_name = name
+            if autobatch_merge_ledger is not None:
+                sidecar_name = merge_promoted_autobatch_dataset(c, autobatch_merge_ledger, name)
             if sidecar_ledger is not None:
-                sidecar_ledger.add(name)
+                sidecar_ledger.add(sidecar_name)
             error = notify_server_refresh(refresh_url)
             if error:
                 log_event(c, "refresh_notify_failed", dataset=key, detail=error)
@@ -532,7 +619,9 @@ def main(argv=None):
 
     ledger = IntegrityLedger(daemon_control_dir(c) / "integrity-failures.json", args.integrity_retry_limit)
     sidecar_ledger = SidecarLedger(daemon_control_dir(c) / "sidecar-pending.json", args.sidecar_retry_limit)
-    log_event(c, "daemon_start", interval_seconds=args.interval)
+    autobatch_tracking = autobatch.TrackingLedger(daemon_control_dir(c) / "autobatch-tracking.json")
+    autobatch_merge_ledger = autobatch.AutobatchMergeLedger(daemon_control_dir(c) / autobatch.MERGE_LEDGER_FILENAME)
+    log_event(c, "daemon_start", interval_seconds=args.interval, autobatch_enabled=autobatch.enabled())
     try:
         while True:
             stop, pause = control_flags(c)
@@ -543,7 +632,8 @@ def main(argv=None):
                 log_event(c, "daemon_paused")
             else:
                 try:
-                    run_pass(c, ledger, args.refresh_url, sidecar_ledger)
+                    run_pass(c, ledger, args.refresh_url, sidecar_ledger,
+                             autobatch_tracking, autobatch_merge_ledger)
                 except engine.Fail as error:
                     log_event(c, "pass_failed", category=error.cat)
                 except Exception as error:  # noqa: BLE001 - top-level supervisor, must never die from a per-pass fault

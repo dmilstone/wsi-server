@@ -37,6 +37,19 @@ class ImageRegistryTests {
         registry.close();
     }
 
+    @Test void finishedArchiveWithOldMtimePublishesOnFirstRefresh() throws Exception {
+        Files.writeString(root.resolve("already.tif"), "old");
+        MutableClock clock = new MutableClock();
+        ImageRegistry registry = registry(true, clock, Duration.ofSeconds(10));
+        Path added = Files.writeString(root.resolve("ingested.tif"), "done");
+        Files.setLastModifiedTime(added, java.nio.file.attribute.FileTime.from(
+                clock.instant().minus(Duration.ofMinutes(5))));
+        registry.refreshNow();
+        assertThat(registry.getImages()).extracting(ImageRegistry.ImageEntry::name)
+                .containsExactly("already.tif", "ingested.tif");
+        registry.close();
+    }
+
     @Test void disappearingPendingFileIsDiscardedAndPublishedAbsenceIsRetained() throws Exception {
         Files.writeString(root.resolve("published.tif"), "x");
         MutableClock clock = new MutableClock();

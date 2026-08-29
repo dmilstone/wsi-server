@@ -9,7 +9,7 @@ else:
     import fcntl
 
 PROD_MARKER='.wsi-environment-production'; MARKER_PREFIX='.wsi-environment-'; CONTROL='.wsi-ingest-control'; VERSION=1
-WSI_EXTS={'.vsi','.svs','.ndpi','.czi','.lif','.ome.tif','.ome.tiff','.tif','.tiff'}
+WSI_EXTS={'.vsi','.svs','.ndpi','.czi','.lif','.ome.tif','.ome.tiff','.tif','.tiff','.mrxs'}
 class Fail(Exception):
     def __init__(self,cat,msg): self.cat=cat; super().__init__(msg)
 

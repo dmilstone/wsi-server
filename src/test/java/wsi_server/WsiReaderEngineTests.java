@@ -22,7 +22,8 @@ class WsiReaderEngineTests {
                 0,
                 0,
                 WsiCatalogScanner.MODALITY_BRIGHTFIELD,
-                WsiCatalogScanner.ENGINE_OPENSLIDE
+                WsiCatalogScanner.ENGINE_OPENSLIDE,
+                false
         );
         WsiReaderEngine engine = new WsiReaderEngineFactory().open(entry);
         assertEquals(WsiCatalogScanner.ENGINE_OPENSLIDE, engine.getMetadata().engine());
@@ -43,7 +44,8 @@ class WsiReaderEngineTests {
                 0,
                 0,
                 WsiCatalogScanner.MODALITY_FLUORESCENCE,
-                WsiCatalogScanner.ENGINE_BIOFORMATS
+                WsiCatalogScanner.ENGINE_BIOFORMATS,
+                false
         );
         WsiReaderEngine engine = new BioFormatsEngine(entry);
         assertEquals(WsiCatalogScanner.ENGINE_BIOFORMATS, engine.getMetadata().engine());

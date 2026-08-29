@@ -37,6 +37,27 @@ class WsiCatalogScannerTests {
     }
 
     @Test
+    void ocrAttemptedReflectsPresenceOfStatusOrOcrStatusKeys() throws Exception {
+        Path attempted = dir.resolve("attempted.svs");
+        Files.writeString(attempted, "x");
+        Files.writeString(dir.resolve("attempted.metadata.json"), """
+                {"clinicalMarker":"","status":"synchronized_via_retro_sweep"}
+                """);
+        assertEquals(true, WsiCatalogScanner.read(attempted).ocrAttempted());
+
+        Path neverScanned = dir.resolve("never-scanned.svs");
+        Files.writeString(neverScanned, "x");
+        assertEquals(false, WsiCatalogScanner.read(neverScanned).ocrAttempted());
+
+        Path noStatusField = dir.resolve("no-status.svs");
+        Files.writeString(noStatusField, "x");
+        Files.writeString(dir.resolve("no-status.metadata.json"), """
+                {"zPlanes":2}
+                """);
+        assertEquals(false, WsiCatalogScanner.read(noStatusField).ocrAttempted());
+    }
+
+    @Test
     void normalizesGapVariantsAndMissingFiles() throws Exception {
         Path slide = dir.resolve("slide.vsi");
         Files.writeString(slide, "x");
@@ -107,6 +128,36 @@ class WsiCatalogScannerTests {
         Files.writeString(dir.resolve("ihc.metadata.json"), """
                 {"modality":"brightfield","channels":3,"rgb":true}
                 """);
+        WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(slide);
+        assertEquals(WsiCatalogScanner.MODALITY_BRIGHTFIELD, inspection.modality());
+        assertEquals(WsiCatalogScanner.ENGINE_OPENSLIDE, inspection.engine());
+    }
+
+    @Test
+    void mrxsSlidedatFluorescenceStaysOnBioFormats() throws Exception {
+        Path slide = dir.resolve("standard.mrxs");
+        Files.writeString(slide, "jpeg-preview");
+        Files.createDirectory(dir.resolve("standard"));
+        Files.writeString(dir.resolve("standard").resolve("Slidedat.ini"), """
+                [GENERAL]
+                SLIDE_TYPE = SLIDE_TYPE_FLUORESCENCE
+                """);
+        assertEquals(true, MrxsSlideInfo.isFluorescence(slide));
+        WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(slide);
+        assertEquals(WsiCatalogScanner.MODALITY_FLUORESCENCE, inspection.modality());
+        assertEquals(WsiCatalogScanner.ENGINE_BIOFORMATS, inspection.engine());
+    }
+
+    @Test
+    void mrxsWithoutFluorescenceSlidedatRoutesBrightfield() throws Exception {
+        Path slide = dir.resolve("he.mrxs");
+        Files.writeString(slide, "jpeg-preview");
+        Files.createDirectory(dir.resolve("he"));
+        Files.writeString(dir.resolve("he").resolve("Slidedat.ini"), """
+                [GENERAL]
+                SLIDE_TYPE = SLIDE_TYPE_BRIGHTFIELD
+                """);
+        assertEquals(false, MrxsSlideInfo.isFluorescence(slide));
         WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(slide);
         assertEquals(WsiCatalogScanner.MODALITY_BRIGHTFIELD, inspection.modality());
         assertEquals(WsiCatalogScanner.ENGINE_OPENSLIDE, inspection.engine());

@@ -41,7 +41,16 @@ public final class WsiCatalogScanner {
             int channels,
             boolean fluorescentArrays,
             boolean rgb,
-            String modalityHint
+            String modalityHint,
+            /**
+             * True when the sidecar itself records that server-side OCR (ops/retro_build_metadata.py,
+             * run manually or via the ingestion daemon) has already run for this slide at least once --
+             * regardless of whether it found a marker. Lets callers (the sidebar's client-side Tesseract
+             * fallback) distinguish "never checked yet, worth trying" from "server already tried and
+             * genuinely found nothing," so a slide with no real label text doesn't pay for a slow,
+             * pointless client-side OCR re-attempt on every single page load.
+             */
+            boolean ocrAttempted
     ) {
         public SidecarMetadata {
             clinicalMarker = clinicalMarker == null ? "" : clinicalMarker;
@@ -49,7 +58,7 @@ public final class WsiCatalogScanner {
         }
 
         public static SidecarMetadata empty() {
-            return new SidecarMetadata("", 0, 0, 0, 0, false, false, "");
+            return new SidecarMetadata("", 0, 0, 0, 0, false, false, "", false);
         }
 
         public boolean lacksFluorescentArrays() {
@@ -79,6 +88,7 @@ public final class WsiCatalogScanner {
             int channels = readPositiveInt(root, "channels", "sizeC", "size_c", "channelCount", "channel_count");
             boolean rgb = readBoolean(root, "rgb", "isRgb", "is_rgb");
             String modalityHint = readModalityHint(root);
+            boolean ocrAttempted = root.has("status") || root.has("ocrStatus");
             return new SidecarMetadata(
                     clinicalMarker,
                     readPositiveInt(root, "zPlanes", "z_planes", "zPlaneCount", "z_plane_count"),
@@ -87,7 +97,8 @@ public final class WsiCatalogScanner {
                     channels,
                     readFluorescentArrays(root, clinicalMarker, channels, modalityHint),
                     rgb,
-                    modalityHint
+                    modalityHint,
+                    ocrAttempted
             );
         } catch (IOException | RuntimeException ignored) {
             return SidecarMetadata.empty();
@@ -110,7 +121,12 @@ public final class WsiCatalogScanner {
     }
 
     public static SlideInspection inspect(Path slidePath, SidecarMetadata sidecar, boolean sidecarPresent) {
-        if (isOpenSlideExtension(slidePath)) {
+        if (MrxsSlideInfo.isFluorescence(slidePath)) {
+            return new SlideInspection(MODALITY_FLUORESCENCE, ENGINE_BIOFORMATS);
+        }
+        // Brightfield .mrxs is a JPEG preview plus a companion pyramid folder.
+        // OpenSlide reads the pyramid; Bio-Formats' JPEG reader only sees the thumbnail.
+        if (MrxsSlideInfo.isMrxs(slidePath) || isOpenSlideExtension(slidePath)) {
             return new SlideInspection(MODALITY_BRIGHTFIELD, ENGINE_OPENSLIDE);
         }
         SidecarMetadata data = sidecar == null ? SidecarMetadata.empty() : sidecar;

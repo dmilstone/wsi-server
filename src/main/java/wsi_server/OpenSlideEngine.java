@@ -1,27 +1,22 @@
 package wsi_server;
 
 /**
- * Native OpenSlide engine for brightfield containers ({@code .svs}, {@code .ndpi}).
- * Preloads the Homebrew dylib so Bio-Formats / JNA can resolve libopenslide.
+ * Catalog / factory marker for brightfield containers ({@code .svs}, {@code .ndpi}).
+ * Tile decode uses {@link OpenSlideFormatReader} via {@link BioFormatsTileService}.
  */
 public class OpenSlideEngine implements WsiReaderEngine {
 
     public static final String ID = WsiCatalogScanner.ENGINE_OPENSLIDE;
-    public static final String HOMEBREW_DYLIB = "/opt/homebrew/lib/libopenslide.0.dylib";
+    public static final String HOMEBREW_DYLIB = "/opt/homebrew/lib/libopenslide.1.dylib";
 
     static {
-        try {
-            System.load(HOMEBREW_DYLIB);
-        } catch (UnsatisfiedLinkError e) {
-            System.err.println("Homebrew path failed, attempting system search fallback: " + e.getMessage());
-            e.printStackTrace();
-        }
+        OpenSlideNative.ensureLoaded();
     }
 
     private final WsiEngineMetadata metadata;
 
     static void preloadNativeLibraries() {
-        // Static initializer force-loads the Homebrew dylib into this JVM.
+        OpenSlideNative.ensureLoaded();
     }
 
     public OpenSlideEngine(ImageRegistry.ImageEntry entry) {

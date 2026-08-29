@@ -51,8 +51,8 @@ assert.match(html, /id="fcp-reset"/);
 assert.match(html, /id="show-advanced-channel-palette"/);
 assert.match(html, /Show Advanced Channel Palette/);
 assert.match(html, /Brightness &amp; Contrast/);
-assert.match(html, /max="58831"/);
-assert.match(html, /58,831/);
+assert.match(html, /max="65535"/);
+assert.match(html, /65,535/);
 assert.match(html, /Channel min/);
 assert.match(html, /Channel max/);
 assert.match(html, /Viewer gamma/);
@@ -303,6 +303,8 @@ assert.match(adapterSource, /static openFloatingChannelPalette\(/);
 assert.match(adapterSource, /static closeFloatingChannelPalette\(/);
 assert.match(adapterSource, /static applyChannelPaletteVisibility\(/);
 assert.match(adapterSource, /static applyViewportTileContrastFilter\(/);
+assert.match(adapterSource, /static applyViewportRgbChannelFilter\(/);
+assert.match(adapterSource, /static rgbCompositeChannelMaps\(/);
 assert.match(adapterSource, /input\.addEventListener\("input", onSlide\)/);
 assert.doesNotMatch(adapterSource, /input\.addEventListener\("change", onSlide\)/);
 assert.match(adapterSource, /viewer\.forceRedraw\(\)/);
@@ -318,8 +320,10 @@ assert.match(adapterSource, /const resizeMode = options\.resize \|\| "both"/);
 assert.match(adapterSource, /setProperty\("resize", resizeMode/);
 assert.match(adapterSource, /viewer\.world\.getItemAt/);
 assert.match(adapterSource, /item\.setOpacity/);
-assert.match(adapterSource, /CHANNEL_LEVEL_MAX = 58831/);
+assert.match(adapterSource, /CHANNEL_LEVEL_MAX = 65535/);
+assert.match(adapterSource, /BIT8_INTENSITY_SCALE = 255/);
 assert.match(adapterSource, /BIT16_INTENSITY_SCALE = 65535/);
+assert.match(adapterSource, /static channelLevelScale\(/);
 assert.match(adapterSource, /static mapChannelWindowToFloatFilter\(/);
 assert.match(adapterSource, /static applyFloat16BitWindowProcessor\(/);
 assert.match(adapterSource, /static renderMeasurementResultsTable\(/);
@@ -451,8 +455,21 @@ vm.runInContext(
 vm.runInContext(`${adapterSource}\nthis.AnnotationAdapter = AnnotationAdapter;`, context);
 const { AnnotationAdapter } = context;
 
-assert.equal(AnnotationAdapter.CHANNEL_LEVEL_MAX, 58831);
+assert.equal(AnnotationAdapter.CHANNEL_LEVEL_MAX, 65535);
+assert.equal(AnnotationAdapter.BIT8_INTENSITY_SCALE, 255);
 assert.equal(AnnotationAdapter.BIT16_INTENSITY_SCALE, 65535);
+assert.equal(AnnotationAdapter.channelLevelScale({ rgb: true }), 255);
+assert.equal(AnnotationAdapter.channelLevelScale({
+    rgb: false,
+    modality: "FLUORESCENCE",
+    intensityMax: 255
+}), 255);
+assert.equal(AnnotationAdapter.channelLevelScale({
+    rgb: false,
+    modality: "FLUORESCENCE",
+    seriesProfiles: [{ index: 0, rgb: false }]
+}), 65535);
+assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 0), false);
 assert.equal(AnnotationAdapter.placeholderPaletteChannels().length, 3);
 assert.equal(AnnotationAdapter.placeholderPaletteChannels()[0].lut, "CYAN");
 assert.equal(AnnotationAdapter.placeholderPaletteChannels()[1].lut, "GREEN");
@@ -490,8 +507,30 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     assert.match(canvas.style.filter, /url\(#fcp-gamma-filter\)/);
     assert.doesNotMatch(canvas.style.filter, /contrast\(/);
     assert.doesNotMatch(canvas.style.filter, /brightness\(/);
-    const mapped = AnnotationAdapter.mapChannelWindowToFloatFilter(1000, 20000, 1.25);
+    const mapped = AnnotationAdapter.mapChannelWindowToFloatFilter(1000, 20000, 1.25, 65535);
     assert.equal(mapped.scale, 65535);
+    const rgbMapped = AnnotationAdapter.mapChannelWindowToFloatFilter(0, 255, 1, 255);
+    assert.equal(rgbMapped.scale, 255);
+    assert.ok(Math.abs(rgbMapped.slope - 1) < 0.01);
+    const rgbMaps = AnnotationAdapter.rgbCompositeChannelMaps([
+        { index: 0, visible: true, black: 0, white: 255, gamma: 1 },
+        { index: 1, visible: false, black: 0, white: 255, gamma: 1 },
+        { index: 2, visible: true, black: 10, white: 210, gamma: 1 }
+    ]);
+    assert.equal(rgbMaps[0].visible, true);
+    assert.equal(rgbMaps[1].visible, false);
+    assert.equal(rgbMaps[2].lo, 10);
+    assert.equal(rgbMaps[2].range, 200);
+    const pixels = new Uint8ClampedArray([80, 90, 100, 255]);
+    const rgbContext = {
+        canvas: { width: 1, height: 1 },
+        getImageData() { return { data: pixels }; },
+        putImageData() {}
+    };
+    assert.equal(AnnotationAdapter.applyRgbCompositeWindowProcessor(rgbContext, rgbMaps), true);
+    assert.equal(pixels[0], 80);
+    assert.equal(pixels[1], 0);
+    assert.ok(pixels[2] > 100);
     assert.ok(mapped.slope > 1);
     assert.equal(typeof mapped.slope, "number");
     assert.equal(Number.isInteger(mapped.slope), false);
@@ -1162,7 +1201,7 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
                     lut: i % 2 ? "GREEN" : "CYAN",
                     visible: i !== 4,
                     black: 0,
-                    white: 58831,
+                    white: 65535,
                     gamma: 1
                 }))
             };

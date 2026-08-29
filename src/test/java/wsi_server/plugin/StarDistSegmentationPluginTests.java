@@ -339,7 +339,8 @@ class StarDistSegmentationPluginTests {
                 "id", "slide.svs", "slide.svs", "", Path.of("slide.svs"),
                 "", 1, 0, 0,
                 WsiCatalogScanner.MODALITY_BRIGHTFIELD,
-                WsiCatalogScanner.ENGINE_OPENSLIDE
+                WsiCatalogScanner.ENGINE_OPENSLIDE,
+                false
         );
         assertEquals(true, StarDistSegmentationPlugin.isBrightfieldEntry(entry, false));
         assertEquals(StarDistTensorEngine.HE_WEIGHTS,
@@ -354,7 +355,8 @@ class StarDistSegmentationPluginTests {
                 "id", "slide.tif", "slide.tif", "", Path.of("slide.tif"),
                 "", 1, 0, 0,
                 WsiCatalogScanner.MODALITY_FLUORESCENCE,
-                WsiCatalogScanner.ENGINE_BIOFORMATS
+                WsiCatalogScanner.ENGINE_BIOFORMATS,
+                false
         );
         assertEquals(false, StarDistSegmentationPlugin.resolveBrightfield(null, fluoEntry, false),
                 "no override must fall back to metadata-driven auto-detection");
@@ -367,7 +369,8 @@ class StarDistSegmentationPluginTests {
                 "id2", "slide.svs", "slide.svs", "", Path.of("slide.svs"),
                 "", 1, 0, 0,
                 WsiCatalogScanner.MODALITY_BRIGHTFIELD,
-                WsiCatalogScanner.ENGINE_OPENSLIDE
+                WsiCatalogScanner.ENGINE_OPENSLIDE,
+                false
         );
         assertEquals(false, StarDistSegmentationPlugin.resolveBrightfield("fluorescence", brightfieldEntry, false),
                 "forcing \"fluorescence\" must override brightfield metadata");

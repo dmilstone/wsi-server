@@ -14,8 +14,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ImageRegistry {
     private static final Logger LOGGER = LoggerFactory.getLogger(ImageRegistry.class);
     private static final List<String> SUPPORTED_SUFFIXES = List.of(
-            ".ome.tif", ".ome.tiff", ".tif", ".tiff", ".czi", ".nd2", ".lif", ".vsi", ".svs", ".ndpi");
+            ".ome.tif", ".ome.tiff", ".tif", ".tiff", ".czi", ".nd2", ".lif", ".vsi", ".svs", ".ndpi", ".mrxs");
 
     private final Path rootDirectory;
     private final boolean recursive;
@@ -34,7 +35,8 @@ public class ImageRegistry {
     private final AtomicReference<Snapshot> snapshot;
     private final Map<String, Observation> pending = new HashMap<>();
     private final AtomicBoolean scanning = new AtomicBoolean();
-    private final ExecutorService scanner = Executors.newSingleThreadExecutor(r -> {
+    private final AtomicBoolean followUpScheduled = new AtomicBoolean();
+    private final ScheduledExecutorService scanner = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "wsi-image-discovery");
         thread.setDaemon(true);
         return thread;
@@ -75,6 +77,18 @@ public class ImageRegistry {
         snapshot = new AtomicReference<>(makeSnapshot(initial.values()));
         if (snapshot.get().ordered().isEmpty()) throw new IllegalStateException("No supported image files were found.");
         LOGGER.info("Image discovery completed; added={}, unavailable-or-skipped={}, elapsed-ms={}", initial.size(), 0, 0);
+        startPeriodicScan();
+    }
+
+    /**
+     * Scan the image root on a timer so ingest does not depend on a browser
+     * tab or a CSRF-authenticated POST. Interval {@code Duration.ZERO} (tests)
+     * leaves discovery request-driven only.
+     */
+    private void startPeriodicScan() {
+        if (refreshInterval.isZero()) return;
+        long periodMs = Math.max(1L, refreshInterval.toMillis());
+        scanner.scheduleAtFixedRate(() -> requestRefresh(false), periodMs, periodMs, TimeUnit.MILLISECONDS);
     }
 
     private static Duration requireNonNegative(Duration value, String name) {
@@ -106,7 +120,8 @@ public class ImageRegistry {
                     && sidecar.depth() == entry.depth()
                     && sidecar.zLayers() == entry.zLayers()
                     && inspection.modality().equals(entry.modality())
-                    && inspection.engine().equals(entry.engine())) {
+                    && inspection.engine().equals(entry.engine())
+                    && sidecar.ocrAttempted() == entry.ocrAttempted()) {
                 continue;
             }
             relative.put(entry.relativePath(), new ImageEntry(
@@ -120,7 +135,8 @@ public class ImageRegistry {
                     sidecar.depth(),
                     sidecar.zLayers(),
                     inspection.modality(),
-                    inspection.engine()));
+                    inspection.engine(),
+                    sidecar.ocrAttempted()));
             changed = true;
         }
         if (changed) snapshot.set(makeSnapshotEntries(relative.values()));
@@ -168,7 +184,11 @@ public class ImageRegistry {
             for (Candidate candidate : found.values()) {
                 if (published.containsKey(candidate.relativePath())) continue;
                 Observation old = pending.get(candidate.relativePath());
-                if (old != null && old.matches(candidate) && !now.isBefore(old.firstSeen().plus(stabilityWindow))) {
+                boolean observedStable = old != null && old.matches(candidate)
+                        && !now.isBefore(old.firstSeen().plus(stabilityWindow));
+                boolean copyAlreadyQuiesced = !now.isBefore(
+                        Instant.ofEpochMilli(candidate.modified()).plus(stabilityWindow));
+                if (observedStable || copyAlreadyQuiesced) {
                     published.put(candidate.relativePath(), candidate.entry());
                     pending.remove(candidate.relativePath());
                     added++;
@@ -183,11 +203,28 @@ public class ImageRegistry {
             status = new RefreshStatus(false, added, pending.size(), null);
             LOGGER.info("Image discovery refresh completed; added={}, unavailable-or-skipped={}, elapsed-ms={}",
                     added, pending.size(), elapsedMillis(started));
+            schedulePendingFollowUp();
         } catch (Exception exception) {
             status = new RefreshStatus(false, 0, pending.size(), exception.getClass().getSimpleName());
             LOGGER.warn("Image discovery refresh failed; category={}, elapsed-ms={}",
                     exception.getClass().getSimpleName(), elapsedMillis(started));
         }
+    }
+
+    /**
+     * Ingest of already-finished archives (mtime older than the stability
+     * window) publishes on the first scan. A still-growing copy stays pending;
+     * schedule one follow-up so the browser does not have to wait for the
+     * 30s list-poll throttle or a hard refresh.
+     */
+    private void schedulePendingFollowUp() {
+        if (pending.isEmpty() || stabilityWindow.isZero() || stabilityWindow.isNegative()) return;
+        if (!followUpScheduled.compareAndSet(false, true)) return;
+        long delayMs = Math.max(1L, stabilityWindow.toMillis());
+        scanner.schedule(() -> {
+            followUpScheduled.set(false);
+            requestRefresh(true);
+        }, delayMs, TimeUnit.MILLISECONDS);
     }
 
     private static long elapsedMillis(long started) { return (System.nanoTime() - started) / 1_000_000; }
@@ -258,7 +295,8 @@ public class ImageRegistry {
                 sidecar.depth(),
                 sidecar.zLayers(),
                 inspection.modality(),
-                inspection.engine()
+                inspection.engine(),
+                sidecar.ocrAttempted()
         );
     }
 
@@ -295,7 +333,7 @@ public class ImageRegistry {
 
     public record ImageEntry(String id, String name, String relativePath, String folder, Path path,
                              String clinicalMarker, int zPlanes, int depth, int zLayers,
-                             String modality, String engine) {
+                             String modality, String engine, boolean ocrAttempted) {
         public ImageEntry {
             clinicalMarker = clinicalMarker == null ? "" : clinicalMarker;
             modality = modality == null || modality.isBlank()

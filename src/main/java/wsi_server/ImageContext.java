@@ -36,6 +36,14 @@ final class ImageContext implements AutoCloseable {
     private final int resolutionCount;
     private final boolean littleEndian;
     private final boolean rgb;
+    private final boolean eightBit;
+    /**
+     * True when a fluorescence slide was opened as a packed 8-bit RGB JPEG
+     * (typical for 3DHistech {@code .mrxs} files, whose container is itself a
+     * preview JPEG). The real IF data is grayscale; expose one luminance
+     * channel instead of fake R/G/B planes.
+     */
+    private final boolean packedRgbFluorescence;
     private final String[] channelLabels;
     private volatile DisplayWindow[] automaticWindows;
 
@@ -53,18 +61,23 @@ final class ImageContext implements AutoCloseable {
             }
             timing.measureVoid("metadata", "series_select", imageId, () -> reader.setSeries(series));
             reader.setResolution(0);
-            this.rgb = reader.getPixelType() == FormatTools.UINT8 && (reader.isRGB() || reader.getSizeC() >= 3);
-            validatePixelType(reader);
+            boolean fluorescence = WsiCatalogScanner.MODALITY_FLUORESCENCE.equalsIgnoreCase(entry.modality())
+                    || MrxsSlideInfo.isFluorescence(entry.path());
+            this.rgb = classifyRgb(fluorescence, reader.getPixelType(), reader.isRGB(), reader.getSizeC());
+            this.eightBit = reader.getPixelType() == FormatTools.UINT8;
+            this.packedRgbFluorescence = !this.rgb && MrxsSlideInfo.isFluorescence(entry.path())
+                    && reader.isRGB() && reader.getSizeC() >= 3;
+            validatePixelType(reader, fluorescence);
             this.sizeX = reader.getSizeX();
             this.sizeY = reader.getSizeY();
-            this.sizeC = reader.getSizeC();
+            this.sizeC = this.packedRgbFluorescence ? 1 : reader.getSizeC();
             this.sizeZ = reader.getSizeZ();
             this.resolutionCount = reader.getResolutionCount();
             this.littleEndian = reader.isLittleEndian();
             this.channelLabels = timing.measure("metadata", "metadata_extract", imageId,
                     () -> initializeChannelLabels(reader));
             DisplayWindow[] windows = new DisplayWindow[this.sizeC];
-            if (rgb) {
+            if (rgb || eightBit) {
                 for (int channel = 0; channel < windows.length; channel++) {
                     windows[channel] = new DisplayWindow(0, 255);
                 }
@@ -119,8 +132,12 @@ final class ImageContext implements AutoCloseable {
 
     DisplayModel newDefaultDisplayModel() {
         DisplayModel model = new DisplayModel(sizeC);
-        LutType[] defaults = {LutType.BLUE, LutType.GREEN, LutType.RED,
-                LutType.MAGENTA, LutType.CYAN, LutType.GRAY};
+        LutType[] defaults = rgb
+                ? new LutType[] {LutType.RED, LutType.GREEN, LutType.BLUE}
+                : sizeC == 1
+                ? new LutType[] {LutType.GRAY}
+                : new LutType[] {LutType.BLUE, LutType.GREEN, LutType.RED,
+                        LutType.MAGENTA, LutType.CYAN, LutType.GRAY};
         DisplayWindow[] windows = automaticWindows;
         for (int channel = 0; channel < model.getChannelCount(); channel++) {
             var settings = model.getChannel(channel);
@@ -137,17 +154,41 @@ final class ImageContext implements AutoCloseable {
 
     boolean isRgb() { return rgb; }
 
+    boolean isEightBit() { return eightBit; }
+
+    boolean isPackedRgbFluorescence() { return packedRgbFluorescence; }
+
+    int intensityMax() { return rgb || eightBit ? 255 : 65535; }
+
+    /**
+     * H&E / IHC 8-bit RGB only. Catalogued fluorescence is never RGB, even when
+     * Bio-Formats opened a JPEG preview ({@code .mrxs} files are often JFIF).
+     */
+    static boolean classifyRgb(boolean fluorescence, int pixelType, boolean readerRgb, int sizeC) {
+        if (fluorescence) return false;
+        return pixelType == FormatTools.UINT8 && (readerRgb || sizeC >= 3);
+    }
+
     String channelLabel(int channel) {
         if (channel < 0 || channel >= channelLabels.length) return "Channel " + channel;
         return channelLabels[channel];
     }
 
     private String[] initializeChannelLabels(IFormatReader reader) {
-        String[] labels = new String[reader.getSizeC()];
+        String[] labels = new String[sizeC];
         for (int channel = 0; channel < labels.length; channel++) {
             String base = "Channel " + channel;
+            if (packedRgbFluorescence) {
+                labels[channel] = "Fluorescence";
+                continue;
+            }
             if (rgb) {
-                labels[channel] = base;
+                labels[channel] = switch (channel) {
+                    case 0 -> "Red";
+                    case 1 -> "Green";
+                    case 2 -> "Blue";
+                    default -> base;
+                };
                 continue;
             }
             String designation = acquisitionDesignation(reader, channel);
@@ -364,12 +405,13 @@ final class ImageContext implements AutoCloseable {
         return endian ? first | (second << 8) : (first << 8) | second;
     }
 
-    private void validatePixelType(IFormatReader reader) {
+    private void validatePixelType(IFormatReader reader, boolean fluorescence) {
         if (rgb) return;
-        if (reader.getPixelType() != FormatTools.UINT16) {
-            throw new IllegalStateException("Supported primary images are 8-bit RGB or UINT16 fluorescence. Received: "
-                    + FormatTools.getPixelTypeString(reader.getPixelType()));
-        }
+        int type = reader.getPixelType();
+        if (type == FormatTools.UINT16) return;
+        if (fluorescence && type == FormatTools.UINT8) return;
+        throw new IllegalStateException("Supported primary images are 8-bit RGB, 8-bit fluorescence, or UINT16 fluorescence. Received: "
+                + FormatTools.getPixelTypeString(type));
     }
 
     @Override

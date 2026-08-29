@@ -220,6 +220,42 @@ class DaemonTests(unittest.TestCase):
         ok, detail = wd.probe_integrity(d)
         self.assertFalse(ok)
 
+    # --- BigTIFF (large modern .svs/.ndpi routinely exceed classic TIFF's
+    #     4GiB-addressable, 4-byte offset field, so they are written with a
+    #     43 ("+") magic number and an 8-byte offset instead) --------------
+
+    def test_valid_bigtiff_header_passes_probe(self):
+        d = self.st / 'case'; d.mkdir()
+        body = b'not real pixel data but big enough' * 10
+        (d / 'slide.svs').write_bytes(b'II+\x00' + (8).to_bytes(4, 'little') + (16).to_bytes(8, 'little') + body)
+        ok, detail = wd.probe_tiff_integrity(d / 'slide.svs')
+        self.assertTrue(ok, detail)
+
+    def test_bigtiff_big_endian_header_passes_probe(self):
+        d = self.st / 'case'; d.mkdir()
+        body = b'not real pixel data but big enough' * 10
+        (d / 'slide.ndpi').write_bytes(b'MM\x00+' + (8).to_bytes(4, 'big') + (16).to_bytes(8, 'big') + body)
+        ok, detail = wd.probe_tiff_integrity(d / 'slide.ndpi')
+        self.assertTrue(ok, detail)
+
+    def test_truncated_bigtiff_header_fails_probe(self):
+        d = self.st / 'case'; d.mkdir()
+        (d / 'slide.svs').write_bytes(b'II+\x00' + (8).to_bytes(4, 'little') + b'short')
+        ok, detail = wd.probe_tiff_integrity(d / 'slide.svs')
+        self.assertFalse(ok)
+        self.assertIn('BigTIFF header', detail)
+
+    def test_bigtiff_dataset_promotes_through_full_pass(self):
+        d = self.st / 'case'; d.mkdir()
+        body = b'not real pixel data but big enough' * 10
+        (d / 'slide.svs').write_bytes(b'II+\x00' + (8).to_bytes(4, 'little') + (16).to_bytes(8, 'little') + body)
+        self.seal('case')
+        c = engine.cfg()
+        fake = fake_run_ingest({'observe': Result(0), 'promote-dry-run': Result(0), 'promote-step': Result(0)})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake):
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '')
+        self.assertIn('promote-step', [action_of(a) for a, _ in fake.calls])
+
     # --- sidecar OCR (post-promotion clinical-marker automation) --------------
 
     def test_promotion_queues_dataset_for_sidecar_ocr(self):
@@ -352,6 +388,74 @@ class DaemonTests(unittest.TestCase):
         raw_log_text = wd.log_path(c).read_text()
         self.assertNotIn(identifying_name, raw_log_text)
         self.assertIn(wd.short_hash(identifying_name), raw_log_text)
+
+    # --- autobatch wiring (opt-in hot-folder front end) ------------------------
+
+    def test_run_pass_skips_autobatch_scan_when_disabled(self):
+        c = engine.cfg()
+        fake = fake_run_ingest({})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.autobatch.scan_and_relocate') as scan:
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '',
+                        autobatch_tracking=wd.autobatch.TrackingLedger(self.st / 'tracking.json'),
+                        autobatch_merge_ledger=wd.autobatch.AutobatchMergeLedger(self.st / 'merge.json'))
+        scan.assert_not_called()
+
+    def test_run_pass_calls_autobatch_scan_when_enabled(self):
+        os.environ['WSI_INGEST_AUTOBATCH_ENABLED'] = '1'
+        c = engine.cfg()
+        fake = fake_run_ingest({})
+        tracking = wd.autobatch.TrackingLedger(self.st / 'tracking.json')
+        merge_ledger = wd.autobatch.AutobatchMergeLedger(self.st / 'merge.json')
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.autobatch.scan_and_relocate') as scan:
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '',
+                        autobatch_tracking=tracking, autobatch_merge_ledger=merge_ledger)
+        scan.assert_called_once()
+        args, kwargs = scan.call_args
+        self.assertEqual(args[0], c)
+        self.assertEqual(args[2], tracking)
+        self.assertEqual(args[3], merge_ledger)
+
+    def test_run_pass_merges_autobatch_dataset_before_queuing_sidecar(self):
+        self.make_dataset('slide'); self.seal('slide')
+        c = engine.cfg()
+        (self.pr / 'slide').mkdir()  # what a real 'promote' would have produced
+        merge_ledger = wd.autobatch.AutobatchMergeLedger(self.st / 'merge.json')
+        merge_ledger.record('slide', '20260828')
+        sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 5)
+        fake = fake_run_ingest({'observe': Result(0), 'promote-dry-run': Result(0), 'promote-step': Result(0)})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake):
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '', sidecar_ledger,
+                        autobatch_tracking=wd.autobatch.TrackingLedger(self.st / 'tracking.json'),
+                        autobatch_merge_ledger=merge_ledger)
+        # merged into the origin folder name, not left as the temp wrapper name
+        self.assertEqual(sidecar_ledger.pending_names(), ['20260828'])
+        self.assertEqual(merge_ledger.pending(), {})
+
+    def test_end_to_end_real_subprocess_autobatch_hot_folder(self):
+        os.environ.update(dict(
+            WSI_INGEST_AUTOBATCH_ENABLED='1',
+            WSI_INGEST_REQUIRED_OBSERVATIONS='2', WSI_INGEST_OBSERVATION_INTERVAL_SECONDS='1',
+            WSI_INGEST_MIN_QUIET_SECONDS='1',
+        ))
+        hot = self.st / '20260828'
+        hot.mkdir()
+        (hot / wd.autobatch.AUTOBATCH_SENTINEL).write_text('')
+        valid_tiff = b"II*\x00" + (8).to_bytes(4, 'little') + b"\x00" * 92
+        (hot / 'slide.svs').write_bytes(valid_tiff)
+
+        self.assertEqual(wd.main(['--once']), 0)  # autobatch: 1st observation of the loose file
+        time.sleep(1.1)
+        self.assertEqual(wd.main(['--once']), 0)  # autobatch: relocates into staging/slide/, then seals it
+        time.sleep(1.1)
+        self.assertEqual(wd.main(['--once']), 0)  # 1st wsi_ingest.py observation
+        time.sleep(1.1)
+        self.assertEqual(wd.main(['--once']), 0)  # 2nd observation + promote + autobatch merge
+
+        self.assertTrue((self.pr / '20260828' / 'slide.svs').is_file())
+        self.assertFalse((self.st / 'slide').exists())
+        self.assertTrue((hot / wd.autobatch.AUTOBATCH_SENTINEL).exists())  # hot folder itself stays put, reusable
 
     # --- end-to-end smoke test with real subprocesses --------------------------
 

@@ -170,12 +170,12 @@ assert.equal(AnnotationAdapter.ihcRgbFromNormalized(1), "rgb(128, 0, 0)");
 assert.equal(AnnotationAdapter.isBrightfieldSlide({ modality: "BRIGHTFIELD" }), true);
 assert.equal(AnnotationAdapter.isBrightfieldSlide({ engine: "OPENSLIDE" }), true);
 assert.equal(AnnotationAdapter.isBrightfieldSlide({ modality: "FLUORESCENCE" }), false);
-assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 2), true);
+assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 2), false);
 assert.equal(AnnotationAdapter.isRgbSeriesView({
     modality: "FLUORESCENCE",
     series: 2,
     seriesProfiles: [{ index: 2, rgb: true, isDiagnosticSpecimen: true }]
-}, 2), true);
+}, 2), false);
 assert.equal(AnnotationAdapter.isRgbSeriesView({
     modality: "FLUORESCENCE",
     seriesProfiles: [{ index: 2, rgb: false, isDiagnosticSpecimen: true }]

@@ -46,6 +46,20 @@ test("manual refresh posts, renders additions, and reports concise status", asyn
   assert.equal(messages.at(-1), "1 new image available");
 });
 
+test("automatic refresh applies the current list without waiting for a long scan", async () => {
+  const applied = [];
+  const discovery = new LiveImageDiscovery({document: documentStub(),
+    request: async (url) => {
+      if (url.endsWith("discovery")) return {running: true};
+      if (url === "/api/images") return {images: [{id: "a"}]};
+      return {};
+    },
+    applyImages: images => { applied.push(images); return images.length; },
+    status: () => {}});
+  assert.equal(await discovery.refresh(false), true);
+  assert.deepEqual(applied, [[{id: "a"}]]);
+});
+
 test("automatic refresh is bounded, pauses hidden, resumes, and cleans up", async () => {
   const doc = documentStub(); let tick, cleared = false, requests = 0;
   const discovery = new LiveImageDiscovery({document:doc, intervalMs:1,
@@ -85,14 +99,15 @@ async function pump(discovery, tick) {
   await waitIdle(discovery);
 }
 
-test("three consecutive connection refusals halt the poll interval", async () => {
+test("three consecutive connection refusals back off without stopping the timer", async () => {
   const doc = documentStub();
   let tick;
-  let cleared = false;
+  let now = 1_000;
   let requests = 0;
   const discovery = new LiveImageDiscovery({document:doc, intervalMs:1,
+    nowFn: () => now,
     setIntervalFn: fn => { tick = fn; return 11; },
-    clearIntervalFn: id => { cleared = id === 11; },
+    clearIntervalFn: () => { throw new Error("timer should stay running"); },
     request: async () => { requests++; throw new TypeError("Failed to fetch"); },
     applyImages: () => 0, status: () => {}});
   discovery.start();
@@ -100,10 +115,12 @@ test("three consecutive connection refusals halt the poll interval", async () =>
   await pump(discovery, tick);
   await pump(discovery, tick);
   assert.equal(requests, 3);
-  assert.equal(cleared, true);
   assert.equal(discovery.halted, true);
   await pump(discovery, tick);
   assert.equal(requests, 3);
+  now += 60_001;
+  await pump(discovery, tick);
+  assert.equal(requests, 4);
 });
 
 test("success resets refusal count so later refusals do not halt early", async () => {
@@ -132,7 +149,7 @@ test("success resets refusal count so later refusals do not halt early", async (
   assert.equal(discovery.halted, false);
 });
 
-test("manual refresh after halt restarts polling", async () => {
+test("manual refresh after backoff clears it and polls again", async () => {
   const doc = documentStub();
   let tick;
   let intervalId = 0;
@@ -151,9 +168,36 @@ test("manual refresh after halt restarts polling", async () => {
   await pump(discovery, tick);
   await pump(discovery, tick);
   assert.equal(discovery.halted, true);
-  assert.equal(liveTimer, null);
+  assert.notEqual(liveTimer, null);
   refuse = false;
   assert.equal(await discovery.refresh(true), true);
   assert.equal(discovery.halted, false);
   assert.notEqual(liveTimer, null);
+});
+
+test("showing the tab again retries immediately after backoff", async () => {
+  const doc = documentStub();
+  let tick;
+  let now = 1_000;
+  let requests = 0;
+  const discovery = new LiveImageDiscovery({document:doc, intervalMs:1,
+    nowFn: () => now,
+    setIntervalFn: fn => { tick = fn; return 15; },
+    clearIntervalFn: () => {},
+    request: async url => {
+      requests++;
+      if (requests <= 3) throw new TypeError("Failed to fetch");
+      return url.endsWith("discovery") ? {running:false} : {images:[]};
+    },
+    applyImages: () => 0, status: () => {}});
+  discovery.start();
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  await pump(discovery, tick);
+  assert.equal(discovery.halted, true);
+  doc.listeners.get("visibilitychange")();
+  await flush();
+  await waitIdle(discovery);
+  assert.equal(discovery.halted, false);
+  assert.ok(requests > 3);
 });

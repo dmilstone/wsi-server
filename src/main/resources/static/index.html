@@ -3533,17 +3533,17 @@
                 </div>
                 <div class="fcp-scale">
                     <span id="fcp-scale-min">0</span>
-                    <span id="fcp-scale-max">58,831</span>
+                    <span id="fcp-scale-max">65,535</span>
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-min">Channel min</label>
-                    <input id="fcp-min" type="range" min="0" max="58831" step="1" value="0" aria-label="Channel min">
+                    <input id="fcp-min" type="range" min="0" max="65535" step="1" value="0" aria-label="Channel min">
                     <output id="fcp-min-value" for="fcp-min">0</output>
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-max">Channel max</label>
-                    <input id="fcp-max" type="range" min="0" max="58831" step="1" value="58831" aria-label="Channel max">
-                    <output id="fcp-max-value" for="fcp-max">58,831</output>
+                    <input id="fcp-max" type="range" min="0" max="65535" step="1" value="65535" aria-label="Channel max">
+                    <output id="fcp-max-value" for="fcp-max">65,535</output>
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-gamma">Viewer gamma</label>
@@ -4171,7 +4171,11 @@
                 document,
                 request,
                 applyImages: refreshRenderedImages,
-                status: message => document.getElementById("discovery-status").textContent = message
+                status: message => {
+                    const el = document.getElementById("discovery-status");
+                    if (el) el.textContent = message;
+                },
+                intervalMs: 10000
             });
             liveDiscovery.start();
         } catch (error) {
@@ -4219,7 +4223,10 @@
         onSelect: (image) => selectImage(image),
         escapeHtml,
         storagePrefix: STORAGE_PREFIX,
-        onBeforeFilter: () => applyBlankWorkspaceState({skipViewerWipe: true})
+        onBeforeFilter: () => applyBlankWorkspaceState({skipViewerWipe: true}),
+        onAfterFilter: () => {
+            if (liveDiscovery) void liveDiscovery.refresh(false);
+        }
     });
 
     function applyBlankWorkspaceState({skipViewerWipe = false, statusText} = {}) {
@@ -4262,7 +4269,8 @@
 
     function refreshRenderedImages(images) {
         const next = Array.isArray(images) ? images.slice() : [];
-        const previousIds = new Set(Array.from(imageListElement.querySelectorAll(".image-button"), button => button.dataset.imageId));
+        const previousIds = new Set((catalogImages || []).map(image => image.id)
+            .concat(Array.from(imageListElement.querySelectorAll(".image-button"), button => button.dataset.imageId)));
         const sameRows = previousIds.size > 0
             && previousIds.size === next.length
             && next.every(image => previousIds.has(image.id));
@@ -4315,7 +4323,9 @@
             AnnotationAdapter.scheduleSidebarClinicalOcrBatch(imageListElement, catalogImages);
         }
     });
-    window.addEventListener("pagehide", () => { if (liveDiscovery) liveDiscovery.stop(); }, {once:true});
+    window.addEventListener("pageshow", () => {
+        if (liveDiscovery) liveDiscovery.start();
+    });
 
     async function selectImage(image) {
         // Force reset and hide the floating Z-stack controller before evaluating the next image properties
@@ -4743,13 +4753,14 @@
         const channelIndex = Number(channel?.index);
         const rgbView = AnnotationAdapter.isRgbSeriesView(metadata, series);
         const useChannel = !rgbView && Number.isFinite(channelIndex);
-        return {
+        const maxLevel = metadata.resolutionCount - 1;
+        const source = {
             width: metadata.width,
             height: metadata.height,
             tileSize: metadata.tileSize,
             tileOverlap: 0,
             minLevel: 0,
-            maxLevel: metadata.resolutionCount - 1,
+            maxLevel,
             zIndexProperty: planeZ,
             zIndices: planeZ,
             series,
@@ -4764,6 +4775,29 @@
                     + `?revision=${revision}&z=${planeZ}&series=${series}`;
             }
         };
+        // Whole-slide pyramids routinely downsample by an arbitrary factor per level
+        // (Aperio SVS is commonly 4x per level, not the 2x OpenSeadragon assumes by
+        // default for a plain width/height/maxLevel tile source). Left uncorrected,
+        // OSD computes each level's tile grid from the wrong assumed pixel size and
+        // requests tiles for pixel regions that don't exist at that resolution -- the
+        // server can only answer those with an empty/broken image, so the browser
+        // logs "Image load aborted" and retries indefinitely, which is what made the
+        // low-power view (the levels furthest from this mismatch) feel "extremely
+        // slow". `metadata.levelDimensions` reports the *real* per-level pixel size
+        // straight from the Bio-Formats reader, so override the scale OSD assumes
+        // for every level -- `getLevelScale` is what every other OSD tile-grid
+        // calculation (getNumTiles, getTileBounds, getTileAtPoint) derives from.
+        const levelDimensions = Array.isArray(metadata.levelDimensions) ? metadata.levelDimensions : [];
+        if (levelDimensions.length && metadata.width > 0) {
+            const scaleByLevel = new Map(
+                levelDimensions.map(entry => [entry.level, entry.width / metadata.width])
+            );
+            source.getLevelScale = function (level) {
+                const scale = scaleByLevel.get(level);
+                return Number.isFinite(scale) && scale > 0 ? scale : Math.pow(2, level - maxLevel);
+            };
+        }
+        return source;
     }
 
     function openViewer(preserveViewport = false) {
@@ -4782,6 +4816,20 @@
                 showNavigationControl: false,
                 showNavigator: true,
                 navigatorPosition: "BOTTOM_RIGHT",
+                // OSD's default navigatorSizeRatio (0.2, applied against the
+                // main viewport's own pixel size) renders a thumbnail too
+                // small to usefully see where the current viewport sits on a
+                // large slide. A fixed size (rather than a bigger ratio) keeps
+                // it a predictable, comfortable size regardless of window
+                // size. Whole slides are almost always noticeably wider than
+                // tall (a mounted tissue section scanned in landscape), so a
+                // square box wastes most of its area on the letterbox bars
+                // above/below the image -- shaping the box itself like a
+                // typical slide (roughly 16:9) keeps the visible minimap
+                // image large, not just the box around it. A differently
+                // shaped slide is still letterboxed to fit, never cropped.
+                navigatorHeight: "190px",
+                navigatorWidth: "340px",
                 animationTime: 0,
                 springStiffness: 100,
                 blendTime: 0,
@@ -4890,6 +4938,7 @@
             preserveViewport: preserveViewport ? { bounds, zoom } : null,
             onReady: () => {
                 AnnotationAdapter.clearViewportTileContrastFilter(viewer);
+                if (rgbView) AnnotationAdapter.applyViewportRgbChannelFilter(viewer);
                 AnnotationAdapter.applyZStackLayerOpacities(viewer, currentZ);
                 AnnotationAdapter.schedulePrefetchAdjacentZPlaneTiles({
                     viewer,

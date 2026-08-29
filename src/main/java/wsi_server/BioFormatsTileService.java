@@ -4,8 +4,6 @@ import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpSession;
 import loci.formats.IFormatReader;
 import loci.formats.FormatTools;
-import loci.formats.ImageReader;
-import loci.formats.MetadataTools;
 import loci.formats.gui.BufferedImageReader;
 import loci.formats.meta.MetadataRetrieve;
 import ome.units.UNITS;
@@ -24,6 +22,7 @@ import wsi_server.api.ImageSeriesProfile;
 import wsi_server.api.ImageSummary;
 import wsi_server.api.PixelBlockResponse;
 import wsi_server.api.PixelSampleResponse;
+import wsi_server.api.PyramidLevelDimensions;
 import wsi_server.display.LinearWindowPixelMapper;
 import wsi_server.display.PixelMapper;
 import wsi_server.model.ChannelDisplaySettings;
@@ -107,7 +106,8 @@ public class BioFormatsTileService {
                         entry.depth(),
                         entry.zLayers(),
                         entry.modality(),
-                        entry.engine()))
+                        entry.engine(),
+                        entry.ocrAttempted()))
                 .toList();
         return new ImageListResponse(registry.getRootDirectory().toString(), images);
     }
@@ -127,12 +127,14 @@ public class BioFormatsTileService {
             reader.setResolution(0);
             Double micronsPerPixelX = physicalSizeMicrons(reader, true);
             Double micronsPerPixelY = physicalSizeMicrons(reader, false);
+            List<PyramidLevelDimensions> levelDimensions = pyramidLevelDimensions(reader);
             return new ImageMetadataResponse(imageId, context.entry().relativePath(),
                     reader.getSizeX(), reader.getSizeY(), reader.getSizeC(),
                     reader.getResolutionCount(), ImageContext.TILE_SIZE, state.revision(),
                     micronsPerPixelX, micronsPerPixelY, zPlaneCount(reader.getSizeZ()),
-                    series, List.copyOf(profiles),
-                    context.entry().modality(), context.entry().engine(), context.isRgb());
+                    series, List.copyOf(profiles), levelDimensions,
+                    context.entry().modality(), context.entry().engine(), context.isRgb(),
+                    context.intensityMax());
         });
     }
 
@@ -200,10 +202,8 @@ public class BioFormatsTileService {
     private List<AssociatedImageSeriesDto> getAssociatedImageSeriesMeasured(String imageId) throws Exception {
         ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
         BufferedImageReader reader = timing.measure("associated_catalog", "reader_create", imageId,
-                this::createAssociatedImageReader);
+                () -> openAssociatedImageReader(entry.path()));
         try {
-            timing.measureVoid("associated_catalog", "set_id_metadata_parse", imageId,
-                    () -> reader.setId(entry.path().toString()));
             MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
                     ? retrieve : null;
             AssociatedImageSelection associated = timing.measure("associated_catalog", "series_search", imageId,
@@ -275,10 +275,8 @@ public class BioFormatsTileService {
             if (associatedSatisfies(cached, needLabel, needMacro)) return cached;
             ImageRegistry.ImageEntry entry = registry.getRequired(imageId);
             BufferedImageReader reader = timing.measure("embedded_bundle", "reader_create", imageId,
-                    this::createAssociatedImageReader);
+                    () -> openAssociatedImageReader(entry.path()));
             try {
-                timing.measureVoid("embedded_bundle", "set_id_metadata_parse", imageId,
-                        () -> reader.setId(entry.path().toString()));
                 byte[] label = cached != null ? cached.label() : null;
                 byte[] macro = cached != null ? cached.macro() : null;
                 AssociatedImageSelection selection = AssociatedImageSelection.select(List.of());
@@ -337,15 +335,22 @@ public class BioFormatsTileService {
 
     private record AssociatedImages(byte[] label, byte[] macro) { }
 
-    private BufferedImageReader createAssociatedImageReader() {
-        ImageReader baseReader = new ImageReader();
-        baseReader.setFlattenedResolutions(false);
-        baseReader.setMetadataStore(MetadataTools.createOMEXMLMetadata());
-        return new BufferedImageReader(baseReader);
+    private BufferedImageReader openAssociatedImageReader(java.nio.file.Path path) throws Exception {
+        return new BufferedImageReader(BioFormatsReaderPool.openDefault(path));
     }
 
-    private AssociatedImageSelection selectAssociatedImages(BufferedImageReader reader, MetadataRetrieve metadata) {
-        int upper = Math.min(ImageContext.FLUORESCENCE_SERIES, reader.getSeriesCount());
+    static AssociatedImageSelection selectAssociatedImages(BufferedImageReader reader, MetadataRetrieve metadata) {
+        // Scan every series Bio-Formats reports, not just the first couple: a
+        // slide's label/macro associated images are ordinary extra series
+        // that can land at any index (e.g. baseline=0, label=1, macro=2 is a
+        // common Aperio .svs layout), so capping this at
+        // ImageContext.FLUORESCENCE_SERIES -- a constant that means something
+        // else entirely elsewhere in this class (a specific series *index* to
+        // read from, not a series *count* to scan) -- silently hid any
+        // macro/label series sitting beyond that cap. This loop only reads
+        // cheap per-series metadata (no pixel decode), so scanning the full
+        // series count costs nothing meaningful even for many-series files.
+        int upper = reader.getSeriesCount();
         List<AssociatedImageSelection.SeriesIdentity> identities = new ArrayList<>();
         for (int series = 0; series < upper; series++) {
             reader.setSeries(series);
@@ -355,7 +360,7 @@ public class BioFormatsTileService {
         return AssociatedImageSelection.select(identities);
     }
 
-    private String seriesName(MetadataRetrieve metadata, int series) {
+    private static String seriesName(MetadataRetrieve metadata, int series) {
         if (metadata == null) return "";
         try {
             String name = metadata.getImageName(series);
@@ -401,13 +406,13 @@ public class BioFormatsTileService {
                 return new PixelSampleResponse(x, y, List.of(
                         (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff));
             }
-            boolean littleEndian = reader.isLittleEndian();
-            List<Integer> values = new ArrayList<>(reader.getSizeC());
-            for (int channel = 0; channel < reader.getSizeC(); channel++) {
-                byte[] pixel = reader.openBytes(reader.getIndex(0, channel, 0), x, y, 1, 1);
+            List<Integer> values = new ArrayList<>(context.sizeC());
+            for (int channel = 0; channel < context.sizeC(); channel++) {
+                byte[] pixel = readFluorescencePlane(context, reader, 0, channel, x, y, 1, 1);
                 int first = pixel[0] & 0xff;
                 int second = pixel[1] & 0xff;
-                values.add(littleEndian ? first | (second << 8) : (first << 8) | second);
+                values.add(context.isLittleEndian() || context.isEightBit()
+                        ? first | (second << 8) : (first << 8) | second);
             }
             return new PixelSampleResponse(x, y, values);
         });
@@ -433,13 +438,12 @@ public class BioFormatsTileService {
                 }
                 return new PixelBlockResponse(blockX, blockY, width, height, 3, values);
             }
-            int channels = reader.getSizeC();
-            boolean littleEndian = reader.isLittleEndian();
+            int channels = context.sizeC();
+            boolean littleEndian = context.isLittleEndian() || context.isEightBit();
 
             List<Integer> values = new ArrayList<>(width * height * channels);
             for (int channel = 0; channel < channels; channel++) {
-                byte[] pixels = reader.openBytes(
-                        reader.getIndex(0, channel, 0), blockX, blockY, width, height);
+                byte[] pixels = readFluorescencePlane(context, reader, 0, channel, blockX, blockY, width, height);
                 for (int offset = 0; offset < pixels.length; offset += 2) {
                     int first = pixels[offset] & 0xff;
                     int second = pixels[offset + 1] & 0xff;
@@ -520,11 +524,11 @@ public class BioFormatsTileService {
         byte[] cached = tileCache.get(cacheKey);
         if (cached != null) return cached;
         byte[] png = context.withReader(reader -> {
-            validateChannel(channel, reader.getSizeC());
+            validateChannel(channel, context.sizeC());
             reader.setResolution(bioResolution(reader, viewerLevel));
             TileRegion region = region(reader, tileX, tileY);
             if (region.empty()) return new byte[0];
-            byte[] pixels = reader.openBytes(reader.getIndex(z, channel, 0),
+            byte[] pixels = readFluorescencePlane(context, reader, z, channel,
                     region.x(), region.y(), region.width(), region.height());
             PixelMapper mapper = new LinearWindowPixelMapper(channelSettings.getWindow(),
                     channelSettings.getLut(), channelSettings.getGamma());
@@ -686,7 +690,7 @@ public class BioFormatsTileService {
         for (int channel = 0; channel < settings.size(); channel++) {
             ChannelDisplaySettings channelSettings = settings.get(channel);
             if (!channelSettings.isVisible() || channelSettings.getOpacity() <= 0) continue;
-            channelPixels.add(reader.openBytes(reader.getIndex(z, channel, 0), x, y, width, height));
+            channelPixels.add(readFluorescencePlane(context, reader, z, channel, x, y, width, height));
             mappers.add(new LinearWindowPixelMapper(channelSettings.getWindow(),
                     channelSettings.getLut(), channelSettings.getGamma()));
             opacities.add(channelSettings.getOpacity());
@@ -767,6 +771,41 @@ public class BioFormatsTileService {
         return rgb;
     }
 
+    /**
+     * Fluorescence plane as little-endian UINT16 bytes for the existing 16-bit
+     * renderers. 8-bit grayscale is expanded in place; a packed RGB JPEG
+     * preview of an IF slide is collapsed to luminance first.
+     */
+    byte[] readFluorescencePlane(ImageContext context, IFormatReader reader,
+                                 int z, int channel, int x, int y, int width, int height)
+            throws Exception {
+        int pixels = width * height;
+        if (context.isPackedRgbFluorescence()) {
+            int[] rgb = readRgbRegion(reader, x, y, width, height, z);
+            byte[] plane = new byte[pixels];
+            for (int i = 0; i < pixels; i++) {
+                int value = rgb[i];
+                int r = (value >> 16) & 0xff;
+                int g = (value >> 8) & 0xff;
+                int b = value & 0xff;
+                plane[i] = (byte) Math.min(255, (r * 77 + g * 150 + b * 29) >> 8);
+            }
+            return expandUint8ToUint16Le(plane);
+        }
+        byte[] raw = reader.openBytes(reader.getIndex(z, channel, 0), x, y, width, height);
+        if (context.isEightBit()) return expandUint8ToUint16Le(raw);
+        return raw;
+    }
+
+    static byte[] expandUint8ToUint16Le(byte[] src) {
+        byte[] out = new byte[src.length * 2];
+        for (int i = 0; i < src.length; i++) {
+            out[i * 2] = src[i];
+            out[i * 2 + 1] = 0;
+        }
+        return out;
+    }
+
     public String firstImageId() { return registry.getFirst().id(); }
 
     @SuppressWarnings("unchecked")
@@ -841,12 +880,28 @@ public class BioFormatsTileService {
         return new DisplayResponse(state.revision(), channels);
     }
 
-    private int bioResolution(IFormatReader reader, int viewerLevel) {
+    private static int bioResolution(IFormatReader reader, int viewerLevel) {
         int count = reader.getResolutionCount();
         if (viewerLevel < 0 || viewerLevel >= count) {
             throw new IllegalArgumentException("Viewer level must be between 0 and " + (count - 1) + ".");
         }
         return count - 1 - viewerLevel;
+    }
+
+    /**
+     * Native pixel size at every viewer level, so the browser's tile source can build a
+     * correct tile grid per level instead of assuming a uniform 2x-per-level downsample
+     * (see {@link PyramidLevelDimensions}). Leaves the reader parked on resolution 0.
+     */
+    static List<PyramidLevelDimensions> pyramidLevelDimensions(IFormatReader reader) {
+        int count = reader.getResolutionCount();
+        List<PyramidLevelDimensions> dimensions = new ArrayList<>(count);
+        for (int viewerLevel = 0; viewerLevel < count; viewerLevel++) {
+            reader.setResolution(bioResolution(reader, viewerLevel));
+            dimensions.add(new PyramidLevelDimensions(viewerLevel, reader.getSizeX(), reader.getSizeY()));
+        }
+        reader.setResolution(0);
+        return dimensions;
     }
 
     private TileRegion region(IFormatReader reader, int tileX, int tileY) {

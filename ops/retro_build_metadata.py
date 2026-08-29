@@ -30,7 +30,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
-SLIDE_EXTS = (".vsi", ".svs", ".tiff", ".tif", ".ndpi", ".czi", ".lif", ".nd2")
+SLIDE_EXTS = (".vsi", ".svs", ".tiff", ".tif", ".ndpi", ".czi", ".lif", ".nd2", ".mrxs")
 IF_TOKEN = re.compile(r"(?i)if\.\S+")
 PLACEHOLDER = re.compile(r"(?i)^if\.(pending|none|unknown|n/?a)\b")
 PANEL_ALIASES = {
