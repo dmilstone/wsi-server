@@ -26,3 +26,17 @@ __pycache__/
 # Local plugin metric exports
 exports/*
 !exports/.gitkeep
+
+# Permanently ignore all heavy data log dumps and consultation paths
+filesForEvaluation/
+wsi-slides/
+
+# Block all raw whole-slide medical image binary files
+*.vsi
+*.svs
+*.ndpi
+*.mrxs
+
+# Block any auxiliary large data logs or tabular consulting sheets
+*.csv
+*.xlsx
