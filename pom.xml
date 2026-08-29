@@ -76,6 +76,18 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<!-- Without this, `spring-boot:run` serves static/* from the
+					     target/classes copy made at process-resources time, so editing
+					     files under src/main/resources/static (JS/CSS/HTML) has no
+					     effect — not even with a hard browser refresh — until the
+					     server process is restarted. addResources puts
+					     src/main/resources directly on the run classpath (ahead of
+					     target/classes) so those edits are visible on the very next
+					     request, no restart required. Java changes still need a
+					     restart/rebuild as before. -->
+					<addResources>true</addResources>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

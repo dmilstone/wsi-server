@@ -230,8 +230,9 @@ class AnnotationAdapter {
     /**
      * Blank the main workspace chrome for fresh load / case-filter changes:
      * clear image headers and status text, force {@code viewer.close()} when a
-     * viewer is provided (pure-black viewport), and hide Z / channels /
-     * measurement panels until a slide is clicked again.
+     * viewer is provided (pure-black viewport), purge native annotation shapes
+     * and AI nuclei overlays left over from the previous slide, and hide Z /
+     * channels / measurement panels until a slide is clicked again.
      */
     static applyZeroExposureWorkspace(doc, options = {}) {
         const root = doc || (typeof document !== "undefined" ? document : null);
@@ -253,7 +254,19 @@ class AnnotationAdapter {
                     // Ignore teardown races during hard refresh / rapid filter changes.
                 }
             }
+            if (typeof viewer.clearOverlays === "function") {
+                try { viewer.clearOverlays(); } catch (_error) { /* ignore */ }
+            }
         }
+
+        // viewer.close()/clearOverlays() above only tear down OSD's own tiles and
+        // overlay nodes. The native annotation shapes (see onSlideClicked) live in
+        // their own persistent SVG groups and otherwise keep showing the previous
+        // slide's annotations — floating over the now-blank viewport — until a *new*
+        // slide is opened. Purge them here too so every case-filter change (e.g.
+        // switching to "All Slides") reliably blanks annotations along with the tiles.
+        AnnotationAdapter.setSavedAnnotations([]);
+        AnnotationAdapter.purgeAlternativeAnnotationLayers();
 
         const setText = (id, text) => {
             const el = root.getElementById(id);
