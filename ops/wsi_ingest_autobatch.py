@@ -52,9 +52,19 @@ from pathlib import Path
 
 AUTOBATCH_SENTINEL = ".wsi-autobatch"
 QUARANTINE_DIRNAME = "-unrecognized"
-TRACKING_STATE_DIRNAME = "autobatch"
+TRACKING_LEDGER_FILENAME = "autobatch-tracking.json"
 MERGE_LEDGER_FILENAME = "autobatch-merge-pending.json"
 IGNORED_NOISE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", ".localized", AUTOBATCH_SENTINEL}
+# An anchor whose companion never shows up at all must not wait forever,
+# silently invisible -- but the ordinary per-item quiet window is
+# deliberately short enough to tolerate a companion arriving noticeably
+# later than its anchor (real scanners often finalize a small metadata/
+# anchor file before a large tile-data folder finishes writing -- see
+# test_vsi_waits_for_companion_regardless_of_arrival_order). A missing
+# companion is therefore only treated as abandoned after a materially
+# longer grace period than a normal stability check, not the same window
+# used for an already-complete unit or a definitely-orphaned companion.
+ORPHAN_ANCHOR_GRACE_MULTIPLIER = 6
 
 # Companion folder name template per anchor extension. None means the format
 # is self-contained (single file = one complete slide). Every extension here
@@ -86,7 +96,14 @@ def split_known_extension(name, engine):
 
 def expected_companion_name(anchor_name, engine):
     stem, ext = split_known_extension(anchor_name, engine)
-    if stem is None:
+    if not stem:
+        # A bare extension with no stem (e.g. a literal ".mrxs" or ".vsi"
+        # file) would otherwise format to an empty companion name, and
+        # `folder / ""` resolves to `folder` itself in pathlib -- silently
+        # treating the enclosing hot folder as this anchor's "companion".
+        # Falling through to None here routes it into the existing
+        # invalid-stem quarantine path (engine.dataset_name rejects an
+        # empty name) instead.
         return None
     template = _COMPANION_TEMPLATES.get(ext)
     if not template:
@@ -255,10 +272,23 @@ def _fingerprint(path):
     except OSError:
         return None
     if path.is_dir():
-        newest = st.st_mtime_ns
+        # Deliberately NOT seeded from st.st_mtime_ns of the folder itself:
+        # a directory's own mtime advances whenever any entry is added or
+        # removed from its listing -- including an ignored noise file --
+        # which would silently defeat the filter just below.
+        newest = 0
         total = 0
         try:
             for child in path.rglob("*"):
+                # A `.DS_Store` dropped inside a companion folder by a
+                # technician Finder-browsing the hot folder must not reset
+                # this folder's stability clock -- it would never look
+                # quiet on a share anyone occasionally looks at. The noise
+                # file still travels along with the folder on relocation
+                # (nothing here deletes it); this only keeps it from
+                # counting toward the fingerprint used for stability.
+                if child.name in IGNORED_NOISE_NAMES:
+                    continue
                 try:
                     cst = child.lstat()
                 except OSError:
@@ -297,7 +327,7 @@ def scan_and_relocate(c, engine, tracking, merge_ledger, log=None):
         present_names = {p.name for p in loose}
         tracking.sweep_stale(folder_key, present_names)
 
-        anchors = {}     # stem -> Path (anchor file)
+        anchor_candidates = {}     # stem -> list[Path] (anchor file candidates)
         # Delimited-shape-only, e.g. VSI's "_stem_" -- used purely to flag an
         # unpaired companion as an orphan (see below), never to find a real
         # unit's companion (find_companion does that directly by name).
@@ -308,13 +338,26 @@ def scan_and_relocate(c, engine, tracking, merge_ledger, log=None):
             if entry.is_file():
                 stem, ext = split_known_extension(entry.name, engine)
             if stem is not None:
-                anchors[stem] = entry
+                anchor_candidates.setdefault(stem, []).append(entry)
                 continue
             comp_stem = companion_stem(entry.name) if entry.is_dir() else None
             if comp_stem is not None:
                 shaped_companions[comp_stem] = entry
                 continue
             unrecognized.append(entry)
+
+        anchors = {}     # stem -> Path, only for unambiguous stems
+        for stem, candidates in anchor_candidates.items():
+            if len(candidates) > 1:
+                # Ambiguous: two different recognized extensions share a
+                # stem (e.g. slide.svs and slide.ndpi dropped in the same
+                # hot folder). Never guess which one is "the" anchor --
+                # track both as unrecognized so a human resolves the
+                # naming collision instead of one silently, invisibly
+                # vanishing (the losing entry in a plain dict overwrite).
+                unrecognized.extend(candidates)
+                continue
+            anchors[stem] = candidates[0]
 
         handled = set()
 
@@ -333,16 +376,25 @@ def scan_and_relocate(c, engine, tracking, merge_ledger, log=None):
                 fingerprints[p.name] = (stable_since, observations)
                 if not _is_ready(stable_since, observations, c, now):
                     ready = False
-            if needs_companion and companion is None:
-                ready = False  # anchor alone isn't a complete slide yet
             handled.add(anchor.name)
             if companion is not None:
                 handled.add(companion.name)
+            if needs_companion and companion is None:
+                # Anchor alone isn't a complete slide yet -- but if it has
+                # sat untouched with no companion at all for well beyond the
+                # ordinary stability window, stop waiting silently forever
+                # and surface it instead (see ORPHAN_ANCHOR_GRACE_MULTIPLIER).
+                anchor_since, _anchor_obs = fingerprints.get(anchor.name, (now, 0))
+                if now - anchor_since >= c["quiet"] * ORPHAN_ANCHOR_GRACE_MULTIPLIER:
+                    log("autobatch_anchor_companion_never_arrived", origin=folder.name)
+                    _quarantine(c, folder, anchor, log)
+                    tracking.forget(folder_key, anchor.name)
+                continue
             if not ready:
                 continue
-            _relocate_unit(c, engine, merge_ledger, folder, stem, unit_paths, log)
-            for p in unit_paths:
-                tracking.forget(folder_key, p.name)
+            if _relocate_unit(c, engine, merge_ledger, folder, stem, unit_paths, log):
+                for p in unit_paths:
+                    tracking.forget(folder_key, p.name)
 
         # Companion-shaped folders with no matching anchor, and anything
         # unrecognized, are orphan candidates: tracked the same way, and
@@ -368,26 +420,56 @@ def scan_and_relocate(c, engine, tracking, merge_ledger, log=None):
 
 
 def _relocate_unit(c, engine, merge_ledger, folder, stem, unit_paths, log):
+    """Best-effort atomic-or-nothing relocation of unit_paths into a brand
+    new c['staging']/<name> directory, handing that whole directory off to
+    the unmodified engine from there. Returns True only when the unit was
+    fully handled (relocated, or quarantined for an invalid stem) -- the
+    caller should only drop its stability tracking in that case. On any
+    failure this leaves unit_paths exactly as they were in `folder` (rolling
+    back anything already moved) so the whole unit is retried together next
+    pass instead of ever reaching production half-moved."""
     try:
         name = engine.dataset_name(stem)
     except engine.Fail:
         log("autobatch_invalid_stem", origin=folder.name)
         for p in unit_paths:
             _quarantine(c, folder, p, log)
-        return
+        return True
     dest_dir = c["staging"] / name
-    if dest_dir.exists():
-        log("autobatch_relocate_name_collision", origin=folder.name)
-        return
-    dest_dir.mkdir(mode=0o700)
     try:
-        for p in unit_paths:
-            os.rename(str(p), str(dest_dir / p.name))
+        dest_dir.mkdir(mode=0o700)
+    except FileExistsError:
+        # Two different hot folders producing the same derived name (e.g.
+        # each containing a "slide.svs"), or a same-named batch a human
+        # created independently in staging. Never guess which one wins:
+        # leave this unit in place and retry next pass.
+        log("autobatch_relocate_name_collision", origin=folder.name)
+        return False
     except OSError as error:
         log("autobatch_relocate_failed", origin=folder.name, detail=str(error))
-        return
+        return False
+    moved = []
+    try:
+        for p in unit_paths:
+            dest = dest_dir / p.name
+            os.rename(str(p), str(dest))
+            moved.append((p, dest))
+    except OSError as error:
+        for original, relocated in reversed(moved):
+            try:
+                os.rename(str(relocated), str(original))
+            except OSError:
+                log("autobatch_relocate_rollback_failed", origin=folder.name,
+                    detail=f"could not restore {relocated.name}")
+        try:
+            dest_dir.rmdir()
+        except OSError:
+            pass
+        log("autobatch_relocate_failed", origin=folder.name, detail=str(error))
+        return False
     merge_ledger.record(name, folder.name)
     log("autobatch_relocated", origin=folder.name)
+    return True
 
 
 def _quarantine(c, folder, entry, log):

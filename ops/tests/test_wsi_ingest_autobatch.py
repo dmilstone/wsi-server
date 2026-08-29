@@ -31,6 +31,14 @@ class AutobatchUnitTests(unittest.TestCase):
         self.assertIsNone(autobatch.companion_stem("A"))
         self.assertIsNone(autobatch.companion_stem("_A"))
 
+    def test_bare_extension_with_empty_stem_does_not_resolve_to_enclosing_folder(self):
+        # ".mrxs" alone strips to an empty stem; the MRXS companion template
+        # is the bare stem itself, so an unguarded format() would return ""
+        # and `folder / ""` resolves to `folder` in pathlib -- i.e. the hot
+        # folder would look like its own companion. Must return None instead.
+        self.assertIsNone(autobatch.expected_companion_name(".mrxs", engine))
+        self.assertIsNone(autobatch.expected_companion_name(".vsi", engine))
+
     def test_tracking_ledger_resets_on_change_and_accumulates_when_stable(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = autobatch.TrackingLedger(Path(tmp) / "tracking.json")
@@ -248,6 +256,112 @@ class AutobatchScanIntegrationTests(unittest.TestCase):
         self.assertFalse((folder / "..vsi").exists())
         self.assertTrue((self.staging / autobatch.QUARANTINE_DIRNAME / "20260828" / "..vsi").is_file())
 
+    def test_same_stem_different_extensions_are_quarantined_not_silently_dropped(self):
+        folder = self.mark()
+        (folder / "slide.svs").write_bytes(b"x" * 10)
+        (folder / "slide.ndpi").write_bytes(b"y" * 10)
+        self.scan()
+        time.sleep(1.1)
+        self.scan()
+        # neither guessed at as "the" anchor -- both surface for a human,
+        # instead of one silently vanishing via a dict overwrite
+        self.assertFalse((self.staging / "slide").exists())
+        self.assertTrue((self.staging / autobatch.QUARANTINE_DIRNAME / "20260828" / "slide.svs").is_file())
+        self.assertTrue((self.staging / autobatch.QUARANTINE_DIRNAME / "20260828" / "slide.ndpi").is_file())
+
+    def test_noise_inside_companion_folder_does_not_reset_stability_clock(self):
+        folder = self.mark()
+        (folder / "A.vsi").write_bytes(b"x" * 10)
+        companion = folder / "_A_"
+        companion.mkdir()
+        (companion / "tile0.dat").write_bytes(b"y" * 10)
+        self.scan()  # 1st observation of both anchor and companion
+        time.sleep(1.1)
+        # A technician Finder-browsing the hot folder mid-wait must not
+        # reset the companion's stability clock, or a unit sitting on a
+        # share anyone occasionally looks at would never stabilize.
+        (companion / ".DS_Store").write_bytes(b"\x00")
+        self.scan()  # 2nd observation -- fingerprint must be unchanged
+        self.assertTrue((self.staging / "A").is_dir())
+        self.assertTrue((self.staging / "A" / "_A_" / ".DS_Store").exists())  # travels along, just not tracked
+
+    def test_anchor_without_companion_is_quarantined_after_grace_period(self):
+        folder = self.mark()
+        anchor = folder / "A.vsi"
+        anchor.write_bytes(b"x" * 10)
+        fp = autobatch._fingerprint(anchor)
+        long_ago = time.time() - 3600
+        # Seed two old, identical-fingerprint observations directly so the
+        # anchor already looks "stable since long_ago" without a real sleep.
+        self.tracking.observe(folder.name, "A.vsi", fp, now=long_ago)
+        self.tracking.observe(folder.name, "A.vsi", fp, now=long_ago + 1)
+        self.scan()
+        self.assertFalse(anchor.exists())
+        self.assertTrue((self.staging / autobatch.QUARANTINE_DIRNAME / "20260828" / "A.vsi").is_file())
+        self.assertIn("autobatch_anchor_companion_never_arrived", [e for e, _ in self.events])
+
+    def test_anchor_without_companion_is_not_prematurely_quarantined(self):
+        # Regression guard for test_vsi_waits_for_companion_regardless_of_
+        # arrival_order: a normal, short arrival gap must not trip the new
+        # grace-period quarantine.
+        folder = self.mark()
+        (folder / "A.vsi").write_bytes(b"x" * 10)
+        self.scan()
+        time.sleep(1.1)
+        self.scan()
+        self.assertTrue((folder / "A.vsi").exists())
+        self.assertFalse((self.staging / autobatch.QUARANTINE_DIRNAME).exists())
+
+    def test_relocate_collision_between_two_hot_folders_retries_instead_of_crashing(self):
+        first = self.mark("folder-a")
+        second = self.mark("folder-b")
+        (first / "slide.svs").write_bytes(b"x" * 10)
+        (second / "slide.svs").write_bytes(b"y" * 10)
+        self.scan()
+        time.sleep(1.1)
+        self.scan()
+        # Exactly one of the two wins the name; the other stays in place,
+        # untouched and still tracked, to retry rather than being lost.
+        self.assertTrue((self.staging / "slide").is_dir())
+        remaining = [f for f in (first, second) if (f / "slide.svs").exists()]
+        self.assertEqual(len(remaining), 1)
+        self.assertIn("autobatch_relocate_name_collision", [e for e, _ in self.events])
+
+    def test_relocate_failure_partway_through_rolls_back_and_retries_whole_unit(self):
+        folder = self.mark()
+        anchor = folder / "A.vsi"
+        anchor.write_bytes(b"x" * 10)
+        companion = folder / "_A_"
+        companion.mkdir()
+        (companion / "tile0.dat").write_bytes(b"y" * 10)
+        self.scan()
+        time.sleep(1.1)
+
+        real_rename = os.rename
+        calls = {"n": 0}
+
+        def flaky_rename(src, dst):
+            calls["n"] += 1
+            if calls["n"] == 2:  # let the anchor move, fail on the companion
+                raise OSError("simulated failure moving companion")
+            return real_rename(src, dst)
+
+        with mock.patch("wsi_ingest_autobatch.os.rename", side_effect=flaky_rename):
+            self.scan()
+
+        # Nothing left half-moved: nothing in staging/A, and both anchor and
+        # companion are back in the origin folder, whole, for the next pass.
+        self.assertFalse((self.staging / "A").exists())
+        self.assertTrue(anchor.is_file())
+        self.assertTrue((companion / "tile0.dat").is_file())
+        self.assertIn("autobatch_relocate_failed", [e for e, _ in self.events])
+
+        # Next pass (no injected failure) succeeds normally.
+        time.sleep(1.1)
+        self.scan()
+        self.assertTrue((self.staging / "A" / "A.vsi").is_file())
+        self.assertTrue((self.staging / "A" / "_A_" / "tile0.dat").is_file())
+
 
 class AutobatchDaemonMergeTests(unittest.TestCase):
     """merge_promoted_autobatch_dataset() itself, exercised without needing a
@@ -285,6 +399,16 @@ class AutobatchDaemonMergeTests(unittest.TestCase):
         self.assertTrue((self.production / "20260828" / "slide.svs").is_file())
         self.assertFalse((self.production / "slide").exists())
         self.assertEqual(merge_ledger.pending(), {})
+
+    def test_merge_creates_origin_directory_with_restrictive_permissions(self):
+        c = engine.cfg()
+        (self.production / "slide").mkdir()
+        (self.production / "slide" / "slide.svs").write_bytes(b"x")
+        merge_ledger = autobatch.AutobatchMergeLedger(self.staging / "merge.json")
+        merge_ledger.record("slide", "20260828")
+        wd.merge_promoted_autobatch_dataset(c, merge_ledger, "slide")
+        mode = (self.production / "20260828").stat().st_mode & 0o777
+        self.assertEqual(mode, 0o700)
 
     def test_non_autobatch_dataset_is_returned_unchanged(self):
         c = engine.cfg()

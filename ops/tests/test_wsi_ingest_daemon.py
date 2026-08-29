@@ -401,6 +401,47 @@ class DaemonTests(unittest.TestCase):
                         autobatch_merge_ledger=wd.autobatch.AutobatchMergeLedger(self.st / 'merge.json'))
         scan.assert_not_called()
 
+    def test_run_pass_never_seals_autobatch_marked_folder_even_if_not_yet_relocated(self):
+        # CRITICAL regression: before this fix, the ordinary seal loop had
+        # no idea a folder was autobatch-marked, so on any pass where a
+        # loose recognized file was still sitting in the hot folder (e.g.
+        # its first observation, not yet stable enough to relocate), the
+        # hot folder itself got sealed as a ghost dataset -- permanently
+        # failing observe() once its contents were later relocated out from
+        # under it, and colliding with the real per-unit dataset(s) and/or
+        # the merged production directory.
+        os.environ['WSI_INGEST_AUTOBATCH_ENABLED'] = '1'
+        hot = self.st / '20260828'
+        hot.mkdir()
+        (hot / wd.autobatch.AUTOBATCH_SENTINEL).write_text('')
+        (hot / 'slide.svs').write_text('not yet relocated by this pass')
+        c = engine.cfg()
+        fake = fake_run_ingest({})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.autobatch.scan_and_relocate'):  # simulate: not relocated this pass
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '',
+                        autobatch_tracking=wd.autobatch.TrackingLedger(self.st / 'tracking.json'),
+                        autobatch_merge_ledger=wd.autobatch.AutobatchMergeLedger(self.st / 'merge.json'))
+        seal_targets = [args[1] for args, _confirmation in fake.calls if args[0] == 'seal']
+        self.assertNotIn('20260828', seal_targets)
+        self.assertEqual(dict(engine.state_records(c)), {})
+
+    def test_run_pass_never_seals_autobatch_marked_folder_when_disabled_mid_cycle(self):
+        # A folder marked while autobatch was enabled must stay excluded
+        # from whole-directory sealing even after autobatch is toggled off
+        # again (e.g. mid-cycle), since its contents are still per-unit,
+        # not one atomic transaction, regardless of the enabled flag.
+        hot = self.st / '20260828'
+        hot.mkdir()
+        (hot / wd.autobatch.AUTOBATCH_SENTINEL).write_text('')
+        (hot / 'slide.svs').write_text('autobatch currently disabled')
+        c = engine.cfg()
+        fake = fake_run_ingest({})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake):
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '')
+        seal_targets = [args[1] for args, _confirmation in fake.calls if args[0] == 'seal']
+        self.assertNotIn('20260828', seal_targets)
+
     def test_run_pass_calls_autobatch_scan_when_enabled(self):
         os.environ['WSI_INGEST_AUTOBATCH_ENABLED'] = '1'
         c = engine.cfg()
@@ -446,8 +487,11 @@ class DaemonTests(unittest.TestCase):
         (hot / 'slide.svs').write_bytes(valid_tiff)
 
         self.assertEqual(wd.main(['--once']), 0)  # autobatch: 1st observation of the loose file
+        c = engine.cfg()
+        self.assertEqual(dict(engine.state_records(c)), {})  # not sealed as a ghost dataset while still loose
         time.sleep(1.1)
         self.assertEqual(wd.main(['--once']), 0)  # autobatch: relocates into staging/slide/, then seals it
+        self.assertNotIn('20260828', dict(engine.state_records(c)))  # hot folder itself never a dataset
         time.sleep(1.1)
         self.assertEqual(wd.main(['--once']), 0)  # 1st wsi_ingest.py observation
         time.sleep(1.1)
@@ -456,6 +500,7 @@ class DaemonTests(unittest.TestCase):
         self.assertTrue((self.pr / '20260828' / 'slide.svs').is_file())
         self.assertFalse((self.st / 'slide').exists())
         self.assertTrue((hot / wd.autobatch.AUTOBATCH_SENTINEL).exists())  # hot folder itself stays put, reusable
+        self.assertNotIn('20260828', dict(engine.state_records(c)))  # still never a ghost dataset, end to end
 
     # --- end-to-end smoke test with real subprocesses --------------------------
 

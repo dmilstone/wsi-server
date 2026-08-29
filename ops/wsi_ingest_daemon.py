@@ -491,7 +491,8 @@ def merge_promoted_autobatch_dataset(c, merge_ledger, name):
     src_dir = c["production"] / name
     dest_dir = c["production"] / origin
     if src_dir.is_dir():
-        dest_dir.mkdir(exist_ok=True)
+        dest_dir.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(dest_dir, 0o700)
         blocked = False
         for item in sorted(src_dir.iterdir()):
             target = dest_dir / item.name
@@ -518,7 +519,20 @@ def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=Non
             log=lambda event, **fields: log_event(c, event, **fields),
         )
 
+    # A folder carrying the autobatch marker is never a single one-shot
+    # batch -- its loose contents are per-slide units autobatch itself
+    # relocates out individually. Excluding it here is unconditional (not
+    # gated on autobatch.enabled()) so that: (a) the ordinary loop can never
+    # seal the hot folder itself as a ghost dataset while units are still
+    # arriving inside it, which would collide with the real per-unit
+    # dataset(s) autobatch relocates out and/or with the merged production
+    # directory later, and (b) toggling autobatch off mid-cycle does not
+    # suddenly expose the marked folder to whole-directory sealing either.
+    autobatch_marked_names = {p.name for p in autobatch.discover_marked_folders(c["staging"])}
+
     for name in list_candidate_datasets(c["staging"]):
+        if name in autobatch_marked_names:
+            continue
         if name in dict(engine.state_records(c)):
             continue
         key = short_hash(name)
@@ -619,7 +633,7 @@ def main(argv=None):
 
     ledger = IntegrityLedger(daemon_control_dir(c) / "integrity-failures.json", args.integrity_retry_limit)
     sidecar_ledger = SidecarLedger(daemon_control_dir(c) / "sidecar-pending.json", args.sidecar_retry_limit)
-    autobatch_tracking = autobatch.TrackingLedger(daemon_control_dir(c) / "autobatch-tracking.json")
+    autobatch_tracking = autobatch.TrackingLedger(daemon_control_dir(c) / autobatch.TRACKING_LEDGER_FILENAME)
     autobatch_merge_ledger = autobatch.AutobatchMergeLedger(daemon_control_dir(c) / autobatch.MERGE_LEDGER_FILENAME)
     log_event(c, "daemon_start", interval_seconds=args.interval, autobatch_enabled=autobatch.enabled())
     try:
