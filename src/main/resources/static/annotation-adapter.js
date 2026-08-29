@@ -3949,6 +3949,47 @@ class AnnotationAdapter {
         return true;
     }
 
+    /**
+     * OpenSeadragon's built-in Navigator (the corner minimap) only ever raises a
+     * "navigator-scroll" event and otherwise ignores it — by default, scrolling
+     * over it neither zooms the navigator (it always shows the whole slide, so
+     * that would be pointless) nor the main viewport. Wire it to zoom the *main*
+     * viewport instead, centered on whatever point of the slide the cursor is
+     * currently over inside the navigator (same reference-point convention as
+     * scrolling over the main canvas, via {@link Viewport#zoomBy}'s second
+     * argument). The navigator's native click-drag-to-pan keeps working
+     * unmodified — drag and scroll are independent MouseTracker callbacks fed by
+     * independent hardware inputs, so both fire freely at once. That combination
+     * is the point: one hand drags the navigator's viewport box to a region while
+     * the other scrolls to zoom into/out of exactly that spot, panning and
+     * zooming simultaneously without ever having to move either hand to the main
+     * canvas — like a glass slide under a scope, but better.
+     */
+    static bindNavigatorScrollZoom(viewer) {
+        if (!viewer || typeof viewer.addHandler !== "function" || viewer._wsiNavigatorScrollZoomBound) {
+            return false;
+        }
+        viewer.addHandler("navigator-scroll", event => {
+            const viewport = viewer.viewport;
+            const navigatorViewport = viewer.navigator?.viewport;
+            if (!viewport || !navigatorViewport) return;
+            if (viewer.gestureSettingsMouse && viewer.gestureSettingsMouse.scrollToZoom === false) return;
+            const zoomPerScroll = Number(viewer.zoomPerScroll) || 1.2;
+            const factor = Math.pow(zoomPerScroll, Number(event.scroll) || 0);
+            let refPoint = null;
+            try {
+                refPoint = navigatorViewport.pointFromPixel(event.position, true);
+            } catch (_error) {
+                // Fall back to zooming on the current center instead of throwing.
+            }
+            viewport.zoomBy(factor, refPoint);
+            viewport.applyConstraints();
+            event.preventDefault = true;
+        });
+        viewer._wsiNavigatorScrollZoomBound = true;
+        return true;
+    }
+
     static setViewer(viewer) {
         AnnotationAdapter.ensureMeasurementDefaults();
         AnnotationAdapter.viewer = viewer || null;
@@ -3959,6 +4000,7 @@ class AnnotationAdapter {
         AnnotationAdapter.bindFloatingZStackPalette();
         if (AnnotationAdapter.viewer) {
             AnnotationAdapter.bindViewportHomeOnOpen(AnnotationAdapter.viewer);
+            AnnotationAdapter.bindNavigatorScrollZoom(AnnotationAdapter.viewer);
             AnnotationAdapter.bindAiVectorOverlayHandlers(AnnotationAdapter.viewer);
             AnnotationAdapter.bindOpenSeadragonCanvasKeyIntercept(AnnotationAdapter.viewer);
             AnnotationAdapter.bindQuPathZoomFitResize();
