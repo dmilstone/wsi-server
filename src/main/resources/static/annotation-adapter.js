@@ -3314,6 +3314,10 @@ class AnnotationAdapter {
     static qpShapeTrackers = [];
     static vectorOutlinesVisible = true;
     static annotationLabelsVisible = true;
+    /** Interior fill of annotation shapes (rectangle/ellipse/closed polygon) starts OFF
+     *  so drawn regions never obscure the underlying image by default; Shift+F toggles it.
+     *  Outlines/strokes are always shown regardless of this flag. */
+    static annotationFillEnabled = false;
     static savedAnnotationsArray = [];
     static selectedNativeAnnotationId = null;
     /** Multi-select set (shift-click). `selectedNativeAnnotationId` always tracks the most
@@ -3733,6 +3737,10 @@ class AnnotationAdapter {
             node.setAttribute("class", `${existing} ${cls} annotation-shape-overlay`.trim());
         }
         node.setAttribute("fill", filled ? AnnotationAdapter.OSD_ANNOTATION_FILL : "none");
+        // fill-opacity is a separate, independent knob from the fill color itself so the
+        // global on/off toggle (Shift+F, see toggleAnnotationFill) never needs to know or
+        // restore whatever color a shape was filled with — it just hides/shows it.
+        node.setAttribute("fill-opacity", AnnotationAdapter.annotationFillEnabled ? "1" : "0");
         node.setAttribute("stroke", AnnotationAdapter.OSD_ANNOTATION_STROKE);
         node.setAttribute("stroke-width", "2");
         node.setAttribute("stroke-opacity", "1");
@@ -6539,6 +6547,14 @@ class AnnotationAdapter {
                     if (detBtn) detBtn.click();
                     break;
 
+                case "f": // Interior fill toggle: plain F = detections (nuclei), Shift+F =
+                          // annotations. Distinct from "d" above, which hides/shows the
+                          // whole detection marker (outline included), not just its fill.
+                    e.preventDefault();
+                    if (e.shiftKey) AnnotationAdapter.toggleAnnotationFill();
+                    else AnnotationAdapter.toggleDetectionFill();
+                    break;
+
                 case "h": // QuPath: Hide/Show left side browser panel panel space
                     e.preventDefault();
                     let sideBtn = document.getElementById("toggle-sidebar-btn")
@@ -8159,6 +8175,25 @@ class AnnotationAdapter {
         const btn = doc?.getElementById?.("toggle-labels-visibility-btn");
         btn?.setAttribute?.("aria-pressed", String(AnnotationAdapter.annotationLabelsVisible));
         return AnnotationAdapter.annotationLabelsVisible;
+    }
+
+    /**
+     * Shift+F: toggles whether annotation shapes (rectangle/ellipse/closed polygon) show
+     * a colored interior or just their outline. Only touches `fill-opacity` — never the
+     * `fill` color attribute itself — so it composes cleanly with per-shape coloring and
+     * doesn't need to remember/restore anything. Independent of vectorOutlinesVisible
+     * (which hides shapes entirely) and of detectionFillEnabled (nuclei/detections, "F").
+     */
+    static toggleAnnotationFill(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.annotationFillEnabled = !AnnotationAdapter.annotationFillEnabled;
+        const opacity = AnnotationAdapter.annotationFillEnabled ? "1" : "0";
+        const shapes = doc?.querySelectorAll?.(`.${AnnotationAdapter.OSD_ANNOTATION_SHAPE_CLASS}`) || [];
+        shapes.forEach(el => el?.setAttribute?.("fill-opacity", opacity));
+        const btn = doc?.getElementById?.("toggle-annotation-fill-btn");
+        btn?.setAttribute?.("aria-pressed", String(AnnotationAdapter.annotationFillEnabled));
+        return AnnotationAdapter.annotationFillEnabled;
     }
 
     static sanitizeCanvasAnnotations(root = null) {
@@ -10573,6 +10608,11 @@ class AnnotationAdapter {
     static aiNucleusOverlayParts = [];
     static AI_NUCLEUS_DEFAULT_FILL = "rgba(0,255,0,.15)";
     static AI_NUCLEUS_DEFAULT_STROKE = "#00FF00";
+    /** Interior fill of detection markers (nuclei outlines/circles) starts OFF for the
+     *  same reason as annotationFillEnabled above; toggled by the plain "F" key (no
+     *  modifier — Shift+F is reserved for annotationFillEnabled instead). Outlines are
+     *  always shown regardless of this flag. */
+    static detectionFillEnabled = false;
     static heatMapActive = false;
 
     static get ocrAutoBaseline() { return ocrAutoBaseline; }
@@ -10958,6 +10998,31 @@ class AnnotationAdapter {
         }
         AnnotationAdapter.syncNucleiVisibilityButton(host);
         return AnnotationAdapter.aiOverlayVisible;
+    }
+
+    /**
+     * Plain "F" (no modifier — Shift+F is annotationFillEnabled instead): toggles whether
+     * detection markers (nuclei outlines/circles) show a colored interior or just their
+     * outline. Covers both live rendering paths: the SVG polygon layer painted by
+     * paintStarConvexNucleiLayer (toggle fill-opacity on each tracked part, same trick as
+     * toggleAnnotationFill — never touches "fill" itself, so heat-map/IHC colors survive)
+     * and the canvas-drawn circles from renderSynchronizedCellObjects (force a redraw so
+     * the ctx.fill() gate there picks up the new state immediately).
+     */
+    static toggleDetectionFill(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.detectionFillEnabled = !AnnotationAdapter.detectionFillEnabled;
+        const opacity = AnnotationAdapter.detectionFillEnabled ? "1" : "0";
+        for (const part of AnnotationAdapter.aiNucleusOverlayParts || []) {
+            part?.setAttribute?.("fill-opacity", opacity);
+        }
+        if (typeof AnnotationAdapter.renderSynchronizedCellObjects === "function") {
+            AnnotationAdapter.renderSynchronizedCellObjects();
+        }
+        const btn = doc?.getElementById?.("toggle-detection-fill-btn");
+        btn?.setAttribute?.("aria-pressed", String(AnnotationAdapter.detectionFillEnabled));
+        return AnnotationAdapter.detectionFillEnabled;
     }
 
     static isAiOverlayVisible(root) {
@@ -11780,8 +11845,10 @@ class AnnotationAdapter {
                 const radius = Math.max(4, Number(obj.r ?? obj.radius) || 12);
                 ctx.beginPath();
                 ctx.arc(mapped.x, mapped.y, radius, 0, Math.PI * 2);
-                ctx.fillStyle = "rgba(57,255,20,.14)";
-                ctx.fill();
+                if (AnnotationAdapter.detectionFillEnabled) {
+                    ctx.fillStyle = "rgba(57,255,20,.14)";
+                    ctx.fill();
+                }
                 ctx.stroke();
                 continue;
             }
@@ -12507,6 +12574,10 @@ class AnnotationAdapter {
             const pointsString = AnnotationAdapter.verticesToPointsString(ring);
             polygon.setAttribute("points", pointsString);
             polygon.setAttribute("fill", "rgba(0,255,0,.15)");
+            // Independent on/off knob (plain "F" key, see toggleDetectionFill) that never
+            // touches the fill color itself, so heat-map/IHC recoloring (which sets "fill"
+            // directly) keeps working no matter which state this is in.
+            polygon.setAttribute("fill-opacity", AnnotationAdapter.detectionFillEnabled ? "1" : "0");
             polygon.setAttribute("stroke", "#00FF00");
             polygon.setAttribute("stroke-width", "2");
             polygon.setAttribute("vector-effect", "non-scaling-stroke");

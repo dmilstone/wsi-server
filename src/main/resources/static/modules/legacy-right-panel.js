@@ -72,7 +72,7 @@ const LegacyRightPanelLayout = {
                         title="Show Advanced Channel Palette"
                         aria-label="Show Advanced Channel Palette"
                         aria-pressed="false">◐</button>
-                <a id="pilot-feedback-link" class="panel-secondary-link" href="/pilot-feedback/" title="Open full-page pilot feedback form (shortcut F in viewer)">Pilot Feedback (F)</a>
+                <a id="pilot-feedback-link" class="panel-secondary-link" href="/pilot-feedback/" title="Open full-page pilot feedback form (shortcut Ctrl+Shift+F in viewer)">Pilot Feedback (Ctrl+Shift+F)</a>
                 <a id="local-operations" class="panel-secondary-link" href="/local-operations/" title="Local operations dashboard (image-server browser only)">Local operations</a>
             </div>
             <div class="right-stack-controls">

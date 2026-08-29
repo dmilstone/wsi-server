@@ -211,6 +211,29 @@ assert.equal(clickSpies["toggle-detections-visibility-btn"], 1,
 
 AnnotationAdapter.launchBrightnessContrastPalette = previousLaunch;
 
+// Plain "F" (no Shift) toggles detection (nuclei) interior fill; Shift+F toggles
+// annotation interior fill instead. These are distinct from "d" above, which
+// hides/shows the whole detection marker rather than just its fill.
+{
+    let annotationFillCalls = 0;
+    let detectionFillCalls = 0;
+    const previousAnnotationFill = AnnotationAdapter.toggleAnnotationFill;
+    const previousDetectionFill = AnnotationAdapter.toggleDetectionFill;
+    AnnotationAdapter.toggleAnnotationFill = () => { annotationFillCalls += 1; };
+    AnnotationAdapter.toggleDetectionFill = () => { detectionFillCalls += 1; };
+
+    keydownListener(fakeKeyEvent("f"));
+    assert.equal(detectionFillCalls, 1, "plain \"f\" must toggle detection fill");
+    assert.equal(annotationFillCalls, 0, "plain \"f\" must not toggle annotation fill");
+
+    keydownListener({ key: "F", ctrlKey: false, metaKey: false, altKey: false, shiftKey: true, isComposing: false, preventDefault() {} });
+    assert.equal(annotationFillCalls, 1, "Shift+F must toggle annotation fill");
+    assert.equal(detectionFillCalls, 1, "Shift+F must not also toggle detection fill");
+
+    AnnotationAdapter.toggleAnnotationFill = previousAnnotationFill;
+    AnnotationAdapter.toggleDetectionFill = previousDetectionFill;
+}
+
 // Regression: the detections visibility button and the "Clear Detections" button must
 // both work even when the AI Labs panel has never been opened/bound (no "ai-nuclei-visible"
 // element in the DOM at all).

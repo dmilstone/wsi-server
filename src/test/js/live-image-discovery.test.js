@@ -35,7 +35,14 @@ test("default browser timers retain their required global receiver", () => {
 
 test("manual refresh posts, renders additions, and reports concise status", async () => {
   const calls = [], messages = [], doc = documentStub();
+  // refresh(true) implicitly calls start() when no timer is running yet (see
+  // below), so — like the other tests that reach start() — this must supply
+  // fake interval fns and stop() afterward. Without this, it previously left
+  // a real, referenced setInterval(fn, 30000) running forever, hanging the
+  // process (node:test prints every "✔" line but never exits).
+  let intervalId = 0, cleared = false;
   const discovery = new LiveImageDiscovery({document:doc,
+    setIntervalFn: () => ++intervalId, clearIntervalFn: () => { cleared = true; },
     request: async (url, options={}) => { calls.push([url, options.method]);
       if (url.endsWith("discovery")) return {running:false, added:1};
       if (url === "/api/images") return {images:[{id:"new"}]};
@@ -44,6 +51,10 @@ test("manual refresh posts, renders additions, and reports concise status", asyn
   assert.equal(await discovery.refresh(true), true);
   assert.deepEqual(calls[0], ["/api/images/refresh", "POST"]);
   assert.equal(messages.at(-1), "1 new image available");
+  // Confirms refresh(true) started the timer (start() ran) and that stop()
+  // tears it down cleanly.
+  discovery.stop();
+  assert.equal(cleared, true);
 });
 
 test("automatic refresh applies the current list without waiting for a long scan", async () => {

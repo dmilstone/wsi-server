@@ -58,8 +58,12 @@
     const WsiPilotFeedback = {
         SHORTCUT_KEY: "F",
 
+        // Ctrl+Shift+F exactly (no Alt/Meta). Plain "F" and Shift+F are reserved for the
+        // detection/annotation fill toggles in annotation-adapter.js (toggleDetectionFill /
+        // toggleAnnotationFill), so this shortcut moved to a modifier combo those never use.
         shouldHandleShortcut(event) {
-            if (!event || event.altKey || event.metaKey || event.ctrlKey) return false;
+            if (!event || event.altKey || event.metaKey) return false;
+            if (!event.ctrlKey || !event.shiftKey) return false;
             if (isEditableTarget(event.target)) return false;
             return String(event.key || "").toUpperCase() === WsiPilotFeedback.SHORTCUT_KEY;
         },
