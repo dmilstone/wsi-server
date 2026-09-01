@@ -391,6 +391,34 @@ class DaemonTests(unittest.TestCase):
 
     # --- autobatch wiring (opt-in hot-folder front end) ------------------------
 
+    # --- network_drop wiring (opt-in network-share landing zone) --------------
+
+    def test_run_pass_polls_network_drop_even_when_environment_variable_unset(self):
+        # No WSI_INGEST_NETWORK_DROP_ROOT in this test's environment at all --
+        # poll_and_relocate() itself decides live enabled/disabled state (env
+        # var, or a dashboard-written override file), so run_pass() must call
+        # it unconditionally whenever a tracking ledger is supplied, not only
+        # when the bare env-var enabled() check happens to be true.
+        c = engine.cfg()
+        fake = fake_run_ingest({})
+        tracking = wd.network_drop.TrackingLedger(self.st / 'network-drop-tracking.json')
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.network_drop.poll_and_relocate') as poll:
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '',
+                        network_drop_tracking=tracking)
+        poll.assert_called_once()
+        args, kwargs = poll.call_args
+        self.assertEqual(args[0], c)
+        self.assertEqual(args[2], tracking)
+
+    def test_run_pass_skips_network_drop_poll_when_no_tracking_ledger_supplied(self):
+        c = engine.cfg()
+        fake = fake_run_ingest({})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.network_drop.poll_and_relocate') as poll:
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '')
+        poll.assert_not_called()
+
     def test_run_pass_skips_autobatch_scan_when_disabled(self):
         c = engine.cfg()
         fake = fake_run_ingest({})
@@ -461,11 +489,17 @@ class DaemonTests(unittest.TestCase):
     def test_run_pass_merges_autobatch_dataset_before_queuing_sidecar(self):
         self.make_dataset('slide'); self.seal('slide')
         c = engine.cfg()
-        (self.pr / 'slide').mkdir()  # what a real 'promote' would have produced
         merge_ledger = wd.autobatch.AutobatchMergeLedger(self.st / 'merge.json')
         merge_ledger.record('slide', '20260828')
         sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 5)
-        fake = fake_run_ingest({'observe': Result(0), 'promote-dry-run': Result(0), 'promote-step': Result(0)})
+
+        def promote_step(args, confirmation=None):
+            # Real wsi_ingest.py promote is an atomic rename out of staging.
+            import shutil
+            shutil.move(str(self.st / 'slide'), str(self.pr / 'slide'))
+            return Result(0)
+
+        fake = fake_run_ingest({'observe': Result(0), 'promote-dry-run': Result(0), 'promote-step': promote_step})
         with mock.patch('wsi_ingest_daemon.run_ingest', fake):
             wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '', sidecar_ledger,
                         autobatch_tracking=wd.autobatch.TrackingLedger(self.st / 'tracking.json'),
@@ -473,6 +507,34 @@ class DaemonTests(unittest.TestCase):
         # merged into the origin folder name, not left as the temp wrapper name
         self.assertEqual(sidecar_ledger.pending_names(), ['20260828'])
         self.assertEqual(merge_ledger.pending(), {})
+        self.assertTrue((self.pr / '20260828' / 'slide.vsi').is_file())
+        self.assertFalse((self.pr / 'slide').exists())
+
+    def test_run_pass_retries_leftover_wrapper_from_marker_without_ledger(self):
+        c = engine.cfg()
+        wrapper = self.pr / 'slide'
+        wrapper.mkdir()
+        (wrapper / 'slide.svs').write_bytes(b'x')
+        wd.autobatch.write_merge_origin(wrapper, '20260828')
+        fake = fake_run_ingest({})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake):
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '')
+        self.assertTrue((self.pr / '20260828' / 'slide.svs').is_file())
+        self.assertFalse(wrapper.exists())
+        self.assertFalse((self.pr / '20260828' / wd.autobatch.MERGE_ORIGIN_FILENAME).exists())
+
+    def test_run_pass_does_not_clear_ledger_for_unpromoted_staging_wrapper(self):
+        c = engine.cfg()
+        (self.st / 'slide').mkdir()
+        (self.st / 'slide' / 'slide.svs').write_bytes(b'x')
+        merge_ledger = wd.autobatch.AutobatchMergeLedger(self.st / 'merge.json')
+        merge_ledger.record('slide', '20260828')
+        fake = fake_run_ingest({})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake):
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '',
+                        autobatch_merge_ledger=merge_ledger)
+        self.assertEqual(merge_ledger.pending(), {'slide': '20260828'})
+        self.assertFalse((self.pr / '20260828').exists())
 
     def test_end_to_end_real_subprocess_autobatch_hot_folder(self):
         os.environ.update(dict(

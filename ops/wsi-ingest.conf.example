@@ -16,3 +16,38 @@ export WSI_INGEST_MIN_QUIET_SECONDS=120
 # export WSI_INGEST_DAEMON_INTEGRITY_RETRY_LIMIT=5
 # export WSI_INGEST_DAEMON_REFRESH_URL="http://127.0.0.1:8080"
 # export WSI_INGEST_DAEMON_LOG="/path/to/staging/.wsi-ingest-control/daemon/daemon.log.jsonl"
+
+# Optional: sources datasets from a network share instead of (or in addition
+# to) a local drop into staging -- see ops/wsi_ingest_network_drop.py for the
+# full design. Unset (default) disables this entirely; nothing else changes.
+# WSI_INGEST_STAGING_ROOT and WSI_INGEST_PRODUCTION_ROOT above must stay on
+# the same local filesystem regardless -- this never repoints either of them.
+# A complete slide found stable under this root (one WSI container plus its
+# companion folder when the format needs one -- e.g. VSI's "_<stem>_"
+# sibling -- by per-file size only, checked
+# WSI_INGEST_OBSERVATION_INTERVAL_SECONDS apart, for
+# WSI_INGEST_REQUIRED_OBSERVATIONS checks over WSI_INGEST_MIN_QUIET_SECONDS --
+# the same three knobs above, not separate ones) is copied into staging as
+# its own one-slide directory named after the container stem, verified
+# byte-for-byte by size, and only then handed to the ordinary
+# seal/observe/promote loop. The staging wrapper carries a
+# .wsi-merge-origin marker naming the immediate parent folder. After
+# promote, files are merged into production/<that parent>/ so same-day
+# VS200 slides share wsi-slides/20260831/. Repeat scans of the same
+# physical slide are distinct files because the scanner already puts a
+# timestamp in the filename; an identical filename in that dated folder
+# is a duplicate of the same scan (same size is discarded as already
+# ingested; a different size is refused). The original is never deleted:
+# once the local copy is verified, those items are moved into
+# <this root>/processed/<same relative path>, and the dated parent folder
+# stays on the share so later slides the same day can still be written there.
+#
+# This is only the value the daemon starts with. The already-running
+# ops/wsi_ops_dashboard.py "Network drop root" field can set/change/disable
+# this live, with no restart of anything (it writes a small override file
+# under <staging>/.wsi-ingest-control/daemon/ that the daemon re-reads every
+# poll and that always wins over this variable once it exists) -- see
+# docs/LOCAL-OPS-DASHBOARD-VALIDATION.md's "Network drop root" section.
+# Setting it here is still useful as the initial value a fresh daemon starts
+# with before anyone has used that dashboard field even once.
+# export WSI_INGEST_NETWORK_DROP_ROOT="/Volumes/scanner-share/wsi-drop"

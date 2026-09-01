@@ -33,8 +33,9 @@ pass "shell syntax"
 PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache" \
     python3 -m py_compile "$OPS_DIR/render_cheatsheet.py" "$OPS_DIR/retro_build_metadata.py" "$OPS_DIR/tests/test_renderer.py" "$OPS_DIR/tests/test_retro_metadata.py" \
         "$OPS_DIR/wsi_ingest.py" "$OPS_DIR/wsi_ops_dashboard.py" "$OPS_DIR/wsi_ingest_daemon.py" "$OPS_DIR/wsi_ingest_autobatch.py" \
+        "$OPS_DIR/wsi_ingest_network_drop.py" \
         "$OPS_DIR/tests/test_wsi_ingest.py" "$OPS_DIR/tests/test_wsi_ops_dashboard.py" "$OPS_DIR/tests/test_wsi_ingest_daemon.py" \
-        "$OPS_DIR/tests/test_wsi_ingest_autobatch.py"
+        "$OPS_DIR/tests/test_wsi_ingest_autobatch.py" "$OPS_DIR/tests/test_wsi_ingest_network_drop.py"
 python3 "$OPS_DIR/tests/test_retro_metadata.py"
 pass "epitope sidecar update script"
 if python3 -c 'import reportlab' >/dev/null 2>&1; then
@@ -50,6 +51,8 @@ python3 "$OPS_DIR/tests/test_wsi_ingest_daemon.py"
 pass "unattended ingestion daemon unit tests"
 python3 "$OPS_DIR/tests/test_wsi_ingest_autobatch.py"
 pass "opt-in hot-folder auto-batcher unit tests"
+python3 "$OPS_DIR/tests/test_wsi_ingest_network_drop.py"
+pass "network-drop ingest unit tests"
 # NOTE: test_wsi_ops_dashboard.py is intentionally NOT run here yet -- it has one
 # known pre-existing failure (test_viewer_link_is_local_only_and_no_credentials,
 # unrelated to the daemon/Windows-compat work above) that predates its being wired

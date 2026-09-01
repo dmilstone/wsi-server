@@ -42,7 +42,27 @@ only decides *when* to run those existing commands, and adds:
     production/<origin-folder-name>/ (mirroring the origin's own name from
     staging), so the dated/organized layout survives promotion. Directories
     without the marker are completely untouched by this and keep working
-    exactly as they do today.
+    exactly as they do today;
+  -   an opt-in (WSI_INGEST_NETWORK_DROP_ROOT) front end, see
+    ops/wsi_ingest_network_drop.py, for sourcing datasets from a network
+    share instead of a local drop -- staging and production must stay on the
+    same local filesystem for wsi_ingest.py's atomic promotion to work at
+    all, so this never repoints WSI_INGEST_STAGING_ROOT itself. Instead it
+    tracks per-file size stability directly on the network path (mtime is
+    not trustworthy across a network copy), and once a dataset there looks
+    completely finished, copies it into a fresh local staging directory,
+    verifies the copy matches byte-for-byte by size, and only then hands it
+    to the unmodified seal/observe/promote loop below. The network original
+    is never deleted -- once the local copy is verified, the original is
+    moved (never copied away and left, never deleted) into
+    processed/<same relative path> under the configured root, preserving
+    whatever dated/organizational structure the site uses there. This
+    daemon calls its poll_and_relocate() every pass unconditionally (not
+    gated on the environment variable here) because that function itself
+    also honors a live override file ops/wsi_ops_dashboard.py's "Network
+    drop root" field writes to -- see that module's own docstring -- so a
+    change made there reaches this already-running process on its very
+    next pass, with no restart of anything.
 
 ops/wsi_ingest.py, ops/wsi_ops_dashboard.py, and ops/retro_build_metadata.py
 are all left completely unmodified in their own control flow by this script
@@ -60,6 +80,7 @@ wsi_ingest.py, plus:
   WSI_INGEST_DAEMON_REFRESH_URL            e.g. http://127.0.0.1:8080 (optional)
   WSI_INGEST_DAEMON_LOG                    default <staging>/.wsi-ingest-control/daemon/daemon.log.jsonl
   WSI_INGEST_AUTOBATCH_ENABLED             default off (0/false); see above
+  WSI_INGEST_NETWORK_DROP_ROOT             default unset (disabled); see above
 
 The sidecar OCR step reuses --refresh-url as retro_build_metadata.py's
 --server-url (same running viewer), and otherwise inherits this process's
@@ -76,7 +97,7 @@ Control (create/remove these empty files while the daemon is running):
 Never logs a raw dataset name or file path -- only a truncated SHA-256 of the
 name, matching the convention `wsi_ingest.py inspect` already uses.
 """
-import argparse, hashlib, importlib.util, json, os, stat, subprocess, sys, time
+import argparse, hashlib, importlib.util, json, os, shutil, stat, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -125,9 +146,17 @@ def _load_autobatch():
     return module
 
 
+def _load_network_drop():
+    spec = importlib.util.spec_from_file_location("wsi_ingest_network_drop", str(HERE / "wsi_ingest_network_drop.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 engine = _load_engine()
 retro_metadata = _load_retro_metadata()
 autobatch = _load_autobatch()
+network_drop = _load_network_drop()
 
 
 def short_hash(name):
@@ -473,46 +502,187 @@ def notify_server_refresh(base_url, timeout=5):
         return str(error)
 
 
-def merge_promoted_autobatch_dataset(c, merge_ledger, name):
-    """If `name` was promoted from an autobatch temp wrapper (see
-    wsi_ingest_autobatch.py), merge its contents into
-    production/<origin-folder-name>/ -- creating that shared folder on its
-    first arrival -- and return the origin name for everything downstream
-    (sidecar OCR, refresh) to use instead. Returns `name` unchanged for an
-    ordinary, manually-named batch that autobatch never touched.
+def _remove_path(path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
-    A crash between individual item moves needs no separate recovery branch:
-    the ledger entry is only cleared once the temp wrapper is fully drained,
-    so a resumed pass just moves whatever items are still left in it."""
-    origin = merge_ledger.pending().get(name)
+
+def _is_merge_skip_name(name):
+    return name in autobatch.IGNORED_NOISE_NAMES or name == autobatch.MERGE_ORIGIN_FILENAME
+
+
+def _already_present_in_origin(src, dest):
+    """True when dest already holds this scan (same filename, same size for
+    a file; same directory name for a companion folder). The wrapper copy
+    can then be discarded instead of left as a second top-level dataset."""
+    try:
+        if src.is_file() and dest.is_file():
+            return src.stat().st_size == dest.stat().st_size
+        if src.is_dir() and dest.is_dir():
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def resolve_merge_origin(c, merge_ledger, name):
+    """Origin folder name for a promoted temp wrapper. Prefers the marker
+    file that traveled inside the directory through promote; falls back to
+    the on-disk ledger for wrappers that predate the marker."""
+    src_dir = c["production"] / name
+    origin = autobatch.read_merge_origin(src_dir)
+    if origin is None and merge_ledger is not None:
+        origin = merge_ledger.pending().get(name)
+    if origin is None or origin == name:
+        return None
+    return origin
+
+
+def pending_merge_wrapper_names(c, merge_ledger):
+    """Production directories that still need merging. Ledger entries for
+    wrappers that have only reached staging (not yet promoted) are excluded
+    -- clearing those would forget the origin before promote ever happens."""
+    names = set()
+    if merge_ledger is not None:
+        for name in merge_ledger.pending():
+            src = c["production"] / name
+            try:
+                if src.is_dir() and not src.is_symlink():
+                    names.add(name)
+            except OSError:
+                continue
+    try:
+        for item in c["production"].iterdir():
+            if item.name.startswith(".") or item.name.startswith("-"):
+                continue
+            try:
+                if item.is_dir() and not item.is_symlink() and autobatch.read_merge_origin(item) is not None:
+                    names.add(item.name)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return names
+
+
+def merge_promoted_autobatch_dataset(c, merge_ledger, name):
+    """If `name` was promoted from an autobatch/network-drop temp wrapper,
+    merge its contents into production/<origin-folder-name>/ -- creating
+    that shared folder on its first arrival -- and return the origin name
+    for everything downstream (sidecar OCR, refresh) to use instead.
+    Returns `name` unchanged for an ordinary, manually-named batch.
+
+    Origin is read from the marker file inside the wrapper (see
+    autobatch.write_merge_origin); the merge ledger is only a fallback.
+    Noise files (.DS_Store, ...) and the marker itself are never merged
+    into the dated folder -- they previously made merge look like a
+    filename collision against the dated folder's own .DS_Store and left
+    empty accession-named wrappers behind.
+
+    A crash between individual item moves needs no separate recovery
+    branch: leftover wrappers are retried on later passes (see
+    retry_pending_merges) until drained."""
+    origin = resolve_merge_origin(c, merge_ledger, name)
     if origin is None:
         return name
     key = short_hash(name)
     src_dir = c["production"] / name
     dest_dir = c["production"] / origin
-    if src_dir.is_dir():
-        dest_dir.mkdir(mode=0o700, exist_ok=True)
-        os.chmod(dest_dir, 0o700)
-        blocked = False
-        for item in sorted(src_dir.iterdir()):
-            target = dest_dir / item.name
-            if target.exists():
-                blocked = True
-                log_event(c, "autobatch_merge_collision", dataset=key, origin=short_hash(origin))
+    if not src_dir.is_dir():
+        return name
+    dest_dir.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(dest_dir, 0o700)
+    blocked = False
+    for item in sorted(src_dir.iterdir()):
+        # Leave the origin marker and Finder/Windows noise in the wrapper
+        # until drain succeeds. Deleting the marker first would lose origin
+        # if a later item then collides.
+        if _is_merge_skip_name(item.name):
+            continue
+        target = dest_dir / item.name
+        if target.exists():
+            if _already_present_in_origin(item, target):
+                try:
+                    _remove_path(item)
+                except OSError:
+                    blocked = True
                 continue
-            engine.atomic_rename_noreplace(item, target)
-        if blocked:
-            return name  # leave the ledger entry + remaining item(s) for the next pass / a human
+            blocked = True
+            log_event(c, "autobatch_merge_collision", dataset=key, origin=short_hash(origin))
+            continue
+        engine.atomic_rename_noreplace(item, target)
+    if blocked:
+        return name
+    try:
+        for leftover in list(src_dir.iterdir()):
+            if _is_merge_skip_name(leftover.name):
+                _remove_path(leftover)
+        src_dir.rmdir()
+    except OSError:
+        pass
+    if src_dir.exists():
+        return name  # wrapper still has something real; retry next pass
+    if merge_ledger is not None:
         try:
-            src_dir.rmdir()
+            still_in_staging = (c["staging"] / name).is_dir()
         except OSError:
-            pass
-    merge_ledger.clear(name)
+            still_in_staging = False
+        # Same stem can be a leftover wrapper in production *and* a not-yet-
+        # promoted copy in staging. Clearing the ledger here would forget
+        # origin for the staging copy if it predates the in-wrapper marker.
+        if not still_in_staging:
+            merge_ledger.clear(name)
     log_event(c, "autobatch_merged", dataset=key, origin=short_hash(origin))
     return origin
 
 
-def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=None, autobatch_merge_ledger=None):
+def retry_pending_merges(c, merge_ledger):
+    """Retries merge for wrappers that already promoted but did not finish
+    folding into the dated folder (crash, .DS_Store collision, daemon
+    restart). Safe to call every pass; a wrapper with no origin marker and
+    no ledger entry is left alone. Ledger keys whose directories are gone
+    from both production and staging are stale (already merged, crash
+    between rmdir and clear) and are dropped."""
+    for name in sorted(pending_merge_wrapper_names(c, merge_ledger)):
+        merge_promoted_autobatch_dataset(c, merge_ledger, name)
+    if merge_ledger is None:
+        return
+    for name in list(merge_ledger.pending()):
+        try:
+            in_production = (c["production"] / name).is_dir()
+            in_staging = (c["staging"] / name).is_dir()
+        except OSError:
+            continue
+        if not in_production and not in_staging:
+            merge_ledger.clear(name)
+
+
+def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=None, autobatch_merge_ledger=None,
+             network_drop_tracking=None):
+    # Unconditional (not gated on network_drop.enabled() here): that helper
+    # only reflects the environment variable, but poll_and_relocate() itself
+    # resolves live enabled/disabled state fresh every call (env var, or a
+    # dashboard-written override file that always wins when present -- see
+    # wsi_ingest_network_drop.py's docstring) and simply returns immediately
+    # when the outcome is "disabled", so calling it here every pass is what
+    # lets the dashboard turn this feature on, off, or repoint it on an
+    # already-running daemon without a restart.
+    # Leftover wrappers from earlier passes (or a previous daemon version)
+    # must be retried before a possibly-slow network copy, otherwise empty
+    # accession-named dirs sit in production until that copy finishes.
+    retry_pending_merges(c, autobatch_merge_ledger)
+
+    if network_drop_tracking is not None:
+        network_drop.poll_and_relocate(
+            c, engine, network_drop_tracking,
+            log=lambda event, **fields: log_event(c, event, **fields),
+            merge_ledger=autobatch_merge_ledger,
+        )
+
     if autobatch.enabled() and autobatch_tracking is not None and autobatch_merge_ledger is not None:
         autobatch.scan_and_relocate(
             c, engine, autobatch_tracking, autobatch_merge_ledger,
@@ -593,9 +763,7 @@ def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=Non
         promoted = run_ingest(["promote", "--step", name], confirmation="PROMOTE")
         if promoted.returncode == 0:
             log_event(c, "promoted", dataset=key)
-            sidecar_name = name
-            if autobatch_merge_ledger is not None:
-                sidecar_name = merge_promoted_autobatch_dataset(c, autobatch_merge_ledger, name)
+            sidecar_name = merge_promoted_autobatch_dataset(c, autobatch_merge_ledger, name)
             if sidecar_ledger is not None:
                 sidecar_ledger.add(sidecar_name)
             error = notify_server_refresh(refresh_url)
@@ -605,6 +773,8 @@ def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=Non
             category = failure_category(promoted.stderr)
             if category not in ("stability", "lock"):
                 log_event(c, "promote_failed", dataset=key, category=category)
+
+    retry_pending_merges(c, autobatch_merge_ledger)
 
     if sidecar_ledger is not None:
         run_pending_sidecar_ocr(c, sidecar_ledger, refresh_url)
@@ -635,7 +805,12 @@ def main(argv=None):
     sidecar_ledger = SidecarLedger(daemon_control_dir(c) / "sidecar-pending.json", args.sidecar_retry_limit)
     autobatch_tracking = autobatch.TrackingLedger(daemon_control_dir(c) / autobatch.TRACKING_LEDGER_FILENAME)
     autobatch_merge_ledger = autobatch.AutobatchMergeLedger(daemon_control_dir(c) / autobatch.MERGE_LEDGER_FILENAME)
-    log_event(c, "daemon_start", interval_seconds=args.interval, autobatch_enabled=autobatch.enabled())
+    network_drop_tracking = network_drop.TrackingLedger(daemon_control_dir(c) / network_drop.TRACKING_LEDGER_FILENAME)
+    # effective_config(), not the bare enabled() env-var check, so this
+    # startup line already reflects a live override file from a previous
+    # run of the dashboard, if one exists.
+    log_event(c, "daemon_start", interval_seconds=args.interval, autobatch_enabled=autobatch.enabled(),
+              network_drop_enabled=network_drop.effective_config(c)[0])
     try:
         while True:
             stop, pause = control_flags(c)
@@ -647,7 +822,7 @@ def main(argv=None):
             else:
                 try:
                     run_pass(c, ledger, args.refresh_url, sidecar_ledger,
-                             autobatch_tracking, autobatch_merge_ledger)
+                             autobatch_tracking, autobatch_merge_ledger, network_drop_tracking)
                 except engine.Fail as error:
                     log_event(c, "pass_failed", category=error.cat)
                 except Exception as error:  # noqa: BLE001 - top-level supervisor, must never die from a per-pass fault

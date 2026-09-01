@@ -28,10 +28,11 @@ convention), it:
      needs no extra uniquing. That directory then looks exactly like a
      manually-created batch to the unmodified wsi_ingest.py / daemon
      seal-observe-promote loop, which picks it up and processes it exactly
-     as it already does today. This module's only other daemon-side hook is
-     recording, in AutobatchMergeLedger, which origin folder that temp
-     wrapper's contents should be merged back into once promoted (see
-     merge_promoted_dataset in wsi_ingest_daemon.py).
+     as it already does today. Origin for the later merge is written into
+     the wrapper as MERGE_ORIGIN_FILENAME so it rides along through
+     wsi_ingest.py's atomic promote. AutobatchMergeLedger is only a fallback
+     for wrappers that predate the marker (see merge_promoted_dataset in
+     wsi_ingest_daemon.py).
   4. quarantines anything that stays stable without ever resolving into a
      complete unit (an unrecognized extension, or a companion-shaped folder
      whose anchor never appears) to <staging>/-unrecognized/<origin>/<name>
@@ -54,6 +55,10 @@ AUTOBATCH_SENTINEL = ".wsi-autobatch"
 QUARANTINE_DIRNAME = "-unrecognized"
 TRACKING_LEDGER_FILENAME = "autobatch-tracking.json"
 MERGE_LEDGER_FILENAME = "autobatch-merge-pending.json"
+# Travels inside the temp wrapper through wsi_ingest.py's atomic promote so
+# merge does not depend on the sidecar ledger surviving. Must not start with
+# ".wsi-environment-" -- that prefix is forbidden inside datasets.
+MERGE_ORIGIN_FILENAME = ".wsi-merge-origin"
 IGNORED_NOISE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", ".localized", AUTOBATCH_SENTINEL}
 # An anchor whose companion never shows up at all must not wait forever,
 # silently invisible -- but the ordinary per-item quiet window is
@@ -230,10 +235,13 @@ class TrackingLedger:
 class AutobatchMergeLedger:
     """Maps a temp-wrapper dataset name (as it will be promoted by the
     unmodified wsi_ingest.py engine) to the origin marked-folder name its
-    contents should be merged back into in production. An entry is removed
-    only once the merge is fully complete, so re-attempting a merge whose
-    prior attempt was interrupted mid-way is just the normal code path
-    running again on the next pass -- not a separate recovery branch."""
+    contents should be merged back into in production. Prefer the
+    `.wsi-merge-origin` file inside the wrapper itself when present; this
+    ledger is the fallback for wrappers that predate that marker. An entry
+    is removed only once the merge is fully complete, so re-attempting a
+    merge whose prior attempt was interrupted mid-way is just the normal
+    code path running again on the next pass -- not a separate recovery
+    branch."""
 
     def __init__(self, path):
         self.path = path
@@ -264,6 +272,41 @@ class AutobatchMergeLedger:
         if temp_name in data:
             del data[temp_name]
             self._save(data)
+
+
+def _valid_merge_origin(origin_name):
+    origin = (origin_name or "").strip()
+    if not origin or origin in (".", "..") or "/" in origin or "\\" in origin:
+        return None
+    if Path(origin).name != origin:
+        return None
+    return origin
+
+
+def write_merge_origin(wrapper_dir, origin_name):
+    """Writes the parent/dated folder name into the temp wrapper so it
+    rides along with wsi_ingest.py's atomic promote. The sidecar
+    AutobatchMergeLedger is then only a fallback for wrappers that predate
+    this file."""
+    origin = _valid_merge_origin(origin_name)
+    if origin is None:
+        raise ValueError("invalid merge origin")
+    path = Path(wrapper_dir) / MERGE_ORIGIN_FILENAME
+    # Cannot use Path.with_suffix here: ".wsi-merge-origin" is a single
+    # dotted name, and with_suffix(".tmp") would replace it with ".tmp".
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(origin + "\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+    os.chmod(path, 0o600)
+
+
+def read_merge_origin(wrapper_dir):
+    path = Path(wrapper_dir) / MERGE_ORIGIN_FILENAME
+    try:
+        return _valid_merge_origin(path.read_text())
+    except OSError:
+        return None
 
 
 def _fingerprint(path):
@@ -461,6 +504,26 @@ def _relocate_unit(c, engine, merge_ledger, folder, stem, unit_paths, log):
             except OSError:
                 log("autobatch_relocate_rollback_failed", origin=folder.name,
                     detail=f"could not restore {relocated.name}")
+        try:
+            dest_dir.rmdir()
+        except OSError:
+            pass
+        log("autobatch_relocate_failed", origin=folder.name, detail=str(error))
+        return False
+    try:
+        write_merge_origin(dest_dir, folder.name)
+    except (OSError, ValueError) as error:
+        for original, relocated in reversed(moved):
+            try:
+                os.rename(str(relocated), str(original))
+            except OSError:
+                log("autobatch_relocate_rollback_failed", origin=folder.name,
+                    detail=f"could not restore {relocated.name}")
+        for leftover in (MERGE_ORIGIN_FILENAME, MERGE_ORIGIN_FILENAME + ".tmp"):
+            try:
+                (dest_dir / leftover).unlink()
+            except OSError:
+                pass
         try:
             dest_dir.rmdir()
         except OSError:

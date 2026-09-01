@@ -67,6 +67,23 @@ class AutobatchUnitTests(unittest.TestCase):
             ledger.clear("temp-name")
             self.assertEqual(ledger.pending(), {})
 
+    def test_merge_origin_round_trip_and_rejects_path_like_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapper = Path(tmp) / "slide"
+            wrapper.mkdir()
+            autobatch.write_merge_origin(wrapper, "20260831")
+            marker = wrapper / autobatch.MERGE_ORIGIN_FILENAME
+            self.assertEqual(marker.name, ".wsi-merge-origin")
+            self.assertFalse((wrapper / ".tmp").exists())
+            self.assertEqual(autobatch.read_merge_origin(wrapper), "20260831")
+            self.assertTrue(marker.name.startswith(".wsi-merge-"))
+            self.assertFalse(marker.name.startswith(".wsi-environment-"))
+            for bad in ("", ".", "..", "a/b", "a\\b"):
+                with self.assertRaises(ValueError):
+                    autobatch.write_merge_origin(wrapper, bad)
+            self.assertEqual(autobatch.read_merge_origin(wrapper), "20260831")
+            self.assertIsNone(autobatch.read_merge_origin(Path(tmp) / "missing"))
+
     def test_is_ready_requires_both_observation_count_and_quiet_window(self):
         c = {"obs": 2, "interval": 1, "quiet": 5}
         self.assertFalse(autobatch._is_ready(stable_since=100, observations=1, c=c, now=200))  # not enough observations
@@ -154,6 +171,7 @@ class AutobatchScanIntegrationTests(unittest.TestCase):
         self.scan()  # second observation, quiet window satisfied
         self.assertTrue((self.staging / "slide").is_dir())
         self.assertTrue((self.staging / "slide" / "slide.svs").is_file())
+        self.assertEqual(autobatch.read_merge_origin(self.staging / "slide"), "20260828")
         self.assertEqual(self.merge_ledger.pending(), {"slide": "20260828"})
         self.assertIn("autobatch_relocated", [e for e, _ in self.events])
 
@@ -444,6 +462,82 @@ class AutobatchDaemonMergeTests(unittest.TestCase):
         self.assertEqual(result, "slide")  # unresolved this pass
         self.assertEqual(merge_ledger.pending(), {"slide": "20260828"})
         self.assertEqual((self.production / "20260828" / "a.svs").read_bytes(), b"already-there")
+        self.assertTrue((self.production / "slide" / "a.svs").is_file())
+
+    def test_merges_from_marker_with_empty_ledger(self):
+        c = engine.cfg()
+        wrapper = self.production / "slide"
+        wrapper.mkdir()
+        (wrapper / "slide.svs").write_bytes(b"x")
+        autobatch.write_merge_origin(wrapper, "20260828")
+        merge_ledger = autobatch.AutobatchMergeLedger(self.staging / "merge.json")
+        result = wd.merge_promoted_autobatch_dataset(c, merge_ledger, "slide")
+        self.assertEqual(result, "20260828")
+        self.assertTrue((self.production / "20260828" / "slide.svs").is_file())
+        self.assertFalse((self.production / "20260828" / autobatch.MERGE_ORIGIN_FILENAME).exists())
+        self.assertFalse(wrapper.exists())
+        self.assertEqual(merge_ledger.pending(), {})
+
+    def test_ds_store_does_not_block_merge_or_land_in_origin(self):
+        c = engine.cfg()
+        wrapper = self.production / "slide"
+        wrapper.mkdir()
+        (wrapper / "slide.svs").write_bytes(b"x")
+        (wrapper / ".DS_Store").write_bytes(b"finder")
+        autobatch.write_merge_origin(wrapper, "20260828")
+        (self.production / "20260828").mkdir()
+        (self.production / "20260828" / ".DS_Store").write_bytes(b"dated-folder-finder")
+        merge_ledger = autobatch.AutobatchMergeLedger(self.staging / "merge.json")
+        result = wd.merge_promoted_autobatch_dataset(c, merge_ledger, "slide")
+        self.assertEqual(result, "20260828")
+        self.assertTrue((self.production / "20260828" / "slide.svs").is_file())
+        self.assertEqual((self.production / "20260828" / ".DS_Store").read_bytes(), b"dated-folder-finder")
+        self.assertFalse(wrapper.exists())
+
+    def test_same_size_duplicate_is_discarded_from_the_wrapper(self):
+        c = engine.cfg()
+        wrapper = self.production / "slide"
+        wrapper.mkdir()
+        (wrapper / "a.svs").write_bytes(b"same")
+        autobatch.write_merge_origin(wrapper, "20260828")
+        (self.production / "20260828").mkdir()
+        (self.production / "20260828" / "a.svs").write_bytes(b"same")
+        merge_ledger = autobatch.AutobatchMergeLedger(self.staging / "merge.json")
+        result = wd.merge_promoted_autobatch_dataset(c, merge_ledger, "slide")
+        self.assertEqual(result, "20260828")
+        self.assertFalse(wrapper.exists())
+        self.assertEqual((self.production / "20260828" / "a.svs").read_bytes(), b"same")
+        self.assertEqual(merge_ledger.pending(), {})
+
+    def test_empty_wrapper_with_only_ds_store_is_removed_via_ledger(self):
+        c = engine.cfg()
+        wrapper = self.production / "BS26-044415 B1-3_20260831_122624"
+        wrapper.mkdir()
+        (wrapper / ".DS_Store").write_bytes(b"finder")
+        merge_ledger = autobatch.AutobatchMergeLedger(self.staging / "merge.json")
+        merge_ledger.record(wrapper.name, "20260831")
+        result = wd.merge_promoted_autobatch_dataset(c, merge_ledger, wrapper.name)
+        self.assertEqual(result, "20260831")
+        self.assertTrue((self.production / "20260831").is_dir())
+        self.assertFalse(wrapper.exists())
+        self.assertFalse((self.production / "20260831" / ".DS_Store").exists())
+        self.assertEqual(merge_ledger.pending(), {})
+
+    def test_merging_leftover_keeps_ledger_when_staging_still_has_same_name(self):
+        c = engine.cfg()
+        leftover = self.production / "slide"
+        leftover.mkdir()
+        (leftover / "old.svs").write_bytes(b"old")
+        (self.staging / "slide").mkdir()
+        (self.staging / "slide" / "new.svs").write_bytes(b"new")
+        merge_ledger = autobatch.AutobatchMergeLedger(self.staging / "merge.json")
+        merge_ledger.record("slide", "20260828")
+        result = wd.merge_promoted_autobatch_dataset(c, merge_ledger, "slide")
+        self.assertEqual(result, "20260828")
+        self.assertTrue((self.production / "20260828" / "old.svs").is_file())
+        self.assertFalse(leftover.exists())
+        self.assertEqual(merge_ledger.pending(), {"slide": "20260828"})
+        self.assertTrue((self.staging / "slide" / "new.svs").is_file())
 
 
 if __name__ == "__main__":
