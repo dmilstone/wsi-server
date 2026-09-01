@@ -200,5 +200,6 @@ const html = fs.readFileSync(path.join(staticRoot, "index.html"), "utf8");
 assert.match(html, /<b>F<\/b><\/td><td>Toggle Detection \(Nuclei\) Interior Fill Color/);
 assert.match(html, /<b>Shift\+F<\/b><\/td><td>Toggle Annotation Interior Fill Color/);
 assert.match(html, /<td>Ctrl\+Shift\+F<\/td><td>Open\/Close Pilot Feedback Panel/);
+assert.match(html, /<b style="color:#FFCC00;">Ctrl\+Shift\+T<\/b>/);
 
 console.log("annotation-fill-toggle.test.js: ok");

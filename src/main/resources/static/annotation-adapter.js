@@ -6307,7 +6307,7 @@ class AnnotationAdapter {
      * Shows/hides the `#developer-sandbox-container` wrapper holding both legacy
      * staging toolbars (the old always-on main bar and the old hidden-by-default
      * QuPath bar). There is no dedicated toolbar button for this anymore (removed in
-     * the toolbar cleanup pass) — it is reachable only via the "T" hotkey (see
+     * the toolbar cleanup pass) — it is reachable only via Ctrl-Shift-T (see
      * bindQuPathKeyboardShortcuts). Purely a display toggle on the wrapper; every
      * control inside keeps its own independent state/bindings exactly as before.
      */
@@ -6574,7 +6574,18 @@ class AnnotationAdapter {
             if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
                 return;
             }
-            if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || !e.key) return;
+            if (e.isComposing || !e.key) return;
+
+            // Ctrl-Shift-T (Control, not Command) reveals the hidden developer
+            // sandbox / extra toolbars. Handled before the modifier early-return
+            // below so ordinary Ctrl/Cmd combinations still do not fire A/N/D/…
+            let key = String(e.key || "").toLowerCase();
+            if (key === "t" && e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                AnnotationAdapter.toggleDeveloperSandbox();
+                return;
+            }
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
 
             // Enter/Return finishing an in-progress polygon/polyline/wand shape is handled by
             // handleMeasurementKeyboardEscape's window keydown listener, which is registered with
@@ -6582,7 +6593,6 @@ class AnnotationAdapter {
             // Capture-phase listeners on window fire before bubble-phase ones, so by the time this
             // handler runs, Enter has already been handled — don't duplicate that check here.
 
-            let key = String(e.key || "").toLowerCase();
             switch(key) {
                 case "a": // QuPath: Toggle annotations visibility (A / a)
                     e.preventDefault();
@@ -6615,12 +6625,6 @@ class AnnotationAdapter {
                     let sideBtn = document.getElementById("toggle-sidebar-btn")
                         || document.getElementById("toggle-left");
                     if (sideBtn) sideBtn.click();
-                    break;
-
-                case "t": // Toggle the hidden developer sandbox (legacy staging toolbars) —
-                          // no toolbar button for this anymore (cleanup pass); hotkey-only.
-                    e.preventDefault();
-                    AnnotationAdapter.toggleDeveloperSandbox();
                     break;
 
                 case "_": // QuPath: Browser
@@ -6726,7 +6730,14 @@ class AnnotationAdapter {
                 }
                 return;
             }
-            if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "t", "_", "-", "."].includes(key)) {
+            if (key === "t" && event.originalEvent?.ctrlKey && event.originalEvent?.shiftKey) {
+                event.preventDefaultAction = true;
+                if (typeof event.originalEvent?.preventDefault === "function") {
+                    event.originalEvent.preventDefault();
+                }
+                return;
+            }
+            if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "_", "-", "."].includes(key)) {
                 event.preventDefaultAction = true; // Suppresses OSD's default pan/zoom behavior on these keys
                 if (typeof event.originalEvent?.preventDefault === "function") {
                     event.originalEvent.preventDefault();

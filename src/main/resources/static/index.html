@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260825-workstation-scoping"></script>
+    <script src="/annotation-adapter.js?v=20260901-ctrl-shift-t"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260822-native-osd-svg"></script>
     <style>
@@ -1491,7 +1491,7 @@
             content: "Aa"; font-size: 0.7em; font-weight: 750; line-height: 1;
             color: rgba(255,255,255,.84); letter-spacing: -.02em;
         }
-        /* Dashboard is always available and opens same-origin local operations docs. */
+        /* Dashboard is always available and opens the loopback ops dashboard. */
         #dashboard-link.toolbar-button {
             display: inline-grid !important;
             width: auto;
@@ -3923,7 +3923,7 @@
             <tr><td><b>W</b></td><td>Wand Tool (Local boundary threshold auto-trace)</td></tr>
             <tr><td><b>.</b></td><td>Points Tool (Multi-point structure tabulation)</td></tr>
                 <tr><td><b>S</b></td><td>Selection Mode (Drag shapes, input name labels)</td></tr>
-                <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
+                <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">Ctrl+Shift+T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
                 <tr style="border-top: 1px solid #333;"><td>Vis</td><td>Export Visible Region (native-resolution image download)</td></tr>
                 <tr><td>Ant</td><td>Export Selected Annotation (native-resolution crop; select an annotation first)</td></tr>
                 <tr><td>Ovw</td><td>Toggle Slide Overview Thumbnail Navigator</td></tr>
@@ -4119,7 +4119,7 @@
         link.hidden = false;
         link.removeAttribute("aria-disabled");
         link.removeAttribute("tabindex");
-        link.setAttribute("href", "/local-operations/");
+        link.setAttribute("href", DASHBOARD_ABSOLUTE_URL);
     }
 
     async function localOpsDashboardIsListening() {
@@ -4140,12 +4140,12 @@
         const link = document.getElementById("dashboard-link");
         if (!link || link.dataset.outboundBound === "true") return;
         link.dataset.outboundBound = "true";
-        link.setAttribute("href", "/local-operations/");
+        link.setAttribute("href", DASHBOARD_ABSOLUTE_URL);
         link.addEventListener("click", event => {
             if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
-            window.open("/local-operations/", "_blank");
+            window.open(DASHBOARD_ABSOLUTE_URL, "_blank");
         });
     }
 
