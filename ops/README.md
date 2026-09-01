@@ -220,6 +220,20 @@ export WSI_OPS_DASHBOARD_PASSWORD='enter a local password interactively'
 Then open `http://127.0.0.1:8084/` in a browser running on the image-server
 host. Stop it with Ctrl-C.
 
+The dashboard also has an "Environment configuration (development)" section to
+change the ingestion staging root (`WSI_INGEST_STAGING_ROOT`, takes effect
+immediately, no restart), the network drop root (`WSI_INGEST_NETWORK_DROP_ROOT`,
+also takes effect immediately -- the running ingestion daemon picks it up on
+its next poll, no restart of anything), and the development viewer's own image
+directory (`wsi.image-directory`, requires typing `RESTART` and stops/starts
+development via `ops/wsi` -- see `docs/LOCAL-OPS-DASHBOARD-VALIDATION.md`).
+Staging, rehearsal, and production directories are not yet editable from here.
+Each of those three fields also has a "Browse…" link that pops a real native
+macOS folder-picker window (not anything drawn by the page itself), plus a
+smaller "list view" link to a click-through, no-typing fallback picker inside
+the page -- either way as an alternative to the plain text input. See the same
+doc's "Browse... dialog" section.
+
 ## Unattended ingestion daemon
 
 `ops/wsi-ingest-daemon` is an optional, separate long-running process that
