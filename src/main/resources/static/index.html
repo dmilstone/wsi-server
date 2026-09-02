@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260901-ctrl-shift-t"></script>
+    <script src="/annotation-adapter.js?v=20260901-qp-window-close"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260822-native-osd-svg"></script>
     <style>
@@ -279,9 +279,100 @@
             cursor: pointer;
         }
         #case-filter-select:focus-visible,
-        #case-selector:focus-visible {
+        #case-selector:focus-visible,
+        .case-filter-search:focus-visible {
             outline: 2px solid var(--accent);
             outline-offset: 1px;
+        }
+        .case-filter-combobox {
+            position: relative;
+            display: block;
+            flex: 0 1 220px;
+            width: auto;
+            max-width: 240px;
+            min-width: 140px;
+            min-height: 32px;
+            overflow: visible;
+        }
+        .case-filter-search {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 32px;
+            padding: 5px 22px 5px 8px;
+            color: var(--text);
+            background: var(--surface, #1a1f27);
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 7px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .case-filter-chevron {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid rgba(255,255,255,.45);
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+        .case-filter-combobox > select.case-filter-native {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+            flex: none;
+            min-width: 0;
+            min-height: 0;
+            max-width: none;
+            pointer-events: none;
+        }
+        .case-filter-listbox {
+            position: fixed;
+            left: 0;
+            top: 0;
+            z-index: 10050;
+            max-height: 250px;
+            margin: 0;
+            padding: 4px 0;
+            overflow-x: hidden;
+            overflow-y: auto;
+            list-style: none;
+            color: var(--text);
+            background: var(--surface, #1a1f27);
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 7px;
+            box-sizing: border-box;
+        }
+        .case-filter-listbox[hidden] { display: none; }
+        .case-filter-option {
+            padding: 6px 10px;
+            overflow: hidden;
+            color: var(--text-secondary, #b5c0cc);
+            font-size: 13px;
+            font-weight: 600;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .case-filter-option.is-active,
+        .case-filter-option:hover {
+            color: var(--text);
+            background: rgba(255,255,255,.08);
+        }
+        .case-filter-empty {
+            padding: 6px 10px;
+            color: var(--text-muted, #8291a2);
+            font-size: 13px;
+            font-weight: 600;
         }
         #images-panel > .image-info {
             margin: 0 10px 8px;
@@ -905,13 +996,22 @@
             line-height: 1;
             flex: 0 0 auto;
         }
-        #sidebar-header-controls #case-filter-select,
-        #sidebar-header-controls #case-selector {
+        #sidebar-header-controls .case-filter-combobox {
             flex: 0 1 220px;
             width: auto;
             max-width: 240px;
             min-width: 140px;
             min-height: 32px;
+        }
+        #sidebar-header-controls .case-filter-combobox > select.case-filter-native {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            min-width: 0;
+            min-height: 0;
+            max-width: none;
+            flex: none;
+            pointer-events: none;
         }
         .toolbar-docs-row .header-app-nav {
             flex: 1 1 auto;
@@ -2837,7 +2937,7 @@
         }
         .bc-channel-cell {
             display: grid;
-            grid-template-columns: auto auto minmax(0, 1fr);
+            grid-template-columns: auto minmax(0, 1fr) auto;
             grid-template-rows: auto;
             align-items: center;
             column-gap: 6px;
@@ -2867,27 +2967,59 @@
             font-weight: 500;
         }
         .bc-channel-range {
-            grid-column: 2 / -1;
+            grid-column: 2 / 3;
             color: #8a8a8a;
             font-variant-numeric: tabular-nums;
             font-size: 0.65rem;
         }
+        .bc-channels-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.2rem 0.7rem 0.15rem;
+            color: #c8c8c8;
+            font-size: 0.72rem;
+            font-weight: 650;
+            flex: 0 0 auto;
+        }
+        .bc-channels-head-show {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }
         .floating-channel-cb {
             appearance: none;
             -webkit-appearance: none;
+            position: relative;
             width: 14px;
             height: 14px;
-            border: 2px solid #fff !important;
-            background-color: transparent !important;
-            border-radius: 3px;
+            border: 2px solid var(--channel-color, #fff);
+            background-color: transparent;
+            border-radius: 2px;
             cursor: pointer;
-            display: inline-block;
+            display: inline-grid;
+            place-items: center;
             vertical-align: middle;
-            margin-right: 6px;
+            margin: 0;
+            padding: 0;
+            flex: 0 0 14px;
         }
         .floating-channel-cb:checked {
-            background-color: #00FF00 !important; /* Vibrant green check fill when active */
-            border-color: #00FF00 !important;
+            background-color: var(--channel-color, #4d94d8);
+            border-color: var(--channel-color, #4d94d8);
+        }
+        .floating-channel-cb:not(:checked)::after {
+            content: "\00d7";
+            color: var(--channel-color, #fff);
+            font-size: 11px;
+            font-weight: 800;
+            line-height: 1;
+        }
+        .fcp-show-all-cb {
+            --channel-color: #e8e8e8;
         }
         .fcp-swatch {
             display: inline-block;
@@ -2895,6 +3027,240 @@
             height: 14px;
             border: 1px solid rgba(255,255,255,.45);
             vertical-align: middle;
+            cursor: pointer;
+        }
+        .qp-color-chooser,
+        .qp-channel-properties,
+        .qp-custom-colors {
+            position: fixed;
+            z-index: 10050;
+            color-scheme: light;
+            background: #ececec;
+            color: #222;
+            -webkit-text-fill-color: #222;
+            border: 1px solid #b4b4b4;
+            border-radius: 6px;
+            box-shadow: 0 8px 24px rgba(0,0,0,.28);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 12px;
+        }
+        .qp-color-chooser *,
+        .qp-channel-properties *,
+        .qp-custom-colors * {
+            color: inherit;
+            -webkit-text-fill-color: inherit;
+        }
+        .qp-color-chooser {
+            padding: 8px 8px 6px;
+            width: max-content;
+            max-width: 92vw;
+        }
+        .qp-color-row,
+        .qp-color-grid {
+            display: grid;
+            gap: 2px;
+            margin: 0 0 6px;
+        }
+        .qp-color-row { grid-template-columns: repeat(12, 18px); }
+        .qp-color-grid { grid-template-columns: repeat(12, 18px); }
+        .qp-color-swatch {
+            width: 18px;
+            height: 18px;
+            border: 1px solid rgba(0,0,0,.28);
+            padding: 0;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        .qp-color-swatch.is-empty { background: #fff; }
+        .qp-color-swatch.is-selected { outline: 2px solid #1473e6; outline-offset: 0; }
+        .qp-color-label {
+            color: #333;
+            font-size: 11px;
+            margin: 2px 0 4px;
+        }
+        .qp-color-custom-link {
+            display: inline-block;
+            margin-top: 4px;
+            color: #0b57d0 !important;
+            -webkit-text-fill-color: #0b57d0 !important;
+            text-decoration: underline;
+            cursor: pointer;
+            background: none;
+            border: 0;
+            padding: 0;
+            font: inherit;
+        }
+        .qp-channel-properties {
+            z-index: 10055;
+            min-width: 22rem;
+            padding: 0 0 12px;
+        }
+        .qp-channel-properties-title,
+        .qp-custom-colors-title {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            height: 22px;
+            background: linear-gradient(#f4f4f4, #dcdcdc);
+            border-bottom: 1px solid #c8c8c8;
+            border-radius: 6px 6px 0 0;
+            font-size: 12px;
+            color: #333;
+        }
+        .qp-dialog-traffic {
+            position: absolute;
+            left: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .qp-dialog-traffic i,
+        .qp-dialog-traffic button {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: block;
+            padding: 0;
+            border: 0;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+        .qp-dialog-traffic .is-close {
+            background: #ff5f57 !important;
+            color: transparent !important;
+            -webkit-text-fill-color: transparent !important;
+            cursor: pointer;
+        }
+        .qp-dialog-traffic .is-close:hover { filter: brightness(1.1); }
+        .qp-dialog-traffic .is-min { background: #febc2e; pointer-events: none; opacity: .55; }
+        .qp-dialog-traffic .is-max { background: #28c840; pointer-events: none; opacity: .55; }
+        .qp-channel-properties-body {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 10px 12px;
+            align-items: center;
+            padding: 16px 18px 12px;
+        }
+        .qp-channel-properties-body label { text-align: right; color: #222; }
+        .qp-channel-properties-body input[type="text"] {
+            min-width: 16rem;
+            border: 1px solid #8aa8c8;
+            border-radius: 3px;
+            padding: 3px 6px;
+            font: inherit;
+            color: #111 !important;
+            -webkit-text-fill-color: #111 !important;
+            background: #fff !important;
+        }
+        .qp-color-dropdown {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 10rem;
+            background: #fff !important;
+            color: #222 !important;
+            -webkit-text-fill-color: #222 !important;
+            border: 1px solid #8c8c8c;
+            border-radius: 4px;
+            padding: 3px 8px;
+            cursor: pointer;
+        }
+        .qp-color-dropdown .qp-color-swatch { width: 14px; height: 14px; }
+        .qp-color-dropdown-caret { margin-left: auto; color: #666; font-size: 10px; }
+        .qp-dialog-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 0 16px;
+        }
+        .qp-dialog-actions button {
+            min-width: 4.5rem;
+            padding: 3px 10px;
+            border: 1px solid #8c8c8c;
+            border-radius: 4px;
+            background: linear-gradient(#f7f7f7, #e6e6e6) !important;
+            color: #1a1a1a !important;
+            -webkit-text-fill-color: #1a1a1a !important;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .qp-custom-colors {
+            z-index: 10060;
+            width: 34rem;
+            padding: 0 0 12px;
+        }
+        .qp-custom-colors-body {
+            display: grid;
+            grid-template-columns: 188px 1fr;
+            gap: 12px;
+            padding: 12px 14px 8px;
+        }
+        .qp-custom-colors-body > div:first-child {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+        }
+        .qp-hsb-field {
+            position: relative;
+            width: 168px;
+            height: 168px;
+            border: 1px solid #888;
+            cursor: crosshair;
+        }
+        .qp-hue-slider {
+            writing-mode: vertical-lr;
+            direction: rtl;
+            width: 14px;
+            height: 168px;
+            padding: 0;
+        }
+        .qp-color-compare {
+            display: grid;
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        .qp-color-compare-bar {
+            height: 22px;
+            border: 1px solid #888;
+        }
+        .qp-color-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid #bbb;
+            margin-bottom: 8px;
+        }
+        .qp-color-tab {
+            border: 1px solid #bbb;
+            border-bottom: 0;
+            background: #ddd !important;
+            color: #222 !important;
+            -webkit-text-fill-color: #222 !important;
+            padding: 3px 10px;
+            cursor: pointer;
+        }
+        .qp-color-tab.is-active {
+            background: #fff !important;
+            color: #111 !important;
+            -webkit-text-fill-color: #111 !important;
+        }
+        .qp-color-field-row {
+            display: grid;
+            grid-template-columns: 5.5rem 1fr 3.4rem auto;
+            gap: 6px;
+            align-items: center;
+            margin: 4px 0;
+            color: #222;
+        }
+        .qp-color-field-row input[type="number"],
+        .qp-color-field-row input[type="text"] {
+            width: 100%;
+            border: 1px solid #8c8c8c;
+            border-radius: 3px;
+            padding: 2px 4px;
+            color: #111 !important;
+            -webkit-text-fill-color: #111 !important;
+            background: #fff !important;
         }
         .fcp-histogram-wrap {
             margin: 8px 0 6px;
@@ -3262,11 +3628,21 @@
                 <div id="sidebar-header-controls" style="display: flex !important; flex-direction: row !important; align-items: center !important; width: auto; padding: 0 0.5rem 0 0; box-sizing: border-box; background: transparent;">
                     <button id="toggle-left" class="toolbar-button sidebar-browser-toggle" type="button" aria-pressed="true"
                             title="Show/Hide Image Browser" aria-label="Show/Hide Image Browser">📂</button>
-                    <label class="visually-hidden" for="case-filter-select">Case/Image Selector</label>
-                    <select id="case-filter-select" class="case-selector" aria-label="Case/Image Selector">
-                        <option value="" selected>-- Select Slides --</option>
-                        <option value="__all_slides__">All Slides</option>
-                    </select>
+                    <div class="case-filter-combobox" id="case-filter-combobox">
+                        <label class="visually-hidden" for="case-filter-search">Search cases</label>
+                        <input type="text" id="case-filter-search" class="case-filter-search"
+                               role="combobox" aria-expanded="false" aria-autocomplete="list"
+                               aria-controls="case-filter-listbox" aria-haspopup="listbox"
+                               placeholder="Search cases" autocomplete="off" autocorrect="off"
+                               autocapitalize="off" spellcheck="false">
+                        <span class="case-filter-chevron" aria-hidden="true"></span>
+                        <select id="case-filter-select" class="case-selector case-filter-native"
+                                tabindex="-1" aria-hidden="true">
+                            <option value="" selected>-- Select Slides --</option>
+                            <option value="__all_slides__">All Slides</option>
+                        </select>
+                        <ul id="case-filter-listbox" class="case-filter-listbox" role="listbox" hidden></ul>
+                    </div>
                     <button id="show-slide-labels" class="toolbar-button sidebar-browser-toggle" type="button" aria-pressed="true"
                             title="Hide Label: hide slide label thumbnails in the slide list, including the rotate and force-scan controls"
                             aria-label="Hide slide label thumbnails">🏷️</button>
@@ -3526,6 +3902,13 @@
                 <button id="fcp-auto" class="fcp-layout-auto" type="button" title="Auto">⚏ Auto</button>
             </div>
             <div class="fcp-body">
+                <div class="bc-channels-head">
+                    <span class="bc-channels-head-channel">Channel</span>
+                    <label class="bc-channels-head-show" for="fcp-show-all">
+                        Show
+                        <input id="fcp-show-all" type="checkbox" class="floating-channel-cb fcp-show-all-cb" checked aria-label="Show all channels">
+                    </label>
+                </div>
                 <div class="bc-channels-grid" id="floating-channel-palette-rows" data-fcp-layout="1"></div>
                 <div class="fcp-list-splitter" id="fcp-list-splitter" role="separator" aria-orientation="horizontal" aria-label="Adjust channel list height"></div>
                 <div class="fcp-histogram-wrap">
@@ -3619,7 +4002,7 @@
             </div>
         </aside>
         <div id="empty-viewport-guidance" role="status" aria-live="polite">
-            <span>Use the "Select Slides" dropdown (upper left) to choose slides for viewing.</span>
+            <span>Search cases in the upper left, then choose a slide from the list.</span>
         </div>
         <div id="measure-dialog" class="measure-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="measure-dialog-title">
             <div class="measure-dialog-panel">
@@ -4231,6 +4614,7 @@
             if (liveDiscovery) void liveDiscovery.refresh(false);
         }
     });
+    AnnotationAdapter.bindSearchableCaseFilter(caseFilterSelect);
 
     function applyBlankWorkspaceState({skipViewerWipe = false, statusText} = {}) {
         clearTimeout(updateTimer);
@@ -4395,6 +4779,7 @@
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({channels: saved.channels})
                 });
+                restoreChannelAppearance(display, saved.channels);
                 if (generation !== updateSequence || selectedImage?.id !== image.id) return;
             }
             localStorage.setItem(`${STORAGE_PREFIX}.selectedImage`, image.id);
@@ -4707,6 +5092,7 @@
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({channels: saved.channels})
                 });
+                restoreChannelAppearance(display, saved.channels);
             }
             renderChannels();
             flushViewerTileCache();
@@ -5274,7 +5660,7 @@
             card.className = `channel-card${channel.visible ? "" : " is-disabled"}`;
             card.dataset.channelIndex = String(channel.index);
             card.dataset.groupKey = AnnotationAdapter.channelVisibilityGroupKey(channel);
-            card.style.setProperty("--channel-color", LUT_COLORS[channel.lut] || "#aaa");
+            card.style.setProperty("--channel-color", AnnotationAdapter.channelPaletteColor(channel));
             const shortName = AnnotationAdapter.compactChannelName(channel);
             card.innerHTML = `
                 <div class="channel-heading">
@@ -5325,7 +5711,10 @@
                         const output = card.querySelector(`[data-value="${field}"]`);
                         if (output) output.textContent = formatFieldValue(field, value);
                     }
-                    if (field === "lut") card.style.setProperty("--channel-color", LUT_COLORS[value] || "#aaa");
+                    if (field === "lut") {
+                        channel.color = LUT_COLORS[value] || channel.color;
+                        card.style.setProperty("--channel-color", AnnotationAdapter.channelPaletteColor(channel));
+                    }
                     normalizeWindow(channel, field, card);
                     scheduleDisplayUpdate();
                 });
@@ -5407,7 +5796,16 @@
                 const localChannel = display.channels.find(
                     channel => channel.index === serverChannel.index
                 );
-                if (localChannel) Object.assign(localChannel, serverChannel);
+                if (localChannel) {
+                    const color = localChannel.color;
+                    const nameOverride = localChannel.nameOverride;
+                    Object.assign(localChannel, serverChannel);
+                    if (color) localChannel.color = color;
+                    if (nameOverride) {
+                        localChannel.nameOverride = nameOverride;
+                        localChannel.name = nameOverride;
+                    }
+                }
             }
 
             syncChannelControls();
@@ -5436,7 +5834,7 @@
             const badge = card.querySelector(".lut-badge");
             if (badge) badge.textContent = channel.lut;
             card.classList.toggle("is-disabled", !channel.visible);
-            card.style.setProperty("--channel-color", LUT_COLORS[channel.lut] || "#aaa");
+            card.style.setProperty("--channel-color", AnnotationAdapter.channelPaletteColor(channel));
             for (const field of ["black", "white", "gamma", "opacity"]) {
                 const range = card.querySelector(`[data-field="${field}"]`);
                 if (range) range.value = channel[field];
@@ -5502,6 +5900,20 @@
         return Array.isArray(saved.channels)
             && saved.channels.length === serverDisplay.channels.length
             && saved.channels.every((channel, index) => channel.index === serverDisplay.channels[index].index);
+    }
+
+    function restoreChannelAppearance(serverDisplay, savedChannels) {
+        if (!serverDisplay?.channels || !Array.isArray(savedChannels)) return serverDisplay;
+        for (const channel of serverDisplay.channels) {
+            const saved = savedChannels.find(item => item && item.index === channel.index);
+            if (!saved) continue;
+            if (saved.color) channel.color = saved.color;
+            if (saved.nameOverride) {
+                channel.nameOverride = saved.nameOverride;
+                channel.name = saved.nameOverride;
+            }
+        }
+        return serverDisplay;
     }
 
     function escapeHtml(value) {

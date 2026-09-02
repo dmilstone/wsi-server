@@ -29,9 +29,29 @@ assert.match(adapterSource, /static formatChannelPaletteLabel\(/);
 assert.match(adapterSource, /static applyChannelPaletteLayout\(/);
 assert.match(adapterSource, /static bindChannelListSplitter\(/);
 assert.match(html, /\.floating-channel-cb\s*\{/);
-assert.match(html, /border:\s*2px solid #fff\s*!important/);
+assert.match(html, /border:\s*2px solid var\(--channel-color, #fff\)/);
 assert.match(html, /\.floating-channel-cb:checked/);
-assert.match(html, /background-color:\s*#00FF00\s*!important/);
+assert.match(html, /background-color:\s*var\(--channel-color, #4d94d8\)/);
+assert.match(html, /\.floating-channel-cb:not\(:checked\)::after/);
+assert.match(html, /content:\s*"\\00d7"/);
+assert.match(html, /id="fcp-show-all"/);
+assert.match(html, /class="bc-channels-head"/);
+assert.match(html, /qp-color-chooser/);
+assert.match(html, /qp-channel-properties/);
+assert.match(html, /color-scheme:\s*light/);
+assert.match(html, /\.qp-dialog-actions button[\s\S]*?color:\s*#1a1a1a\s*!important/);
+assert.match(html, /\.qp-color-tab[\s\S]*?color:\s*#222\s*!important/);
+assert.match(html, /\.qp-color-dropdown[\s\S]*?color:\s*#222\s*!important/);
+assert.match(adapterSource, /Custom Color\.\.\./);
+assert.match(adapterSource, /static syncViewerNavigationForActiveTool\(/);
+assert.match(adapterSource, /static applyAllChannelPaletteVisibility\(/);
+assert.match(adapterSource, /static openChannelColorChooser\(/);
+assert.match(adapterSource, /static openChannelPropertiesDialog\(/);
+assert.match(adapterSource, /static openCustomColorsDialog\(/);
+assert.match(adapterSource, /static bindQuPathWindowClose\(/);
+assert.match(adapterSource, /data-qp-window-close/);
+assert.match(adapterSource, /osd-annotation-shape/);
+assert.match(adapterSource, /data-annotation-name-for/);
 assert.match(html, /#floating-channel-palette\s*\{[\s\S]*?min-width:\s*340px/);
 assert.match(html, /#floating-channel-palette\s*\{[\s\S]*?min-height:\s*400px/);
 assert.match(html, /#floating-channel-palette\s*\{[\s\S]*?resize:\s*both\s*!important/);
@@ -1070,8 +1090,20 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     };
     assert.equal(AnnotationAdapter.activateImageJTool("zoom"), true);
     assert.equal(AnnotationAdapter.activeImageJTool, "zoom");
+    let navEnabled = null;
+    AnnotationAdapter.isMeasurementModeActive = false;
+    AnnotationAdapter.qpDrawSession = null;
+    AnnotationAdapter.viewer = {
+        element: { classList: { toggle() {} } },
+        setMouseNavEnabled(value) { navEnabled = value; },
+        viewport: { resize() {}, zoomBy() {}, applyConstraints() {} },
+        gestureSettingsMouse: { scrollToZoom: false, dragToPan: true }
+    };
     assert.equal(AnnotationAdapter.activateQuPathTool("rectangle"), true);
     assert.equal(AnnotationAdapter.currentActiveTool, "rectangle");
+    assert.equal(navEnabled, true);
+    assert.equal(AnnotationAdapter.viewer.gestureSettingsMouse.scrollToZoom, true);
+    assert.equal(AnnotationAdapter.viewer.gestureSettingsMouse.dragToPan, true);
     const squared = AnnotationAdapter.applyQuPathShiftConstraint(
         { overlayX: 10, overlayY: 20, image: { x: 10, y: 20 } },
         { overlayX: 40, overlayY: 30, image: { x: 40, y: 30 } },
@@ -1215,6 +1247,62 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     assert.match(cells[0].innerHTML, /Cyan \(Marker 1\)/);
     assert.match(cells[0].innerHTML, /checked/);
     assert.doesNotMatch(cells[4].innerHTML, /checked/);
+    assert.match(cells[0].innerHTML, /data-fcp-swatch/);
+    assert.match(cells[0].innerHTML, /data-fcp-name/);
+    assert.match(cells[0].innerHTML, /--channel-color:/);
+}
+
+{
+    assert.equal(AnnotationAdapter.channelPaletteColor({ lut: "CYAN" }), "#4de4e4");
+    assert.equal(AnnotationAdapter.channelPaletteColor({ color: "#00ffff" }), "#00ffff");
+    assert.equal(AnnotationAdapter.namedColorForHex("#00ffff"), "Cyan");
+    assert.equal(AnnotationAdapter.nearestLutFromHex("#00ffff"), "CYAN");
+    assert.equal(AnnotationAdapter.nearestLutFromHex("#ff0000"), "RED");
+    assert.equal(AnnotationAdapter.formatChannelPaletteLabel({
+        lut: "CYAN",
+        name: "Channel 0 - DAPI",
+        nameOverride: "DAPI cyc1 1 712 (C1)"
+    }), "DAPI cyc1 1 712 (C1)");
+}
+
+{
+    const shape = {
+        classList: { contains(name) { return name === "osd-annotation-shape"; } },
+        textContent: "should-stay",
+        hasAttribute() { return false; }
+    };
+    const label = {
+        classList: { contains(name) { return name === "annotation-text-label"; } },
+        textContent: "",
+        hasAttribute(name) { return name === "data-annotation-name-for"; }
+    };
+    const prevDoc = context.document;
+    context.document = {
+        querySelectorAll() { return [shape, label]; }
+    };
+    AnnotationAdapter.savedAnnotationsArray = [];
+    assert.equal(AnnotationAdapter.applyCommittedAnnotationName("ann-1", "Glomerulus"), true);
+    assert.equal(shape.textContent, "should-stay");
+    assert.equal(label.textContent, "Glomerulus");
+    context.document = prevDoc;
+}
+
+{
+    const channels = [
+        { index: 0, visible: true, lut: "CYAN" },
+        { index: 1, visible: true, lut: "GREEN" }
+    ];
+    AnnotationAdapter.displayController = {
+        getDisplay() { return { channels }; },
+        syncChannelControls() {},
+        scheduleDisplayUpdate() {}
+    };
+    AnnotationAdapter.channelPaletteElement = { querySelector() { return null; } };
+    assert.equal(AnnotationAdapter.applyAllChannelPaletteVisibility(false), true);
+    assert.equal(channels[0].visible, false);
+    assert.equal(channels[1].visible, false);
+    assert.equal(AnnotationAdapter.applyAllChannelPaletteVisibility(true), true);
+    assert.equal(channels[0].visible, true);
 }
 
 {
@@ -1246,6 +1334,22 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     });
     assert.equal(palette._fcpEdgeResize.edge, "e");
     assert.equal(palette._fcpEdgeResize.startW, 400);
+}
+
+{
+    let closed = 0;
+    const listeners = [];
+    const dialog = {
+        querySelector() {
+            return {
+                addEventListener(type, fn) { listeners.push([type, fn]); }
+            };
+        }
+    };
+    assert.equal(AnnotationAdapter.bindQuPathWindowClose(dialog, () => { closed += 1; }), true);
+    const click = listeners.find(([type]) => type === "click")?.[1];
+    click({ preventDefault() {}, stopPropagation() {} });
+    assert.equal(closed, 1);
 }
 
 console.log("floating-channel-palette.test.js: ok");

@@ -188,9 +188,10 @@ class AnnotationAdapter {
     static CASE_FILTER_PLACEHOLDER_VALUE = "";
     static CASE_FILTER_ALL_SLIDES_VALUE = "__all_slides__";
     static CASE_FILTER_PLACEHOLDER_LABEL = "-- Select Slides --";
+    static caseFilterComboboxState = typeof WeakMap === "function" ? new WeakMap() : null;
     static ZERO_EXPOSURE_STATUS = "Select slides to begin.";
     static EMPTY_VIEWPORT_GUIDANCE =
-        "Use the dropdown menu on the left to select slides for viewing.";
+        "Search cases in the upper left, then choose a slide from the list.";
     /** When true, left-column slide rows show async macro label thumbnails. */
     static slideLabelThumbsEnabled = true;
     static slideLabelThumbObserver = null;
@@ -2653,7 +2654,417 @@ class AnnotationAdapter {
         } else {
             selectElement.value = AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE;
         }
+        AnnotationAdapter.bindSearchableCaseFilter(selectElement);
+        AnnotationAdapter.syncCaseFilterCombobox(selectElement);
         return cases;
+    }
+
+    /**
+     * True when a case-filter option is the privacy placeholder rather than a
+     * pickable All Slides / case-id row.
+     */
+    static isCaseFilterPlaceholderRecord(record) {
+        const value = String(record?.value ?? "").trim();
+        const label = String(record?.label ?? "").trim();
+        if (!value || value === AnnotationAdapter.CASE_FILTER_PLACEHOLDER_VALUE) {
+            return true;
+        }
+        return /^--\s*select (slides|a patient case)\s*--$/i.test(value)
+            || /^--\s*select (slides|a patient case)\s*--$/i.test(label);
+    }
+
+    /**
+     * Pickable rows currently in {@code #case-filter-select} (All Slides, then
+     * case ids). Placeholder is omitted. Live discovery rebuilds this list.
+     */
+    static listCaseFilterOptions(selectElement) {
+        if (!selectElement) return [];
+        const raw = selectElement.options
+            ? Array.from(selectElement.options)
+            : [];
+        const records = [];
+        for (const option of raw) {
+            const value = String(option.value ?? "");
+            const label = String(option.textContent ?? "").trim() || value;
+            const record = { value, label };
+            if (AnnotationAdapter.isCaseFilterPlaceholderRecord(record)) continue;
+            records.push(record);
+        }
+        return records;
+    }
+
+    /**
+     * Filter pickable case-filter records by a case-insensitive substring of
+     * value or label. Empty query returns every pickable record.
+     */
+    static filterCaseFilterOptions(records, query) {
+        const rows = (Array.isArray(records) ? records : [])
+            .filter(record => !AnnotationAdapter.isCaseFilterPlaceholderRecord(record));
+        const needle = String(query ?? "").trim().toLowerCase();
+        if (!needle) return rows.slice();
+        return rows.filter(record => {
+            const label = String(record?.label ?? "").toLowerCase();
+            const value = String(record?.value ?? "").toLowerCase();
+            return label.includes(needle) || value.includes(needle);
+        });
+    }
+
+    /**
+     * Visible combobox text for the current native select value. Placeholder
+     * stays an empty field so the "Search cases" prompt remains visible.
+     */
+    static caseFilterDisplayLabel(selectElement) {
+        if (!selectElement) return "";
+        if (AnnotationAdapter.isCaseFilterPlaceholderSelected(selectElement)) return "";
+        const label = String(selectElement.selectedOptions?.[0]?.textContent ?? "").trim();
+        if (label) return label;
+        const value = String(selectElement.value ?? "").trim();
+        if (value === AnnotationAdapter.CASE_FILTER_ALL_SLIDES_VALUE) return "All Slides";
+        return value;
+    }
+
+    static caseFilterComboboxElements(selectElement) {
+        if (!selectElement) return null;
+        const root = (typeof selectElement.closest === "function"
+            ? selectElement.closest(".case-filter-combobox")
+            : null) || selectElement.parentElement || null;
+        const doc = selectElement.ownerDocument
+            || (typeof document !== "undefined" ? document : null);
+        const input = root?.querySelector?.("#case-filter-search")
+            || (typeof root?.querySelector === "function"
+                ? root.querySelector(".case-filter-search")
+                : null)
+            || doc?.getElementById?.("case-filter-search")
+            || null;
+        const listbox = root?.querySelector?.("#case-filter-listbox")
+            || (typeof root?.querySelector === "function"
+                ? root.querySelector(".case-filter-listbox")
+                : null)
+            || doc?.getElementById?.("case-filter-listbox")
+            || null;
+        return { root, input, listbox, select: selectElement, document: doc };
+    }
+
+    /**
+     * Move the listbox to {@code document.body}. The primary toolbar uses
+     * {@code overflow-y: hidden} ({@code .toolbar-ops-row}), which clips an
+     * in-toolbar absolute menu.
+     */
+    static ensureCaseFilterListboxPortal(selectElement) {
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        const listbox = parts?.listbox;
+        const doc = parts?.document;
+        const body = doc?.body;
+        if (!listbox || !body) return parts;
+        if (listbox.parentNode !== body) {
+            if (typeof body.append === "function") body.append(listbox);
+            else body.appendChild(listbox);
+        }
+        return parts;
+    }
+
+    static positionCaseFilterListbox(selectElement) {
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        if (!parts?.input || !parts.listbox) return false;
+        if (typeof parts.input.getBoundingClientRect !== "function") return false;
+        const rect = parts.input.getBoundingClientRect();
+        const list = parts.listbox;
+        const width = Math.max(Math.round(rect.width), 140);
+        list.style.position = "fixed";
+        list.style.left = `${Math.round(rect.left)}px`;
+        list.style.top = `${Math.round(rect.bottom + 2)}px`;
+        list.style.width = `${width}px`;
+        list.style.right = "auto";
+        list.style.zIndex = "10050";
+        return true;
+    }
+
+    static caseFilterComboboxStateFor(selectElement) {
+        if (!selectElement) return null;
+        if (!AnnotationAdapter.caseFilterComboboxState
+            && typeof WeakMap === "function") {
+            AnnotationAdapter.caseFilterComboboxState = new WeakMap();
+        }
+        const map = AnnotationAdapter.caseFilterComboboxState;
+        if (!map || typeof map.get !== "function") {
+            return { typing: false, open: false, activeIndex: -1 };
+        }
+        let state = map.get(selectElement);
+        if (!state) {
+            state = { typing: false, open: false, activeIndex: -1, bound: false };
+            map.set(selectElement, state);
+        }
+        return state;
+    }
+
+    /**
+     * Set the native select and fire {@code change} so the existing viewport
+     * wipe + slide-list filter keep running. Same value is a no-op.
+     */
+    static applyCaseFilterComboboxChoice(selectElement, value) {
+        if (!selectElement) return false;
+        const next = String(value ?? "");
+        const previous = String(selectElement.value ?? "");
+        if (previous === next) return false;
+        selectElement.value = next;
+        if (typeof selectElement.dispatchEvent !== "function") return true;
+        let EventCtor = typeof Event === "function" ? Event : null;
+        if (!EventCtor) {
+            EventCtor = selectElement.ownerDocument?.defaultView?.Event
+                || (typeof globalThis !== "undefined" ? globalThis.Event : null);
+        }
+        if (typeof EventCtor !== "function") return true;
+        selectElement.dispatchEvent(new EventCtor("change", { bubbles: true }));
+        return true;
+    }
+
+    static syncCaseFilterCombobox(selectElement) {
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        if (!parts?.input) return false;
+        const state = AnnotationAdapter.caseFilterComboboxStateFor(selectElement);
+        if (state?.open) {
+            const query = state.typing ? parts.input.value : "";
+            AnnotationAdapter.renderCaseFilterListbox(selectElement, query);
+            return true;
+        }
+        if (!state?.typing) {
+            parts.input.value = AnnotationAdapter.caseFilterDisplayLabel(selectElement);
+        }
+        return true;
+    }
+
+    static setCaseFilterComboboxOpen(selectElement, open) {
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        if (!parts?.input || !parts.listbox) return false;
+        const state = AnnotationAdapter.caseFilterComboboxStateFor(selectElement);
+        state.open = Boolean(open);
+        parts.input.setAttribute("aria-expanded", state.open ? "true" : "false");
+        if (!state.open) {
+            parts.listbox.hidden = true;
+            if (typeof parts.listbox.setAttribute === "function") {
+                parts.listbox.setAttribute("hidden", "");
+            }
+            state.activeIndex = -1;
+            parts.input.removeAttribute("aria-activedescendant");
+            if (!state.typing) {
+                parts.input.value = AnnotationAdapter.caseFilterDisplayLabel(selectElement);
+            }
+            return true;
+        }
+        AnnotationAdapter.ensureCaseFilterListboxPortal(selectElement);
+        const query = state.typing ? parts.input.value : "";
+        AnnotationAdapter.renderCaseFilterListbox(selectElement, query);
+        AnnotationAdapter.positionCaseFilterListbox(selectElement);
+        parts.listbox.hidden = false;
+        if (typeof parts.listbox.removeAttribute === "function") {
+            parts.listbox.removeAttribute("hidden");
+        }
+        return true;
+    }
+
+    static renderCaseFilterListbox(selectElement, query) {
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        if (!parts?.listbox) return [];
+        const doc = parts.document
+            || parts.listbox.ownerDocument
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc || typeof doc.createElement !== "function") return [];
+        const state = AnnotationAdapter.caseFilterComboboxStateFor(selectElement);
+        const records = AnnotationAdapter.filterCaseFilterOptions(
+            AnnotationAdapter.listCaseFilterOptions(selectElement),
+            query
+        );
+        if (typeof parts.listbox.replaceChildren === "function") {
+            parts.listbox.replaceChildren();
+        } else {
+            parts.listbox.innerHTML = "";
+        }
+        if (records.length === 0) {
+            const empty = doc.createElement("li");
+            empty.className = "case-filter-empty";
+            empty.setAttribute("aria-disabled", "true");
+            empty.textContent = "No matching cases";
+            parts.listbox.append(empty);
+            state.activeIndex = -1;
+            parts.input?.removeAttribute?.("aria-activedescendant");
+            return records;
+        }
+        records.forEach((record, index) => {
+            const item = doc.createElement("li");
+            const optionId = `case-filter-opt-${index}`;
+            item.id = optionId;
+            item.className = "case-filter-option";
+            item.setAttribute("role", "option");
+            item.setAttribute("data-value", record.value);
+            item.setAttribute("aria-selected", "false");
+            item.textContent = record.label;
+            item.addEventListener("pointerdown", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.commitCaseFilterComboboxOption(selectElement, record.value);
+            });
+            parts.listbox.append(item);
+        });
+        if (records.length === 1) {
+            AnnotationAdapter.highlightCaseFilterOption(selectElement, 0);
+        } else if (state.activeIndex >= records.length) {
+            AnnotationAdapter.highlightCaseFilterOption(selectElement, -1);
+        } else if (state.activeIndex >= 0) {
+            AnnotationAdapter.highlightCaseFilterOption(selectElement, state.activeIndex);
+        }
+        return records;
+    }
+
+    static highlightCaseFilterOption(selectElement, index) {
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        if (!parts?.listbox) return -1;
+        const state = AnnotationAdapter.caseFilterComboboxStateFor(selectElement);
+        const items = parts.listbox.querySelectorAll
+            ? parts.listbox.querySelectorAll(".case-filter-option")
+            : [];
+        const last = items.length - 1;
+        const next = index < 0 || last < 0 ? -1 : Math.min(index, last);
+        state.activeIndex = next;
+        for (let i = 0; i < items.length; i++) {
+            const on = i === next;
+            items[i].classList?.toggle?.("is-active", on);
+            items[i].setAttribute("aria-selected", on ? "true" : "false");
+        }
+        if (next >= 0 && items[next]) {
+            parts.input?.setAttribute?.("aria-activedescendant", items[next].id);
+            if (typeof items[next].scrollIntoView === "function") {
+                items[next].scrollIntoView({ block: "nearest" });
+            }
+        } else {
+            parts.input?.removeAttribute?.("aria-activedescendant");
+        }
+        return next;
+    }
+
+    static commitCaseFilterComboboxOption(selectElement, value) {
+        const state = AnnotationAdapter.caseFilterComboboxStateFor(selectElement);
+        if (state) state.typing = false;
+        AnnotationAdapter.applyCaseFilterComboboxChoice(selectElement, value);
+        AnnotationAdapter.setCaseFilterComboboxOpen(selectElement, false);
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        if (parts?.input && !state?.typing) {
+            parts.input.value = AnnotationAdapter.caseFilterDisplayLabel(selectElement);
+        }
+        return true;
+    }
+
+    /**
+     * Searchable combobox in front of {@code #case-filter-select}. The native
+     * select remains the source of truth; this only types, filters, and
+     * dispatches {@code change}.
+     */
+    static bindSearchableCaseFilter(selectElement) {
+        const parts = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+        if (!parts?.input || !parts.listbox || !parts.root) return null;
+        const state = AnnotationAdapter.caseFilterComboboxStateFor(selectElement);
+        if (state?.bound || selectElement.dataset?.caseFilterComboboxBound === "1") {
+            return parts;
+        }
+        const input = parts.input;
+        const root = parts.root;
+        const doc = parts.document;
+
+        const openList = () => AnnotationAdapter.setCaseFilterComboboxOpen(selectElement, true);
+        const closeList = () => {
+            state.typing = false;
+            AnnotationAdapter.setCaseFilterComboboxOpen(selectElement, false);
+        };
+
+        input.addEventListener("focus", () => {
+            state.typing = false;
+            openList();
+            try { input.select(); } catch (_error) { /* ignore */ }
+        });
+        input.addEventListener("click", () => {
+            if (state.open) return;
+            state.typing = false;
+            openList();
+            try { input.select(); } catch (_error) { /* ignore */ }
+        });
+        input.addEventListener("input", () => {
+            state.typing = true;
+            state.activeIndex = -1;
+            if (!state.open) openList();
+            else AnnotationAdapter.renderCaseFilterListbox(selectElement, input.value);
+        });
+        input.addEventListener("keydown", event => {
+            const key = event.key;
+            if (key === "ArrowDown" || key === "ArrowUp") {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!state.open) openList();
+                const items = parts.listbox.querySelectorAll?.(".case-filter-option") || [];
+                if (!items.length) return;
+                const current = state.activeIndex;
+                const next = key === "ArrowDown"
+                    ? (current < 0 ? 0 : Math.min(current + 1, items.length - 1))
+                    : (current < 0 ? items.length - 1 : Math.max(current - 1, 0));
+                AnnotationAdapter.highlightCaseFilterOption(selectElement, next);
+                return;
+            }
+            if (key === "Home" && state.open) {
+                event.preventDefault();
+                AnnotationAdapter.highlightCaseFilterOption(selectElement, 0);
+                return;
+            }
+            if (key === "End" && state.open) {
+                event.preventDefault();
+                const items = parts.listbox.querySelectorAll?.(".case-filter-option") || [];
+                AnnotationAdapter.highlightCaseFilterOption(selectElement, items.length - 1);
+                return;
+            }
+            if (key === "Enter") {
+                if (!state.open) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const items = parts.listbox.querySelectorAll?.(".case-filter-option") || [];
+                const chosen = state.activeIndex >= 0
+                    ? items[state.activeIndex]
+                    : (items.length === 1 ? items[0] : null);
+                const value = chosen?.getAttribute?.("data-value");
+                if (value != null && value !== "") {
+                    AnnotationAdapter.commitCaseFilterComboboxOption(selectElement, value);
+                }
+                return;
+            }
+            if (key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                closeList();
+                return;
+            }
+            if (key === "Tab") {
+                closeList();
+            }
+        });
+
+        if (doc && typeof doc.addEventListener === "function") {
+            doc.addEventListener("pointerdown", event => {
+                const target = event.target;
+                if (!target) return;
+                const live = AnnotationAdapter.caseFilterComboboxElements(selectElement);
+                if (typeof root.contains === "function" && root.contains(target)) return;
+                if (typeof live?.listbox?.contains === "function" && live.listbox.contains(target)) return;
+                if (state.open) closeList();
+            }, true);
+            const view = doc.defaultView || (typeof window !== "undefined" ? window : null);
+            if (view && typeof view.addEventListener === "function" && !state.resizeBound) {
+                view.addEventListener("resize", () => {
+                    if (state.open) AnnotationAdapter.positionCaseFilterListbox(selectElement);
+                });
+                state.resizeBound = true;
+            }
+        }
+
+        if (state) state.bound = true;
+        if (selectElement.dataset) selectElement.dataset.caseFilterComboboxBound = "1";
+        AnnotationAdapter.syncCaseFilterCombobox(selectElement);
+        return parts;
     }
 
     /**
@@ -4284,13 +4695,7 @@ class AnnotationAdapter {
                 window.removeEventListener("pointerup", handleWindowMouseUp, true);
                 window.removeEventListener("pointercancel", handleWindowMouseUp, true);
             }
-            const viewer = AnnotationAdapter.viewer;
-            if (viewer) {
-                if (typeof viewer.setMouseNavEnabled === "function") {
-                    viewer.setMouseNavEnabled(true); // Guarantees pan/zoom navigation returns to the tissue canvas
-                }
-                if (viewer.gestureSettingsMouse) viewer.gestureSettingsMouse.scrollToZoom = true;
-            }
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
         }
 
         const beginWindowDrag = event => {
@@ -4376,11 +4781,7 @@ class AnnotationAdapter {
                 window.removeEventListener("pointerup", endEdgeResize, true);
                 window.removeEventListener("pointercancel", endEdgeResize, true);
             }
-            const viewer = AnnotationAdapter.viewer;
-            if (viewer) {
-                if (typeof viewer.setMouseNavEnabled === "function") viewer.setMouseNavEnabled(true);
-                if (viewer.gestureSettingsMouse) viewer.gestureSettingsMouse.scrollToZoom = true;
-            }
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
         };
 
         const moveEdgeResize = function moveEdgeResize(event) {
@@ -4455,6 +4856,8 @@ class AnnotationAdapter {
     }
 
     static formatChannelPaletteLabel(channel) {
+        const override = String(channel?.nameOverride || "").trim();
+        if (override) return override;
         const lut = String(channel?.lut || "").trim().toUpperCase();
         const lutTitle = lut ? lut.charAt(0) + lut.slice(1).toLowerCase() : "";
         const epitope = String(AnnotationAdapter.compactChannelName(channel) || "").trim();
@@ -4500,10 +4903,7 @@ class AnnotationAdapter {
                 window.removeEventListener("pointerup", endSplit, true);
                 window.removeEventListener("pointercancel", endSplit, true);
             }
-            const viewer = AnnotationAdapter.viewer;
-            if (viewer && typeof viewer.setMouseNavEnabled === "function") {
-                viewer.setMouseNavEnabled(true);
-            }
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
         };
 
         const moveSplit = function moveSplit(event) {
@@ -4591,6 +4991,27 @@ class AnnotationAdapter {
         layoutSelect?.addEventListener?.("change", event => {
             AnnotationAdapter.applyChannelPaletteLayout(event.target?.value || "1", doc);
         });
+        const showAll = palette.querySelector?.("#fcp-show-all") || doc?.getElementById?.("fcp-show-all");
+        showAll?.addEventListener?.("change", () => {
+            AnnotationAdapter.applyAllChannelPaletteVisibility(showAll.checked, doc);
+        });
+        if (doc && doc._wsiChannelDialogKeysBound !== "1") {
+            doc.addEventListener("keydown", event => {
+                if (event.key !== "Escape") return;
+                if (doc.getElementById("qp-custom-colors")) {
+                    AnnotationAdapter.closeCustomColorsDialog(doc);
+                    return;
+                }
+                if (doc.getElementById("qp-color-chooser")) {
+                    AnnotationAdapter.closeChannelColorChooser(doc);
+                    return;
+                }
+                if (doc.getElementById("qp-channel-properties")) {
+                    AnnotationAdapter.closeChannelPropertiesDialog(doc);
+                }
+            });
+            doc._wsiChannelDialogKeysBound = "1";
+        }
         if (palette.dataset) palette.dataset.fcpControlsBound = "1";
         return true;
     }
@@ -5470,8 +5891,12 @@ class AnnotationAdapter {
     }
 
     static channelPaletteColor(channel) {
+        const custom = String(channel?.color || "").trim();
+        if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(custom)) {
+            return AnnotationAdapter.normalizeHexColor(custom);
+        }
         const lut = String(channel?.lut || "").toUpperCase();
-        return AnnotationAdapter.CHANNEL_PALETTE_LUT_COLORS[lut] || "#888";
+        return AnnotationAdapter.CHANNEL_PALETTE_LUT_COLORS[lut] || "#888888";
     }
 
     static syncFloatingChannelPalette(root = null) {
@@ -5493,17 +5918,18 @@ class AnnotationAdapter {
                     : "bc-channel-cell";
                 row.dataset.channelIndex = String(channel.index ?? index);
                 const color = AnnotationAdapter.channelPaletteColor(channel);
+                row.style?.setProperty?.("--channel-color", color);
                 const name = AnnotationAdapter.escapePaletteHtml(
                     AnnotationAdapter.formatChannelPaletteLabel(channel)
                 );
                 row.innerHTML = `
-                    <input type="checkbox" class="floating-channel-cb" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}">
-                    <span class="fcp-swatch" style="background:${color}"></span>
-                    <span class="bc-channel-name" style="color:${color}">${name}</span>
+                    <span class="fcp-swatch" data-fcp-swatch style="background:${color}" title="Channel color" role="button" tabindex="0"></span>
+                    <span class="bc-channel-name" data-fcp-name style="color:${color}">${name}</span>
+                    <input type="checkbox" class="floating-channel-cb" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}" style="--channel-color:${color}">
                     <span class="bc-channel-range">${AnnotationAdapter.formatChannelLevel(channel.black)} – ${AnnotationAdapter.formatChannelLevel(channel.white)}</span>
                 `;
                 row.addEventListener("click", event => {
-                    if (event.target?.closest?.("input, .floating-channel-cb")) return;
+                    if (event.target?.closest?.("input, .floating-channel-cb, .fcp-swatch, [data-fcp-swatch]")) return;
                     AnnotationAdapter.channelPaletteSelectedIndex = index;
                     AnnotationAdapter.syncFloatingChannelPalette(doc);
                     AnnotationAdapter.refreshChannelPaletteHistogram(doc);
@@ -5512,9 +5938,32 @@ class AnnotationAdapter {
                 checkbox?.addEventListener("change", () => {
                     AnnotationAdapter.applyChannelPaletteVisibility(index, checkbox.checked, doc);
                 });
+                const swatch = row.querySelector("[data-fcp-swatch], .fcp-swatch");
+                swatch?.addEventListener("click", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    AnnotationAdapter.channelPaletteSelectedIndex = index;
+                    AnnotationAdapter.openChannelColorChooser(index, swatch, doc);
+                });
+                swatch?.addEventListener("keydown", event => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    AnnotationAdapter.openChannelColorChooser(index, swatch, doc);
+                });
+                const nameEl = row.querySelector("[data-fcp-name], .bc-channel-name");
+                nameEl?.addEventListener("dblclick", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    AnnotationAdapter.channelPaletteSelectedIndex = index;
+                    AnnotationAdapter.openChannelPropertiesDialog(index, doc);
+                });
                 return row;
             });
             body.replaceChildren(...rows);
+        }
+        const showAll = palette.querySelector?.("#fcp-show-all") || doc?.getElementById?.("fcp-show-all");
+        if (showAll) {
+            showAll.checked = channels.length > 0 && channels.every(channel => channel.visible !== false);
         }
         const selected = AnnotationAdapter.paletteSelectedChannel();
         if (selected) {
@@ -5567,6 +6016,653 @@ class AnnotationAdapter {
         AnnotationAdapter.displayController?.syncChannelControls?.();
         AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: false });
         AnnotationAdapter.syncFloatingChannelPalette(root);
+        return true;
+    }
+
+    static applyAllChannelPaletteVisibility(visible, root = null) {
+        const channels = AnnotationAdapter.paletteChannelList();
+        for (const channel of channels) channel.visible = Boolean(visible);
+        const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        if (viewer?.world && typeof viewer.world.getItemAt === "function") {
+            AnnotationAdapter.applyChannelLayerOpacities(
+                viewer,
+                channels,
+                AnnotationAdapter.displayController?.getCurrentZ?.()
+            );
+        }
+        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer);
+        AnnotationAdapter.displayController?.syncChannelControls?.();
+        AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: false });
+        AnnotationAdapter.syncFloatingChannelPalette(root);
+        return true;
+    }
+
+    static CHANNEL_LUT_RGB = {
+        BLUE: [0, 0, 255],
+        GREEN: [0, 255, 0],
+        RED: [255, 0, 0],
+        MAGENTA: [255, 0, 255],
+        CYAN: [0, 255, 255],
+        GRAY: [255, 255, 255],
+        YELLOW: [255, 255, 0]
+    };
+
+    static NAMED_CHANNEL_COLORS = [
+        { name: "Cyan", hex: "#00ffff", lut: "CYAN" },
+        { name: "Teal", hex: "#008b8b", lut: "CYAN" },
+        { name: "Blue", hex: "#0000ff", lut: "BLUE" },
+        { name: "Navy", hex: "#000080", lut: "BLUE" },
+        { name: "Purple", hex: "#800080", lut: "MAGENTA" },
+        { name: "Magenta", hex: "#ff00ff", lut: "MAGENTA" },
+        { name: "Red", hex: "#ff0000", lut: "RED" },
+        { name: "Maroon", hex: "#8b0000", lut: "RED" },
+        { name: "Yellow", hex: "#ffff00", lut: "YELLOW" },
+        { name: "Olive", hex: "#808000", lut: "YELLOW" },
+        { name: "Green", hex: "#008000", lut: "GREEN" },
+        { name: "Lime", hex: "#00ff00", lut: "GREEN" },
+        { name: "White", hex: "#ffffff", lut: "GRAY" },
+        { name: "Gray", hex: "#808080", lut: "GRAY" },
+        { name: "Orange", hex: "#ff8000", lut: "RED" }
+    ];
+
+    static CUSTOM_CHANNEL_COLORS_KEY = "wsi.qupathCustomColors";
+
+    static normalizeHexColor(value) {
+        let hex = String(value || "").trim();
+        if (!hex.startsWith("#")) hex = `#${hex}`;
+        if (/^#[0-9a-f]{3}$/i.test(hex)) {
+            hex = `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+        }
+        if (!/^#[0-9a-f]{6}$/i.test(hex)) return "#00ffff";
+        return hex.toLowerCase();
+    }
+
+    static hexToRgb(hex) {
+        const n = AnnotationAdapter.normalizeHexColor(hex).slice(1);
+        return {
+            r: parseInt(n.slice(0, 2), 16),
+            g: parseInt(n.slice(2, 4), 16),
+            b: parseInt(n.slice(4, 6), 16)
+        };
+    }
+
+    static rgbToHex(r, g, b) {
+        const clamp = value => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
+        return `#${[clamp(r), clamp(g), clamp(b)].map(value => value.toString(16).padStart(2, "0")).join("")}`;
+    }
+
+    static rgbToHsb(r, g, b) {
+        const rr = r / 255;
+        const gg = g / 255;
+        const bb = b / 255;
+        const max = Math.max(rr, gg, bb);
+        const min = Math.min(rr, gg, bb);
+        const delta = max - min;
+        let h = 0;
+        if (delta) {
+            if (max === rr) h = ((gg - bb) / delta + (gg < bb ? 6 : 0)) * 60;
+            else if (max === gg) h = ((bb - rr) / delta + 2) * 60;
+            else h = ((rr - gg) / delta + 4) * 60;
+        }
+        return {
+            h: Math.round(h),
+            s: Math.round((max === 0 ? 0 : delta / max) * 100),
+            b: Math.round(max * 100)
+        };
+    }
+
+    static hsbToRgb(h, s, br) {
+        const sat = Math.max(0, Math.min(100, Number(s) || 0)) / 100;
+        const val = Math.max(0, Math.min(100, Number(br) || 0)) / 100;
+        const hue = ((Number(h) || 0) % 360 + 360) % 360;
+        const c = val * sat;
+        const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+        const m = val - c;
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        if (hue < 60) { r = c; g = x; }
+        else if (hue < 120) { r = x; g = c; }
+        else if (hue < 180) { g = c; b = x; }
+        else if (hue < 240) { g = x; b = c; }
+        else if (hue < 300) { r = x; b = c; }
+        else { r = c; b = x; }
+        return {
+            r: Math.round((r + m) * 255),
+            g: Math.round((g + m) * 255),
+            b: Math.round((b + m) * 255)
+        };
+    }
+
+    static nearestLutFromHex(hex) {
+        const { r, g, b } = AnnotationAdapter.hexToRgb(hex);
+        let best = "CYAN";
+        let bestDist = Infinity;
+        for (const [lut, rgb] of Object.entries(AnnotationAdapter.CHANNEL_LUT_RGB)) {
+            const dist = (r - rgb[0]) ** 2 + (g - rgb[1]) ** 2 + (b - rgb[2]) ** 2;
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = lut;
+            }
+        }
+        return best;
+    }
+
+    static namedColorForHex(hex) {
+        const n = AnnotationAdapter.normalizeHexColor(hex);
+        return AnnotationAdapter.NAMED_CHANNEL_COLORS.find(color => color.hex === n)?.name || "Custom";
+    }
+
+    static quPathPresetColors() {
+        return AnnotationAdapter.NAMED_CHANNEL_COLORS.slice(0, 12).map(color => color.hex);
+    }
+
+    static quPathColorGrid() {
+        const hues = [180, 200, 220, 240, 260, 280, 300, 0, 20, 45, 80, 120];
+        const rows = [];
+        rows.push(Array.from({ length: 12 }, (_, i) => {
+            const v = Math.round(255 - (i * 255 / 11));
+            return AnnotationAdapter.rgbToHex(v, v, v);
+        }));
+        for (const light of [0.5, 0.32, 0.18, 0.68, 0.82, 0.9, 0.42, 0.58]) {
+            rows.push(hues.map(hue => {
+                const rgb = AnnotationAdapter.hsbToRgb(hue, light > 0.75 ? 55 : 100, light * 100);
+                return AnnotationAdapter.rgbToHex(rgb.r, rgb.g, rgb.b);
+            }));
+        }
+        return rows;
+    }
+
+    static loadCustomChannelColors() {
+        try {
+            const raw = typeof localStorage !== "undefined" ? localStorage.getItem(AnnotationAdapter.CUSTOM_CHANNEL_COLORS_KEY) : null;
+            const list = raw ? JSON.parse(raw) : [];
+            return (Array.isArray(list) ? list : [])
+                .map(item => AnnotationAdapter.normalizeHexColor(item))
+                .filter(Boolean)
+                .slice(0, 12);
+        } catch (_error) {
+            return [];
+        }
+    }
+
+    static saveCustomChannelColor(hex) {
+        const next = AnnotationAdapter.normalizeHexColor(hex);
+        const colors = AnnotationAdapter.loadCustomChannelColors().filter(item => item !== next);
+        colors.unshift(next);
+        try {
+            localStorage.setItem(AnnotationAdapter.CUSTOM_CHANNEL_COLORS_KEY, JSON.stringify(colors.slice(0, 12)));
+        } catch (_error) { /* ignore quota */ }
+        return colors.slice(0, 12);
+    }
+
+    static applyChannelPaletteColor(index, hex, options = {}) {
+        const channels = AnnotationAdapter.paletteChannelList();
+        const channel = channels[index];
+        if (!channel) return false;
+        const color = AnnotationAdapter.normalizeHexColor(hex);
+        channel.color = color;
+        channel.lut = AnnotationAdapter.nearestLutFromHex(color);
+        if (Number.isFinite(Number(options.opacity))) {
+            channel.opacity = Math.max(0, Math.min(1, Number(options.opacity)));
+        }
+        AnnotationAdapter.channelPaletteSelectedIndex = index;
+        AnnotationAdapter.displayController?.syncChannelControls?.();
+        AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: true });
+        AnnotationAdapter.syncFloatingChannelPalette(options.root || null);
+        const props = typeof document !== "undefined"
+            ? document.getElementById("qp-channel-properties")
+            : null;
+        if (props) AnnotationAdapter.refreshChannelPropertiesColorTrigger(props, channel);
+        return true;
+    }
+
+    static applyChannelPaletteName(index, name, root = null) {
+        const channels = AnnotationAdapter.paletteChannelList();
+        const channel = channels[index];
+        if (!channel) return false;
+        const next = String(name || "").trim();
+        if (next) {
+            channel.nameOverride = next;
+            channel.name = next;
+        }
+        AnnotationAdapter.channelPaletteSelectedIndex = index;
+        AnnotationAdapter.displayController?.syncChannelControls?.();
+        AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: false });
+        AnnotationAdapter.syncFloatingChannelPalette(root);
+        return true;
+    }
+
+    static paletteDocument(root = null) {
+        return AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+    }
+
+    static closeChannelColorChooser(root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        if (AnnotationAdapter._colorChooserDismiss) {
+            doc?.removeEventListener?.("mousedown", AnnotationAdapter._colorChooserDismiss, true);
+            AnnotationAdapter._colorChooserDismiss = null;
+        }
+        doc?.getElementById?.("qp-color-chooser")?.remove?.();
+        return true;
+    }
+
+    static closeChannelPropertiesDialog(root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        AnnotationAdapter.closeChannelColorChooser(doc);
+        doc?.getElementById?.("qp-channel-properties")?.remove?.();
+        return true;
+    }
+
+    static bindQuPathWindowClose(dialog, onClose) {
+        const button = dialog?.querySelector?.("[data-qp-window-close], .qp-dialog-traffic .is-close");
+        if (!button?.addEventListener) return false;
+        button.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof onClose === "function") onClose();
+        });
+        return true;
+    }
+
+    static closeCustomColorsDialog(root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        doc?.getElementById?.("qp-custom-colors")?.remove?.();
+        return true;
+    }
+
+    static positionFixedNear(node, anchor, offset = 6) {
+        if (!node?.style) return false;
+        const rect = anchor?.getBoundingClientRect?.() || { left: 24, top: 24, bottom: 48, right: 48 };
+        const width = node.offsetWidth || 240;
+        const height = node.offsetHeight || 200;
+        const viewW = typeof window !== "undefined" ? window.innerWidth : 1280;
+        const viewH = typeof window !== "undefined" ? window.innerHeight : 800;
+        let left = rect.left;
+        let top = rect.bottom + offset;
+        if (left + width > viewW - 8) left = Math.max(8, viewW - width - 8);
+        if (top + height > viewH - 8) top = Math.max(8, rect.top - height - offset);
+        node.style.left = `${Math.max(8, left)}px`;
+        node.style.top = `${Math.max(8, top)}px`;
+        return true;
+    }
+
+    static colorSwatchButton(doc, hex, options = {}) {
+        const button = doc.createElement("button");
+        button.type = "button";
+        button.className = `qp-color-swatch${options.empty ? " is-empty" : ""}`;
+        if (hex) {
+            button.style.background = hex;
+            button.dataset.color = hex;
+            button.title = hex;
+        }
+        if (options.selected) button.classList.add("is-selected");
+        return button;
+    }
+
+    static openChannelColorChooser(index, anchor, root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        if (!doc?.body?.appendChild || typeof doc.createElement !== "function") return false;
+        AnnotationAdapter.closeChannelColorChooser(doc);
+        const channels = AnnotationAdapter.paletteChannelList();
+        const channel = channels[index];
+        if (!channel) return false;
+        const current = AnnotationAdapter.channelPaletteColor(channel);
+        const menu = doc.createElement("div");
+        menu.id = "qp-color-chooser";
+        menu.className = "qp-color-chooser";
+        menu.setAttribute("role", "dialog");
+        menu.setAttribute("aria-label", "Channel color");
+        const addRow = (colors, className) => {
+            const row = doc.createElement("div");
+            row.className = className;
+            colors.forEach(hex => {
+                const swatch = AnnotationAdapter.colorSwatchButton(doc, hex, { selected: hex === current });
+                swatch.addEventListener("click", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    AnnotationAdapter.applyChannelPaletteColor(index, hex, { root: doc });
+                    AnnotationAdapter.closeChannelColorChooser(doc);
+                });
+                row.appendChild(swatch);
+            });
+            menu.appendChild(row);
+        };
+        addRow(AnnotationAdapter.quPathPresetColors(), "qp-color-row");
+        const grid = doc.createElement("div");
+        grid.className = "qp-color-grid";
+        AnnotationAdapter.quPathColorGrid().flat().forEach(hex => {
+            const swatch = AnnotationAdapter.colorSwatchButton(doc, hex, { selected: hex === current });
+            swatch.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                AnnotationAdapter.applyChannelPaletteColor(index, hex, { root: doc });
+                AnnotationAdapter.closeChannelColorChooser(doc);
+            });
+            grid.appendChild(swatch);
+        });
+        menu.appendChild(grid);
+        const customLabel = doc.createElement("div");
+        customLabel.className = "qp-color-label";
+        customLabel.textContent = "Custom Colors";
+        menu.appendChild(customLabel);
+        const custom = AnnotationAdapter.loadCustomChannelColors();
+        const customRow = doc.createElement("div");
+        customRow.className = "qp-color-row";
+        for (let i = 0; i < 12; i += 1) {
+            const hex = custom[i];
+            const swatch = AnnotationAdapter.colorSwatchButton(doc, hex, {
+                empty: !hex,
+                selected: hex === current
+            });
+            if (hex) {
+                swatch.addEventListener("click", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    AnnotationAdapter.applyChannelPaletteColor(index, hex, { root: doc });
+                    AnnotationAdapter.closeChannelColorChooser(doc);
+                });
+            }
+            customRow.appendChild(swatch);
+        }
+        menu.appendChild(customRow);
+        const link = doc.createElement("button");
+        link.type = "button";
+        link.className = "qp-color-custom-link";
+        link.textContent = "Custom Color...";
+        link.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.openCustomColorsDialog(index, current, doc);
+        });
+        menu.appendChild(link);
+        doc.body.appendChild(menu);
+        AnnotationAdapter.positionFixedNear(menu, anchor);
+        const dismiss = event => {
+            if (event.target?.closest?.("#qp-color-chooser, #qp-custom-colors, #qp-channel-properties")) return;
+            AnnotationAdapter.closeChannelColorChooser(doc);
+        };
+        AnnotationAdapter._colorChooserDismiss = dismiss;
+        doc.addEventListener("mousedown", dismiss, true);
+        return true;
+    }
+
+    static refreshChannelPropertiesColorTrigger(dialog, channel) {
+        const trigger = dialog?.querySelector?.("[data-qp-color-trigger]");
+        if (!trigger) return false;
+        const hex = AnnotationAdapter.channelPaletteColor(channel);
+        const swatch = trigger.querySelector(".qp-color-swatch");
+        if (swatch) swatch.style.background = hex;
+        const name = trigger.querySelector("[data-qp-color-name]");
+        if (name) name.textContent = AnnotationAdapter.namedColorForHex(hex);
+        return true;
+    }
+
+    static openChannelPropertiesDialog(index, root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        if (!doc?.body?.appendChild || typeof doc.createElement !== "function") return false;
+        AnnotationAdapter.closeChannelPropertiesDialog(doc);
+        const channel = AnnotationAdapter.paletteChannelList()[index];
+        if (!channel) return false;
+        const hex = AnnotationAdapter.channelPaletteColor(channel);
+        const dialog = doc.createElement("div");
+        dialog.id = "qp-channel-properties";
+        dialog.className = "qp-channel-properties";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-label", "Channel properties");
+        dialog.innerHTML = `
+            <div class="qp-channel-properties-title">
+                <span class="qp-dialog-traffic">
+                    <button type="button" class="is-close" data-qp-window-close aria-label="Close channel properties"></button>
+                    <i class="is-min" aria-hidden="true"></i>
+                    <i class="is-max" aria-hidden="true"></i>
+                </span>
+                Channel properties
+            </div>
+            <div class="qp-channel-properties-body">
+                <label for="qp-channel-name-input">Channel name</label>
+                <input id="qp-channel-name-input" type="text" value="">
+                <label>Channel color</label>
+                <button type="button" class="qp-color-dropdown" data-qp-color-trigger>
+                    <span class="qp-color-swatch" style="background:${hex}"></span>
+                    <span data-qp-color-name>${AnnotationAdapter.escapePaletteHtml(AnnotationAdapter.namedColorForHex(hex))}</span>
+                    <span class="qp-color-dropdown-caret">▼</span>
+                </button>
+            </div>
+            <div class="qp-dialog-actions">
+                <button type="button" data-qp-cancel>Cancel</button>
+                <button type="button" data-qp-apply>Apply</button>
+            </div>
+        `;
+        doc.body.appendChild(dialog);
+        const nameInput = dialog.querySelector("#qp-channel-name-input");
+        if (nameInput) {
+            nameInput.value = AnnotationAdapter.formatChannelPaletteLabel(channel);
+            try { nameInput.focus(); nameInput.select(); } catch (_error) { /* ignore */ }
+        }
+        dialog.querySelector("[data-qp-color-trigger]")?.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.openChannelColorChooser(index, event.currentTarget, doc);
+        });
+        AnnotationAdapter.bindQuPathWindowClose(dialog, () => {
+            AnnotationAdapter.closeChannelPropertiesDialog(doc);
+        });
+        dialog.querySelector("[data-qp-cancel]")?.addEventListener("click", () => {
+            AnnotationAdapter.closeChannelPropertiesDialog(doc);
+        });
+        dialog.querySelector("[data-qp-apply]")?.addEventListener("click", () => {
+            AnnotationAdapter.applyChannelPaletteName(index, nameInput?.value, doc);
+            AnnotationAdapter.closeChannelPropertiesDialog(doc);
+        });
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const row = palette?.querySelector?.(`.bc-channel-cell[data-channel-index="${channel.index ?? index}"]`);
+        AnnotationAdapter.positionFixedNear(dialog, row || nameInput);
+        return true;
+    }
+
+    static openCustomColorsDialog(index, startHex, root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        if (!doc?.body?.appendChild || typeof doc.createElement !== "function") return false;
+        AnnotationAdapter.closeCustomColorsDialog(doc);
+        const channel = AnnotationAdapter.paletteChannelList()[index];
+        if (!channel) return false;
+        const current = AnnotationAdapter.channelPaletteColor(channel);
+        const start = AnnotationAdapter.normalizeHexColor(startHex || current);
+        const rgb = AnnotationAdapter.hexToRgb(start);
+        const hsb = AnnotationAdapter.rgbToHsb(rgb.r, rgb.g, rgb.b);
+        const state = {
+            r: rgb.r,
+            g: rgb.g,
+            b: rgb.b,
+            h: hsb.h,
+            s: hsb.s,
+            v: hsb.b,
+            opacity: Math.round((Number(channel.opacity) || 1) * 100),
+            tab: "hsb"
+        };
+        const dialog = doc.createElement("div");
+        dialog.id = "qp-custom-colors";
+        dialog.className = "qp-custom-colors";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-label", "Custom Colors");
+        dialog.innerHTML = `
+            <div class="qp-custom-colors-title">
+                <span class="qp-dialog-traffic">
+                    <button type="button" class="is-close" data-qp-window-close aria-label="Close custom colors"></button>
+                    <i class="is-min" aria-hidden="true"></i>
+                    <i class="is-max" aria-hidden="true"></i>
+                </span>
+                Custom Colors
+            </div>
+            <div class="qp-custom-colors-body">
+                <div>
+                    <div class="qp-hsb-field" data-qp-sb-field></div>
+                    <input class="qp-hue-slider" data-qp-hue-slider type="range" min="0" max="360" value="${state.h}" aria-label="Hue">
+                </div>
+                <div>
+                    <div class="qp-color-compare">
+                        <div>Current Color</div>
+                        <div class="qp-color-compare-bar" data-qp-current style="background:${current}"></div>
+                        <div>New Color</div>
+                        <div class="qp-color-compare-bar" data-qp-new style="background:${start}"></div>
+                    </div>
+                    <div class="qp-color-tabs">
+                        <button type="button" class="qp-color-tab is-active" data-qp-tab="hsb">HSB</button>
+                        <button type="button" class="qp-color-tab" data-qp-tab="rgb">RGB</button>
+                        <button type="button" class="qp-color-tab" data-qp-tab="web">Web</button>
+                    </div>
+                    <div data-qp-tab-panel="hsb">
+                        <div class="qp-color-field-row"><span>Hue:</span><input data-qp-h-range type="range" min="0" max="360" value="${state.h}"><input data-qp-h type="number" min="0" max="360" value="${state.h}"><span>°</span></div>
+                        <div class="qp-color-field-row"><span>Saturation:</span><input data-qp-s-range type="range" min="0" max="100" value="${state.s}"><input data-qp-s type="number" min="0" max="100" value="${state.s}"><span>%</span></div>
+                        <div class="qp-color-field-row"><span>Brightness:</span><input data-qp-v-range type="range" min="0" max="100" value="${state.v}"><input data-qp-v type="number" min="0" max="100" value="${state.v}"><span>%</span></div>
+                    </div>
+                    <div data-qp-tab-panel="rgb" hidden>
+                        <div class="qp-color-field-row"><span>Red:</span><input data-qp-r-range type="range" min="0" max="255" value="${state.r}"><input data-qp-r type="number" min="0" max="255" value="${state.r}"><span></span></div>
+                        <div class="qp-color-field-row"><span>Green:</span><input data-qp-g-range type="range" min="0" max="255" value="${state.g}"><input data-qp-g type="number" min="0" max="255" value="${state.g}"><span></span></div>
+                        <div class="qp-color-field-row"><span>Blue:</span><input data-qp-b-range type="range" min="0" max="255" value="${state.b}"><input data-qp-b type="number" min="0" max="255" value="${state.b}"><span></span></div>
+                    </div>
+                    <div data-qp-tab-panel="web" hidden>
+                        <div class="qp-color-field-row"><span>Web:</span><input data-qp-web type="text" value="${start}"><span></span><span></span></div>
+                    </div>
+                    <div class="qp-color-field-row"><span>Opacity:</span><input data-qp-o-range type="range" min="0" max="100" value="${state.opacity}"><input data-qp-o type="number" min="0" max="100" value="${state.opacity}"><span>%</span></div>
+                </div>
+            </div>
+            <div class="qp-dialog-actions">
+                <button type="button" data-qp-save>Save</button>
+                <button type="button" data-qp-use>Use</button>
+                <button type="button" data-qp-cancel>Cancel</button>
+            </div>
+        `;
+        const field = dialog.querySelector("[data-qp-sb-field]");
+        const hueSlider = dialog.querySelector("[data-qp-hue-slider]");
+        const paintField = () => {
+            if (!field) return;
+            field.style.background = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, hsl(${state.h}, 100%, 50%))`;
+        };
+        const syncInputs = () => {
+            const hex = AnnotationAdapter.rgbToHex(state.r, state.g, state.b);
+            const set = (sel, value) => {
+                const node = dialog.querySelector(sel);
+                if (node && node.value !== String(value)) node.value = String(value);
+            };
+            set("[data-qp-h]", state.h);
+            set("[data-qp-h-range]", state.h);
+            set("[data-qp-s]", state.s);
+            set("[data-qp-s-range]", state.s);
+            set("[data-qp-v]", state.v);
+            set("[data-qp-v-range]", state.v);
+            set("[data-qp-r]", state.r);
+            set("[data-qp-r-range]", state.r);
+            set("[data-qp-g]", state.g);
+            set("[data-qp-g-range]", state.g);
+            set("[data-qp-b]", state.b);
+            set("[data-qp-b-range]", state.b);
+            set("[data-qp-web]", hex);
+            set("[data-qp-o]", state.opacity);
+            set("[data-qp-o-range]", state.opacity);
+            if (hueSlider && hueSlider.value !== String(state.h)) hueSlider.value = String(state.h);
+            const neu = dialog.querySelector("[data-qp-new]");
+            if (neu) neu.style.background = hex;
+            paintField();
+        };
+        const fromHsb = () => {
+            const rgb = AnnotationAdapter.hsbToRgb(state.h, state.s, state.v);
+            state.r = rgb.r;
+            state.g = rgb.g;
+            state.b = rgb.b;
+            syncInputs();
+        };
+        const fromRgb = () => {
+            const next = AnnotationAdapter.rgbToHsb(state.r, state.g, state.b);
+            state.h = next.h;
+            state.s = next.s;
+            state.v = next.b;
+            syncInputs();
+        };
+        const bindPair = (key, from) => {
+            const num = dialog.querySelector(`[data-qp-${key}]`);
+            const range = dialog.querySelector(`[data-qp-${key}-range]`);
+            const apply = value => {
+                const parsed = Number(value);
+                if (!Number.isFinite(parsed)) return;
+                if (key === "h") state.h = Math.max(0, Math.min(360, parsed));
+                else if (key === "s" || key === "v" || key === "o") state[key === "o" ? "opacity" : key] = Math.max(0, Math.min(100, parsed));
+                else state[key] = Math.max(0, Math.min(255, parsed));
+                if (from === "hsb" && key !== "o") fromHsb();
+                else if (from === "rgb" && key !== "o") fromRgb();
+                else syncInputs();
+            };
+            num?.addEventListener("input", () => apply(num.value));
+            range?.addEventListener("input", () => apply(range.value));
+        };
+        ["h", "s", "v"].forEach(key => bindPair(key, "hsb"));
+        ["r", "g", "b"].forEach(key => bindPair(key, "rgb"));
+        bindPair("o", "opacity");
+        hueSlider?.addEventListener("input", () => {
+            state.h = Number(hueSlider.value) || 0;
+            fromHsb();
+        });
+        field?.addEventListener("pointerdown", event => {
+            const pick = ev => {
+                const rect = field.getBoundingClientRect();
+                const x = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+                const y = Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height));
+                state.s = Math.round(x * 100);
+                state.v = Math.round((1 - y) * 100);
+                fromHsb();
+            };
+            pick(event);
+            const move = ev => pick(ev);
+            const up = () => {
+                doc.removeEventListener("pointermove", move, true);
+                doc.removeEventListener("pointerup", up, true);
+            };
+            doc.addEventListener("pointermove", move, true);
+            doc.addEventListener("pointerup", up, true);
+        });
+        dialog.querySelector("[data-qp-web]")?.addEventListener("change", event => {
+            const hex = AnnotationAdapter.normalizeHexColor(event.target.value);
+            const next = AnnotationAdapter.hexToRgb(hex);
+            state.r = next.r;
+            state.g = next.g;
+            state.b = next.b;
+            fromRgb();
+        });
+        dialog.querySelectorAll("[data-qp-tab]").forEach(tab => {
+            tab.addEventListener("click", () => {
+                const name = tab.getAttribute("data-qp-tab");
+                dialog.querySelectorAll("[data-qp-tab]").forEach(node => {
+                    node.classList.toggle("is-active", node === tab);
+                });
+                dialog.querySelectorAll("[data-qp-tab-panel]").forEach(panel => {
+                    panel.hidden = panel.getAttribute("data-qp-tab-panel") !== name;
+                });
+            });
+        });
+        const applyColor = save => {
+            const hex = AnnotationAdapter.rgbToHex(state.r, state.g, state.b);
+            if (save) AnnotationAdapter.saveCustomChannelColor(hex);
+            AnnotationAdapter.applyChannelPaletteColor(index, hex, {
+                root: doc,
+                opacity: state.opacity / 100
+            });
+            AnnotationAdapter.closeCustomColorsDialog(doc);
+            AnnotationAdapter.closeChannelColorChooser(doc);
+        };
+        dialog.querySelector("[data-qp-save]")?.addEventListener("click", () => applyColor(true));
+        dialog.querySelector("[data-qp-use]")?.addEventListener("click", () => applyColor(false));
+        AnnotationAdapter.bindQuPathWindowClose(dialog, () => {
+            AnnotationAdapter.closeCustomColorsDialog(doc);
+        });
+        dialog.querySelector("[data-qp-cancel]")?.addEventListener("click", () => {
+            AnnotationAdapter.closeCustomColorsDialog(doc);
+        });
+        doc.body.appendChild(dialog);
+        syncInputs();
+        const chooser = doc.getElementById("qp-color-chooser");
+        AnnotationAdapter.positionFixedNear(dialog, chooser || null);
         return true;
     }
 
@@ -6848,6 +7944,7 @@ class AnnotationAdapter {
         }
 
         if (name === "browser") {
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
             const side = (typeof document !== "undefined" && document.getElementById)
                 ? (document.getElementById("toggle-left") || document.getElementById("toggle-sidebar-btn"))
                 : null;
@@ -6855,6 +7952,7 @@ class AnnotationAdapter {
             return true;
         }
         if (name === "contrast") {
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
             AnnotationAdapter.launchBrightnessContrastPalette();
             return true;
         }
@@ -6863,7 +7961,6 @@ class AnnotationAdapter {
             || options.annotationSpike
             || AnnotationAdapter.annotationEngine
             || AnnotationAdapter.annotationSpike;
-        const viewer = AnnotationAdapter.viewer;
         if (name !== "line") {
             try { AnnotationAdapter.releaseMeasurementPointerLock(options.event || {}); } catch (_error) { /* ignore */ }
         }
@@ -6874,11 +7971,36 @@ class AnnotationAdapter {
             engine.toggleButton?.setAttribute?.("aria-pressed", String(name === "rectangle"));
         }
 
-        const navOn = Boolean(AnnotationAdapter.QUPATH_NAV_TOOLS[name]);
-        if (viewer && typeof viewer.setMouseNavEnabled === "function") {
-            viewer.setMouseNavEnabled(navOn);
+        if (!AnnotationAdapter.isMeasurementModeActive) {
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
+            AnnotationAdapter.setMeasureTracking(false);
         }
-        if (navOn) AnnotationAdapter.setMeasureTracking(false);
+        return true;
+    }
+
+    static syncViewerNavigationForActiveTool() {
+        const viewer = AnnotationAdapter.viewer;
+        if (!viewer) return false;
+        if (AnnotationAdapter.isMeasurementModeActive) {
+            if (typeof viewer.setMouseNavEnabled === "function") {
+                viewer.setMouseNavEnabled(false);
+            }
+            return false;
+        }
+        if (typeof viewer.setMouseNavEnabled === "function") {
+            viewer.setMouseNavEnabled(true);
+        }
+        const draggingDraw = Boolean(AnnotationAdapter.qpDrawSession?.dragging);
+        const settingsList = [
+            viewer.gestureSettingsMouse,
+            viewer.gestureSettingsTouch,
+            viewer.gestureSettingsPen
+        ];
+        for (const settings of settingsList) {
+            if (!settings) continue;
+            if (!AnnotationAdapter.zoomFitActive) settings.scrollToZoom = true;
+            settings.dragToPan = !draggingDraw;
+        }
         return true;
     }
 
@@ -7373,6 +8495,7 @@ class AnnotationAdapter {
         const shiftKey = Boolean(event.shiftKey || event.originalEvent?.shiftKey);
         if (tool === "rectangle" || tool === "ellipse" || tool === "line" || tool === "brush") {
             if (typeof event.preventDefault === "function") event.preventDefault();
+            if (typeof event.stopPropagation === "function") event.stopPropagation();
             AnnotationAdapter.qpDrawSession = {
                 tool,
                 dragging: true,
@@ -7381,6 +8504,7 @@ class AnnotationAdapter {
                 current: AnnotationAdapter.applyQuPathShiftConstraint(point, point, tool, shiftKey),
                 vertices: [{ ...point }]
             };
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
             AnnotationAdapter.redrawQuPathPreview();
             return true;
         }
@@ -7398,6 +8522,7 @@ class AnnotationAdapter {
                 return false;
             }
             if (typeof event.preventDefault === "function") event.preventDefault();
+            if (typeof event.stopPropagation === "function") event.stopPropagation();
             return AnnotationAdapter.beginWandDrawSession(event);
         }
         if (tool === "zoom") {
@@ -7526,6 +8651,7 @@ class AnnotationAdapter {
             AnnotationAdapter.qpDrawSession = null;
             AnnotationAdapter.clearQuPathPreview();
         }
+        AnnotationAdapter.syncViewerNavigationForActiveTool();
         if (session.tool === "wand") {
             return AnnotationAdapter.finishWandDrawSession(event);
         }
@@ -7597,6 +8723,7 @@ class AnnotationAdapter {
     static cancelQuPathDrawSession(options = {}) {
         AnnotationAdapter.qpDrawSession = null;
         AnnotationAdapter.clearQuPathPreview();
+        AnnotationAdapter.syncViewerNavigationForActiveTool();
         if (!options.keepTool) return true;
         return true;
     }
@@ -8434,6 +9561,7 @@ class AnnotationAdapter {
             cfg,
             baseRadius: cfg.radius
         };
+        AnnotationAdapter.syncViewerNavigationForActiveTool();
         AnnotationAdapter.redrawQuPathPreview();
         return true;
     }
@@ -8474,6 +9602,7 @@ class AnnotationAdapter {
         const vertices = Array.isArray(session.vertices) ? session.vertices : [];
         AnnotationAdapter.qpDrawSession = null;
         AnnotationAdapter.clearQuPathPreview();
+        AnnotationAdapter.syncViewerNavigationForActiveTool();
         if (vertices.length < 3) return false;
         AnnotationAdapter.commitQuPathShape({
             type: "wand",
@@ -9284,7 +10413,16 @@ class AnnotationAdapter {
             `[data-annotation-id="${clientId}"], [data-annotation-name-for="${clientId}"]`
         ) || [];
         labeled.forEach(node => {
-            if (node && "textContent" in node) node.textContent = name;
+            if (!node || !("textContent" in node)) return;
+            if (node.classList?.contains("osd-annotation-shape")
+                || node.classList?.contains("annotation-shape-overlay")
+                || node.querySelector?.("path, polygon, polyline, line, rect, ellipse, circle, g")) {
+                return;
+            }
+            const isLabel = node.hasAttribute?.("data-annotation-name-for")
+                || node.classList?.contains("annotation-text-label")
+                || node.classList?.contains("annotation-name-label");
+            if (isLabel) node.textContent = name;
         });
         return true;
     }
