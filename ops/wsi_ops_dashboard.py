@@ -109,6 +109,34 @@ ul.browse-list li { padding: .2rem 0; }
 nav.breadcrumbs a { margin-right: .15rem; }
 nav.breadcrumbs strong { margin-right: .15rem; }
 p.browse-help { color: #333; max-width: 42rem; }
+section.env-panel {
+  max-width: 52rem;
+  margin: 1.35rem 0;
+  padding: 1rem 1.2rem 1.1rem;
+  border: 2px solid #174b78;
+  border-radius: .5rem;
+  background: #f4f8fc;
+}
+section.env-panel h2 { margin: 0 0 .65rem; font-size: 1.15rem; }
+section.env-panel-dev {
+  border-color: #8a5a00;
+  background: #fff6e4;
+}
+.env-flag {
+  display: inline-block;
+  margin-left: .45rem;
+  padding: .15rem .5rem;
+  border-radius: .25rem;
+  background: #8a5a00;
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+p.dev-tools-link { max-width: 52rem; color: #333; margin-top: 2rem; }
+p.dev-banner { max-width: 52rem; padding: .75rem 1rem; background: #fff6e4; border: 2px solid #8a5a00; border-radius: .4rem; }
 """
 
 
@@ -630,9 +658,10 @@ class Handler(BaseHTTPRequestHandler):
         sid = jar[COOKIE].value if COOKIE in jar else ""
         return sid, self.server.dashboard.sessions.get(sid)
 
-    def page(self, content, csrf=None):
+    def page(self, content, csrf=None, title="Dashboard"):
         logout = (f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{html.escape(csrf)}"><button>Logout</button></form>' if csrf else "")
-        return '<!doctype html><html><head><meta charset="utf-8"><title>Local WSI operations</title><style>' + DASHBOARD_STYLE + '</style></head><body><h1>Local WSI operations</h1>' + logout + content + '</body></html>'
+        heading = html.escape(title)
+        return '<!doctype html><html><head><meta charset="utf-8"><title>' + heading + '</title><style>' + DASHBOARD_STYLE + '</style></head><body><h1>' + heading + '</h1>' + logout + content + '</body></html>'
 
     def require_session(self):
         sid, item = self.session()
@@ -781,6 +810,82 @@ class Handler(BaseHTTPRequestHandler):
         )
         return self.respond(200, self.page(content, csrf))
 
+    def environment_panels_html(self, csrf):
+        """The three directory-location fields, visually separate, in daily-workflow
+        order. Shared by / and /ingest-tools so both pages save through the same
+        existing POST routes."""
+        app = self.server.dashboard
+        staging_root_raw = app.staging_root_display()
+        staging_value = html.escape(staging_root_raw or "(not set)")
+        drop_value, drop_is_live = app.network_drop_root_state()
+        drop_display = html.escape(drop_value or "(not set)")
+        drop_note = ("live -- the running daemon already picks this up on its next poll, no restart" if drop_is_live
+                     else "from environment variable at daemon startup; saving below switches this to live control")
+        try:
+            dev_image_dir_raw = app.development_image_directory()
+            dev_image_dir = html.escape(dev_image_dir_raw or "(not found in configuration)")
+        except OSError:
+            dev_image_dir_raw = None
+            dev_image_dir = "(configuration unavailable)"
+        token = html.escape(csrf)
+        browse_help = (
+            '<p class="browse-help"><small>Browse&hellip; opens a real native macOS folder-picker window (a genuine popup, '
+            'not part of this page) and comes back here to confirm the pick; "list view" opens a '
+            "click-through picker inside this page instead, mainly useful as a fallback if the native "
+            'one cannot run.</small></p>'
+        )
+        return (
+            f'<section class="env-panel" aria-labelledby="network-drop-heading">'
+            f'<h2 id="network-drop-heading">Network drop root</h2>'
+            f'<p>Current: <code>{drop_display}</code> <small>({html.escape(drop_note)})</small> '
+            f'<a href="{html.escape(browse_native_href("network-drop-root"))}">Browse&hellip;</a> '
+            f'<small>(<a href="{html.escape(browse_href("network-drop-root", drop_value))}">list view</a>)</small></p>'
+            f'<form method="post" action="/network-drop-root"><input type="hidden" name="csrf" value="{token}">'
+            '<label>New network drop root, blank disables <input name="path" size="60"></label><button>Save</button></form>'
+            '</section>'
+            f'<section class="env-panel" aria-labelledby="staging-root-heading">'
+            f'<h2 id="staging-root-heading">Ingestion staging root</h2>'
+            f'<p>Current: <code>{staging_value}</code> '
+            f'<a href="{html.escape(browse_native_href("staging-root"))}">Browse&hellip;</a> '
+            f'<small>(<a href="{html.escape(browse_href("staging-root", staging_root_raw))}">list view</a>)</small></p>'
+            f'<form method="post" action="/staging-root"><input type="hidden" name="csrf" value="{token}">'
+            '<label>New staging root <input name="path" size="60"></label><button>Save</button></form>'
+            '</section>'
+            f'<section class="env-panel env-panel-dev" aria-labelledby="image-directory-heading">'
+            f'<h2 id="image-directory-heading">Development image directory '
+            f'<span class="env-flag">Not part of the usual workflow</span></h2>'
+            f'<p>Current: <code>{dev_image_dir}</code> '
+            f'<a href="{html.escape(browse_native_href("image-directory"))}">Browse&hellip;</a> '
+            f'<small>(<a href="{html.escape(browse_href("image-directory", dev_image_dir_raw))}">list view</a>)</small></p>'
+            f'<form method="post" action="/image-directory"><input type="hidden" name="csrf" value="{token}">'
+            '<label>New image directory <input name="path" size="60"></label> '
+            '<label>Type RESTART <input name="confirmation"></label>'
+            '<button>Save and restart development</button></form>'
+            '<p>Restarting stops and starts the development server (port 8081) via the existing '
+            '<code>ops/wsi</code> control script; anyone viewing slides there loses their session.</p>'
+            '</section>'
+            + browse_help
+        )
+
+    def ingest_tools_html(self, csrf):
+        try:
+            names = safe_candidates(self.server.dashboard.root())
+        except OSError:
+            names = []
+        options = ''.join(f'<option value="{html.escape(n)}">{html.escape(n)}</option>' for n in names)
+        forms = []
+        for action, label, confirm in [("inspect","Inspect",None),("seal","Seal","SEAL"),("observe","Observe",None),("dry-run","Promotion dry-run",None),("promote","Promote","PROMOTE")]:
+            extra = f'<label>Type {confirm} <input name="confirmation"></label>' if confirm else ''
+            forms.append(f'<form method="post" action="/{action}"><input type="hidden" name="csrf" value="{html.escape(csrf)}"><select name="dataset">{options}</select>{extra}<button>{label}</button></form>')
+        links = '<p><a href="/cheatsheet.html">Release cheat sheet HTML</a> · <a href="/cheatsheet.pdf">PDF</a></p>'
+        try:
+            status = self.server.dashboard.invoke("status")
+            history = self.server.dashboard.invoke("history")
+            safe = html.escape(status.stdout + "\n" + history.stdout) if status.returncode == history.returncode == 0 else "Status unavailable (stop and inspect configuration)."
+        except subprocess.TimeoutExpired:
+            safe = "Status unavailable (stop and inspect configuration)."
+        return '<pre>' + safe + '</pre>' + ''.join(forms) + links
+
     def do_GET(self):
         if self.reject_boundary(): return self.respond(HTTPStatus.FORBIDDEN, "Forbidden", "text/plain")
         auth = self.require_session()
@@ -797,59 +902,22 @@ class Handler(BaseHTTPRequestHandler):
             raw_path = (params.get("path") or [""])[0]
             return self.render_browse(target, raw_path, csrf)
         if self.path == "/":
-            try: names = safe_candidates(self.server.dashboard.root())
-            except OSError: names = []
-            options = ''.join(f'<option value="{html.escape(n)}">{html.escape(n)}</option>' for n in names)
-            forms = []
-            for action, label, confirm in [("inspect","Inspect",None),("seal","Seal","SEAL"),("observe","Observe",None),("dry-run","Promotion dry-run",None),("promote","Promote","PROMOTE")]:
-                extra = f'<label>Type {confirm} <input name="confirmation"></label>' if confirm else ''
-                forms.append(f'<form method="post" action="/{action}"><input type="hidden" name="csrf" value="{html.escape(csrf)}"><select name="dataset">{options}</select>{extra}<button>{label}</button></form>')
-            links = '<p><a href="/cheatsheet.html">Release cheat sheet HTML</a> · <a href="/cheatsheet.pdf">PDF</a></p>'
-            try:
-                status = self.server.dashboard.invoke("status")
-                history = self.server.dashboard.invoke("history")
-                safe = html.escape(status.stdout + "\n" + history.stdout) if status.returncode == history.returncode == 0 else "Status unavailable (stop and inspect configuration)."
-            except subprocess.TimeoutExpired:
-                safe = "Status unavailable (stop and inspect configuration)."
-            staging_root_raw = self.server.dashboard.staging_root_display()
-            staging_value = html.escape(staging_root_raw or "(not set)")
-            drop_value, drop_is_live = self.server.dashboard.network_drop_root_state()
-            drop_display = html.escape(drop_value or "(not set)")
-            drop_note = ("live -- the running daemon already picks this up on its next poll, no restart" if drop_is_live
-                         else "from environment variable at daemon startup; saving below switches this to live control")
-            try:
-                dev_image_dir_raw = self.server.dashboard.development_image_directory()
-                dev_image_dir = html.escape(dev_image_dir_raw or "(not found in configuration)")
-            except OSError:
-                dev_image_dir_raw = None
-                dev_image_dir = "(configuration unavailable)"
-            config_section = (
-                '<section><h2>Environment configuration (development)</h2>'
-                f'<p>Ingestion staging root: <code>{staging_value}</code> '
-                f'<a href="{html.escape(browse_native_href("staging-root"))}">Browse&hellip;</a> '
-                f'<small>(<a href="{html.escape(browse_href("staging-root", staging_root_raw))}">list view</a>)</small></p>'
-                f'<form method="post" action="/staging-root"><input type="hidden" name="csrf" value="{html.escape(csrf)}">'
-                '<label>New staging root <input name="path" size="60"></label><button>Save</button></form>'
-                f'<p>Network drop root: <code>{drop_display}</code> <small>({html.escape(drop_note)})</small> '
-                f'<a href="{html.escape(browse_native_href("network-drop-root"))}">Browse&hellip;</a> '
-                f'<small>(<a href="{html.escape(browse_href("network-drop-root", drop_value))}">list view</a>)</small></p>'
-                f'<form method="post" action="/network-drop-root"><input type="hidden" name="csrf" value="{html.escape(csrf)}">'
-                '<label>New network drop root, blank disables <input name="path" size="60"></label><button>Save</button></form>'
-                f'<p>Development image directory: <code>{dev_image_dir}</code> '
-                f'<a href="{html.escape(browse_native_href("image-directory"))}">Browse&hellip;</a> '
-                f'<small>(<a href="{html.escape(browse_href("image-directory", dev_image_dir_raw))}">list view</a>)</small></p>'
-                f'<form method="post" action="/image-directory"><input type="hidden" name="csrf" value="{html.escape(csrf)}">'
-                '<label>New image directory <input name="path" size="60"></label> '
-                '<label>Type RESTART <input name="confirmation"></label>'
-                '<button>Save and restart development</button></form>'
-                '<p>Restarting stops and starts the development server (port 8081) via the existing '
-                '<code>ops/wsi</code> control script; anyone viewing slides there loses their session.</p>'
-                '<p><small>Browse&hellip; opens a real native macOS folder-picker window (a genuine popup, '
-                'not part of this page) and comes back here to confirm the pick; "list view" opens a '
-                "click-through picker inside this page instead, mainly useful as a fallback if the native "
-                'one cannot run.</small></p></section>'
+            content = (
+                self.environment_panels_html(csrf)
+                + '<p class="dev-tools-link"><a href="/ingest-tools">Ingest tools and development details</a>'
+                ' — seal, observe, promote, status, and cheat sheets. Useful while developing the pipeline, '
+                'not the daily workflow.</p>'
             )
-            return self.respond(200, self.page('<pre>'+safe+'</pre>'+''.join(forms)+links+config_section, csrf))
+            return self.respond(200, self.page(content, csrf, title="Dashboard"))
+        if self.path == "/ingest-tools":
+            content = (
+                '<p class="dev-banner"><strong>Development details.</strong> This page keeps the in-depth ingest '
+                'controls (status, seal/observe/promote, cheat sheets). It is not the daily workflow. '
+                '<a href="/">Back to Dashboard</a></p>'
+                + self.ingest_tools_html(csrf)
+                + self.environment_panels_html(csrf)
+            )
+            return self.respond(200, self.page(content, csrf, title="Ingest tools and development details"))
         if self.path in ("/cheatsheet.html", "/cheatsheet.pdf"):
             source = HERE / ("RELEASE-CHEATSHEET.html" if self.path.endswith("html") else "WSI-Release-Cheat-Sheet.pdf")
             mime = "text/html; charset=utf-8" if self.path.endswith("html") else "application/pdf"
@@ -880,55 +948,55 @@ class Handler(BaseHTTPRequestHandler):
             new_path = form.get("path", "")
             if not valid_directory_path(new_path):
                 app.audit("staging-root change result", "invalid path")
-                return self.respond(400, self.page('New staging root must be an existing, readable, absolute directory path.<p><a href="/">Back</a></p>', csrf))
+                return self.respond(400, self.page('New staging root must be an existing, readable, absolute directory path.<p><a href="/">Back to Dashboard</a></p>', csrf))
             try:
                 app.set_staging_root(new_path)
             except (OSError, ValueError):
                 app.audit("staging-root change result", "failure")
-                return self.respond(400, self.page('Unable to update the staging root configuration.<p><a href="/">Back</a></p>', csrf))
+                return self.respond(400, self.page('Unable to update the staging root configuration.<p><a href="/">Back to Dashboard</a></p>', csrf))
             app.audit("staging-root change result", "success")
-            return self.respond(200, self.page('Staging root updated. New ingestion commands use it immediately.<p><a href="/">Back</a></p>', csrf))
+            return self.respond(200, self.page('Staging root updated. New ingestion commands use it immediately.<p><a href="/">Back to Dashboard</a></p>', csrf))
         if self.path == "/network-drop-root":
             app.audit("network-drop-root change attempt", "started")
             new_path = form.get("path", "").strip()
             if new_path and not valid_network_drop_path(new_path):
                 app.audit("network-drop-root change result", "invalid path")
-                return self.respond(400, self.page('Network drop root must be blank (to disable) or an existing, readable, absolute directory path.<p><a href="/">Back</a></p>', csrf))
+                return self.respond(400, self.page('Network drop root must be blank (to disable) or an existing, readable, absolute directory path.<p><a href="/">Back to Dashboard</a></p>', csrf))
             try:
                 app.set_network_drop_root(new_path)
             except (OSError, ValueError):
                 app.audit("network-drop-root change result", "failure")
-                return self.respond(400, self.page('Unable to update the network drop root configuration.<p><a href="/">Back</a></p>', csrf))
+                return self.respond(400, self.page('Unable to update the network drop root configuration.<p><a href="/">Back to Dashboard</a></p>', csrf))
             app.audit("network-drop-root change result", "success")
             message = "Network drop root disabled." if not new_path else "Network drop root updated."
-            return self.respond(200, self.page(f'{message} The running ingestion daemon picks this up on its next poll (no restart needed).<p><a href="/">Back</a></p>', csrf))
+            return self.respond(200, self.page(f'{message} The running ingestion daemon picks this up on its next poll (no restart needed).<p><a href="/">Back to Dashboard</a></p>', csrf))
         if self.path == "/image-directory":
             app.audit("image-directory change attempt", "started")
             if form.get("confirmation") != "RESTART":
                 app.audit("image-directory change result", "confirmation rejected")
-                return self.respond(400, self.page('Required typed confirmation was not supplied.<p><a href="/">Back</a></p>', csrf))
+                return self.respond(400, self.page('Required typed confirmation was not supplied.<p><a href="/">Back to Dashboard</a></p>', csrf))
             new_path = form.get("path", "")
             if not valid_directory_path(new_path):
                 app.audit("image-directory change result", "invalid path")
-                return self.respond(400, self.page('New image directory must be an existing, readable, absolute directory path.<p><a href="/">Back</a></p>', csrf))
+                return self.respond(400, self.page('New image directory must be an existing, readable, absolute directory path.<p><a href="/">Back to Dashboard</a></p>', csrf))
             try:
                 app.set_development_image_directory(new_path)
             except (OSError, ValueError):
                 app.audit("image-directory change result", "failure")
-                return self.respond(400, self.page('Unable to update the development configuration.<p><a href="/">Back</a></p>', csrf))
+                return self.respond(400, self.page('Unable to update the development configuration.<p><a href="/">Back to Dashboard</a></p>', csrf))
             app.audit("image-directory change result", "success")
             app.audit("development recycle attempt", "started")
             try:
                 stop, start = app.recycle_development()
             except subprocess.TimeoutExpired:
                 app.audit("development recycle result", "timeout")
-                return self.respond(504, self.page('Development did not stop/start within the expected time. Check its status manually with "ops/wsi development status".<p><a href="/">Back</a></p>', csrf))
+                return self.respond(504, self.page('Development did not stop/start within the expected time. Check its status manually with "ops/wsi development status".<p><a href="/">Back to Dashboard</a></p>', csrf))
             success = stop.returncode == 0 and start.returncode == 0
             app.audit("development recycle result", "success" if success else "failure")
             combined = (stop.stdout or "") + (start.stdout or "")
             if not success:
                 combined += (start.stderr or "")
-            return self.respond(200 if success else 502, self.page('<pre>'+html.escape(combined)+'</pre><p><a href="/">Back</a></p>', csrf))
+            return self.respond(200 if success else 502, self.page('<pre>'+html.escape(combined)+'</pre><p><a href="/">Back to Dashboard</a></p>', csrf))
         actions = {"/inspect": ("inspect", None), "/seal": ("seal", "SEAL"), "/observe": ("observe", None), "/dry-run": ("promote-dry-run", None), "/promote": ("promote", "PROMOTE")}
         if self.path not in actions: return self.respond(404, "Not found", "text/plain")
         action, required = actions[self.path]; audit_action = "dry-run" if action == "promote-dry-run" else action
@@ -946,7 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
         app.audit(audit_action + " result", "success" if result.returncode == 0 else "failure", tx)
         # Ingestion messages contain no roots/names; suppress stderr details nonetheless.
         shown = output if result.returncode == 0 else "Operation stopped. Review the local ingestion configuration and readiness conditions."
-        self.respond(200 if result.returncode == 0 else 409, self.page('<pre>'+html.escape(shown)+'</pre><p><a href="/">Back</a></p>', csrf))
+        self.respond(200 if result.returncode == 0 else 409, self.page('<pre>'+html.escape(shown)+'</pre><p><a href="/ingest-tools">Back to ingest tools</a></p>', csrf))
 
 
 def main():

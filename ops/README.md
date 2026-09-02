@@ -220,19 +220,22 @@ export WSI_OPS_DASHBOARD_PASSWORD='enter a local password interactively'
 Then open `http://127.0.0.1:8084/` in a browser running on the image-server
 host. Stop it with Ctrl-C.
 
-The dashboard also has an "Environment configuration (development)" section to
-change the ingestion staging root (`WSI_INGEST_STAGING_ROOT`, takes effect
-immediately, no restart), the network drop root (`WSI_INGEST_NETWORK_DROP_ROOT`,
-also takes effect immediately -- the running ingestion daemon picks it up on
-its next poll, no restart of anything), and the development viewer's own image
-directory (`wsi.image-directory`, requires typing `RESTART` and stops/starts
-development via `ops/wsi` -- see `docs/LOCAL-OPS-DASHBOARD-VALIDATION.md`).
-Staging, rehearsal, and production directories are not yet editable from here.
-Each of those three fields also has a "Browse…" link that pops a real native
+That home page is the daily dashboard: network drop root, ingestion staging
+root, and (flagged as not part of the usual workflow) the development image
+directory. Seal/observe/promote, status, and cheat sheets remain at
+`http://127.0.0.1:8084/ingest-tools` — in-depth ingest controls useful while
+developing the pipeline, linked from the dashboard as such.
+
+Each of those three directory fields also has a "Browse…" link that pops a real native
 macOS folder-picker window (not anything drawn by the page itself), plus a
 smaller "list view" link to a click-through, no-typing fallback picker inside
-the page -- either way as an alternative to the plain text input. See the same
-doc's "Browse... dialog" section.
+the page -- either way as an alternative to the plain text input. See
+`docs/LOCAL-OPS-DASHBOARD-VALIDATION.md`'s "Browse... dialog" section.
+The network drop root takes effect on the running daemon's next poll (no
+restart). The staging root takes effect immediately for new ingest commands.
+The development image directory requires typing `RESTART` and stops/starts
+development via `ops/wsi`. Staging, rehearsal, and production directories are
+not yet editable from here.
 
 ## Unattended ingestion daemon
 
