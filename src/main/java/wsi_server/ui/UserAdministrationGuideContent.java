@@ -21,9 +21,9 @@ final class UserAdministrationGuideContent {
             local ops tools, feedback forms, or shared logs. Operators remain responsible \
             for environment separation (development / staging / rehearsal / production), \
             de-identification of non-production images, and compliance with applicable \
-            institutional, regulatory, and privacy requirements. Access is loopback- or \
-            host-restricted where documented; do not expose administration endpoints via \
-            proxy, port forward, or alternate bind address.""";
+            institutional, regulatory, and privacy requirements. Access is loopback by \
+            default; a LAN bind is opt-in with CIDR and Host allowlisting. Do not expose \
+            administration endpoints via reverse proxy or to the public internet.""";
 
     record Bullet(String label, String body) {
     }
@@ -44,7 +44,7 @@ final class UserAdministrationGuideContent {
                         "The slide ingestion pipeline is a manual three-click protocol on your local loopback operations panel.",
                         List.of(
                                 new Bullet("The Environment",
-                                        "The local operations dashboard listens strictly on http://127.0.0.1:8084/ and safely rejects external non-loopback clients."),
+                                        "The local operations dashboard listens on http://127.0.0.1:8084/ by default. Non-loopback clients are rejected unless a CIDR allowlist is configured."),
                                 new Bullet("Pre-Ingestion Step",
                                         "Place each complete virtual microscope dataset inside one top-level directory under your local staging path (/Users/dm026/wsi-ingest-staging). Warning: Never move a lone .vsi file without its companion data folder.")
                         ),

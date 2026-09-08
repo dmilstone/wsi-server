@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import stat
@@ -35,11 +36,16 @@ class FakeServer:
     def __init__(self, app): self.dashboard = app
 
 
-def request(app, method="GET", path="/", form=None, headers=None, peer="127.0.0.1"):
-    body = urlencode(form or {}).encode()
-    values = {"Host": "127.0.0.1:8084", **(headers or {})}
-    if body:
-        values.update({"Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
+def request(app, method="GET", path="/", form=None, headers=None, peer="127.0.0.1", json_body=None):
+    if json_body is not None:
+        body = json.dumps(json_body).encode()
+        values = {"Host": "127.0.0.1:8084", **(headers or {})}
+        values.update({"Content-Type": "application/json", "Content-Length": str(len(body))})
+    else:
+        body = urlencode(form or {}).encode()
+        values = {"Host": "127.0.0.1:8084", **(headers or {})}
+        if body:
+            values.update({"Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
     raw = f"{method} {path} HTTP/1.1\r\n".encode()
     raw += b"".join(f"{key}: {value}\r\n".encode() for key, value in values.items()) + b"\r\n" + body
     sock = FakeSocket(raw)
@@ -85,14 +91,17 @@ class DashboardSafetyTests(unittest.TestCase):
         os.utime(path / "slide.svs", (old, old))
         return path
 
-    def test_listener_is_compile_time_loopback_only(self):
+    def test_listener_defaults_to_loopback(self):
         self.assertEqual("127.0.0.1", dashboard.BIND_ADDRESS)
         self.assertEqual(8084, dashboard.PORT)
         source = (OPS / "wsi_ops_dashboard.py").read_text()
-        self.assertIn("super().__init__((BIND_ADDRESS, PORT)", source)
+        self.assertIn("super().__init__((bind, port)", source)
         self.assertNotIn("0.0.0.0", source)
+        with mock.patch.dict(os.environ, {"WSI_OPS_DASHBOARD_BIND": "", "WSI_OPS_DASHBOARD_LISTEN_PORT": ""}, clear=False):
+            self.assertEqual("127.0.0.1", dashboard.listen_bind_address())
+            self.assertEqual(8084, dashboard.listen_port())
 
-    def test_no_listener_environment_or_cli_option(self):
+    def test_no_listener_cli_or_legacy_bind_names(self):
         source = (OPS / "wsi_ops_dashboard.py").read_text()
         self.assertNotIn("argparse", source)
         self.assertNotIn("WSI_OPS_HOST", source)
@@ -199,7 +208,7 @@ class DashboardSafetyTests(unittest.TestCase):
     def test_viewer_link_is_local_only_and_no_credentials(self):
         viewer = (OPS.parent / "src/main/resources/static/index.html").read_text()
         self.assertIn("http://127.0.0.1:8084/", viewer)
-        self.assertIn("Available only in a browser running on the image server", viewer)
+        self.assertIn("function dashboardAbsoluteUrl()", viewer)
         self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", viewer)
 
     def test_audit_concurrency_permissions_and_private_owned_parent(self):
@@ -262,7 +271,7 @@ class HTTPBoundaryTests(unittest.TestCase):
     def test_every_mutation_requires_correct_csrf_and_get_never_invokes(self):
         _, _, cookie, csrf = login(self.app)
         self.runner.reset_mock()
-        for path in ("/inspect", "/seal", "/observe", "/dry-run", "/promote", "/logout"):
+        for path in ("/inspect", "/seal", "/observe", "/dry-run", "/promote", "/logout", "/services"):
             for token in (None, "incorrect"):
                 form = {"dataset": "sample"}
                 if token is not None: form["csrf"] = token
@@ -1124,6 +1133,147 @@ class EnvironmentConfigurationTests(unittest.TestCase):
         for expected_action in ("staging-root change result", "network-drop-root change result",
                                  "image-directory change result", "development recycle result"):
             self.assertIn(expected_action, text)
+
+    def test_services_page_lists_launch_quit_relaunch(self):
+        status, _, body = request(self.app, path="/services", headers={"Cookie": self.cookie})
+        page = body.decode()
+        self.assertEqual(200, status)
+        self.assertIn("Launch / quit services", page)
+        self.assertIn("Image server", page)
+        self.assertIn("Ingestion engine", page)
+        self.assertIn("Both in one step", page)
+        self.assertIn("Type RELAUNCH", page)
+        self.assertIn('href="/services"', page)
+
+    def test_services_post_requires_confirmation_and_invokes_controller(self):
+        with mock.patch.object(dashboard.service_control, "run_action", return_value={
+            "name": "Image server", "running": True, "detail": "listening", "message": "started"
+        }) as run_action:
+            status, _, body = request(
+                self.app,
+                "POST",
+                "/services",
+                {"csrf": self.csrf, "target": "viewer", "action": "start", "confirmation": "START"},
+                {"Cookie": self.cookie},
+            )
+        self.assertEqual(200, status)
+        run_action.assert_called_once()
+        self.assertEqual(run_action.call_args.args[:2], ("viewer", "start"))
+        self.assertIn("listening", body.decode())
+
+    def test_services_post_rejects_wrong_confirmation(self):
+        with mock.patch.object(dashboard.service_control, "run_action") as run_action:
+            status, _, body = request(
+                self.app,
+                "POST",
+                "/services",
+                {"csrf": self.csrf, "target": "both", "action": "stop", "confirmation": "STOP"},
+                {"Cookie": self.cookie},
+            )
+        self.assertEqual(400, status)
+        run_action.assert_not_called()
+        self.assertIn("QUIT", body.decode())
+
+
+class RemoteListenAndApiTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.audit = Path(self.tmp.name) / "audit.jsonl"
+        self.runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "ok\n", ""))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_non_loopback_bind_requires_cidr(self):
+        with self.assertRaises(RuntimeError):
+            dashboard.Dashboard(b"secret", self.audit, runner=self.runner, bind_address="192.0.2.10")
+
+    def test_unspecified_bind_requires_hosts(self):
+        with self.assertRaises(RuntimeError):
+            dashboard.Dashboard(
+                b"secret",
+                self.audit,
+                runner=self.runner,
+                bind_address=str(ipaddress.IPv4Address(0)),
+                allow_networks=[ipaddress.ip_network("192.0.2.0/24")],
+            )
+
+    def test_cidr_peer_is_allowed_and_outside_peer_is_not(self):
+        app = dashboard.Dashboard(
+            b"secret",
+            self.audit,
+            runner=self.runner,
+            bind_address="192.0.2.10",
+            allow_networks=[ipaddress.ip_network("192.0.2.0/24")],
+        )
+        self.assertEqual(401, request(app, headers={"Host": "192.0.2.10:8084"}, peer="192.0.2.20")[0])
+        self.assertEqual(403, request(app, headers={"Host": "192.0.2.10:8084"}, peer="198.51.100.9")[0])
+        self.assertEqual(401, request(app, headers={"Host": "127.0.0.1:8084"}, peer="127.0.0.1")[0])
+        self.assertEqual(403, request(app, headers={"Host": "evil.example:8084"}, peer="192.0.2.20")[0])
+
+    def test_control_token_json_api_skips_csrf_and_still_requires_confirmation(self):
+        app = dashboard.Dashboard(b"secret", self.audit, runner=self.runner, control_token="lab-token")
+        snapshot = {
+            "viewer": {"name": "Image server", "running": True, "detail": "listening"},
+            "ingest": {"name": "Ingestion engine", "running": False, "detail": "stopped"},
+        }
+        token = {"X-WSI-Control-Token": "lab-token"}
+        with mock.patch.object(dashboard.service_control, "combined_status", return_value=snapshot):
+            status, headers, body = request(app, path="/api/services", headers=token)
+        self.assertEqual(200, status)
+        self.assertIn("application/json", headers["content-type"])
+        self.assertEqual("Image server", json.loads(body)["viewer"]["name"])
+        self.assertNotIn("access-control-allow-origin", headers)
+        with mock.patch.object(dashboard.service_control, "run_action") as run_action:
+            denied = request(
+                app, "POST", "/api/services",
+                json_body={"target": "viewer", "action": "start", "confirmation": "start"},
+                headers=token,
+            )
+            self.assertEqual(400, denied[0])
+            self.assertEqual("confirmation rejected", json.loads(denied[2])["error"])
+            run_action.assert_not_called()
+            run_action.return_value = {"name": "Image server", "running": True, "message": "started"}
+            ok = request(
+                app, "POST", "/api/services",
+                json_body={"target": "viewer", "action": "start", "confirmation": "START"},
+                headers=token,
+            )
+        self.assertEqual(200, ok[0])
+        self.assertTrue(json.loads(ok[2])["ok"])
+        run_action.assert_called_once()
+        self.assertEqual(run_action.call_args.args[:2], ("viewer", "start"))
+
+    def test_wrong_token_and_session_json_without_csrf_are_rejected(self):
+        app = dashboard.Dashboard(b"secret", self.audit, runner=self.runner, control_token="lab-token")
+        self.assertEqual(401, request(app, path="/api/services")[0])
+        self.assertEqual(401, request(app, path="/api/services", headers={"X-WSI-Control-Token": "nope"})[0])
+        _, headers, cookie, csrf = login(app)
+        self.assertNotIn("Secure", headers["set-cookie"])
+        denied = request(
+            app, "POST", "/api/services",
+            json_body={"target": "viewer", "action": "start", "confirmation": "START"},
+            headers={"Cookie": cookie},
+        )
+        self.assertEqual(403, denied[0])
+        with mock.patch.object(dashboard.service_control, "run_action", return_value={"message": "started"}):
+            ok = request(
+                app, "POST", "/api/services",
+                json_body={"csrf": csrf, "target": "viewer", "action": "start", "confirmation": "START"},
+                headers={"Cookie": cookie},
+            )
+        self.assertEqual(200, ok[0])
+
+    def test_json_login_and_secure_cookie_flag(self):
+        app = dashboard.Dashboard(b"secret", self.audit, runner=self.runner)
+        status, headers, body = request(app, "POST", "/api/login", json_body={"password": "secret"})
+        self.assertEqual(200, status)
+        self.assertIn("HttpOnly", headers["set-cookie"])
+        self.assertIn("csrf", json.loads(body))
+        app.secure_cookies = True
+        status, headers, _ = request(app, "POST", "/api/login", json_body={"password": "secret"})
+        self.assertEqual(200, status)
+        self.assertIn("Secure", headers["set-cookie"])
 
 
 if __name__ == "__main__": unittest.main()

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [[ "${1:-}" == "app" ]]; then
+  shift
+  exec python3 "$SCRIPT_DIR/wsi_control_app.py" "$@"
+fi
+exec python3 "$SCRIPT_DIR/wsi_service_control.py" "$@"

@@ -3,18 +3,25 @@
 ## Boundary and design
 
 `ops/wsi_ops_dashboard.py` is independent of the Spring viewer and constructs
-its HTTP server with the literal address `127.0.0.1:8084`. There is no listener
-configuration. Startup raises an error if that bind cannot be established.
-Every request independently requires an IP-loopback peer and an exact
-`localhost:8084` or `127.0.0.1:8084` Host header. Proxy forwarding headers are
-ignored. CORS is not enabled, and the restrictive CSP permits no script.
+its HTTP server with `127.0.0.1:8084` unless `WSI_OPS_DASHBOARD_BIND` /
+`WSI_OPS_DASHBOARD_LISTEN_PORT` are set. There is no bind/port CLI, and the
+legacy names `WSI_OPS_HOST` / `WSI_OPS_PORT` are not used. Every request
+independently requires an allowed TCP peer (loopback, or an address in
+`WSI_OPS_DASHBOARD_ALLOW_CIDR` when a non-loopback bind is configured) and an
+exact Host header (`localhost:<port>`, `127.0.0.1:<port>`, the bind address, or
+a name from `WSI_OPS_DASHBOARD_HOSTS`). Proxy forwarding headers are ignored.
+CORS is not enabled, and the restrictive CSP permits no script. A non-loopback
+bind without CIDR and extra Host values refuses to start.
 
 Startup requires `WSI_OPS_DASHBOARD_PASSWORD`. Login uses constant-time
 comparison. Successful login creates random in-memory session and CSRF values;
-sessions expire after 15 minutes. Every mutation is POST-only and must supply
-the session CSRF value. Logout deletes the session. The loopback HTTP cookie is
-HttpOnly, SameSite=Strict, and path `/`. It cannot safely be marked Secure in
-this HTTP-only phase; a remote phase would require HTTPS and Secure cookies.
+sessions expire after 15 minutes. Every HTML mutation is POST-only and must
+supply the session CSRF value. The JSON API at `/api/login` and `/api/services`
+is for the WSI Control app: a session cookie plus CSRF, or
+`X-WSI-Control-Token` matching `WSI_OPS_CONTROL_TOKEN` (token requests skip
+CSRF; typed confirmation is still required). Logout deletes the session. The
+HTTP cookie is HttpOnly, SameSite=Strict, and path `/`. `Secure` is added when
+TLS cert/key files are configured.
 Session access and audit appends are independently locked for the threaded
 server. The audit file and a dashboard-created parent use modes 0600 and 0700.
 
@@ -322,9 +329,9 @@ export WSI_OPS_DASHBOARD_PASSWORD='choose a local password'
 ./ops/wsi-ops-dashboard
 ```
 
-Browse locally to `http://127.0.0.1:8084/`. Do not proxy this service or use it
-against real roots while validating. It is not part of production startup,
-deployment, or release automation.
+Browse locally to `http://127.0.0.1:8084/`, or to the LAN URL after the remote
+bind in `ops/README.md`. Do not proxy this service. It is not part of
+production startup, deployment, or release automation.
 
 ## Installed, always-on copy
 
@@ -349,15 +356,21 @@ The tradeoff is exactly the "known limitation" above: this installed copy has
 no access back into the repository, so it cannot be used to recycle
 development. It also does not update itself -- there is no automatic sync
 between the repository and the installed copy. After changing this script (or
-`wsi_ingest.py`, `wsi_ingest_network_drop.py`, or the cheat sheets), redeploy
+`wsi_ingest.py`, `wsi_ingest_network_drop.py`, `wsi_service_control.py`, or the cheat sheets), redeploy
 manually:
 
 ```bash
 SUPPORT="/Users/dm026/Library/Application Support/com.wsi.ops-dashboard"
-cp ops/wsi_ops_dashboard.py ops/wsi_ingest.py ops/wsi_ingest_network_drop.py "$SUPPORT/runtime/"
+cp ops/wsi_ops_dashboard.py ops/wsi_ingest.py ops/wsi_ingest_network_drop.py ops/wsi_service_control.py "$SUPPORT/runtime/"
 cp ops/RELEASE-CHEATSHEET.html ops/WSI-Release-Cheat-Sheet.pdf "$SUPPORT/runtime/"
 launchctl kickstart -k "gui/$(id -u)/com.wsi.ops-dashboard"
 ```
+
+Service start/stop for the image server and ingestion daemon is at
+`http://127.0.0.1:8084/services`. The installed launchd copy may be blocked by
+macOS TCC from starting Maven under `~/Downloads`; use the standalone
+`WSI Control` app in that case. The `/services` page still reports status and
+can stop the ingest daemon via its sentinel files.
 
 `wsi_ops_dashboard.py` loads `wsi_ingest_network_drop.py` dynamically from
 its own directory (the same `importlib.util.spec_from_file_location` pattern
@@ -406,5 +419,5 @@ under its default macOS preference; enabled buttons displayed the expected
 focus styling.
 
 Request-level tests separately verified the CSP, cookie attributes, absence of
-external resources, and absence of cross-origin access. The dashboard remains
-loopback-only; this validation does not approve proxying or remote access.
+external resources, and absence of cross-origin access. Loopback remains the
+default; LAN access is an explicit CIDR/Host/token configuration, not a proxy.

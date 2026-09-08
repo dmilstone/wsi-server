@@ -1,0 +1,13 @@
+#!/bin/bash
+set -euo pipefail
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [[ -f "$HERE/../Resources/repo.path" ]]; then
+  REPO="$(tr -d '\n' < "$HERE/../Resources/repo.path")"
+elif [[ -f "$HERE/../../../../wsi_control_app.py" ]]; then
+  REPO="$(CDPATH= cd -- "$HERE/../../../../.." && pwd)"
+else
+  osascript -e 'display alert "WSI Control" message "Could not find ops/wsi_control_app.py. Run ops/macos/install-wsi-control-app.sh from the repository."'
+  exit 1
+fi
+export WSI_REPO="$REPO"
+exec /usr/bin/python3 "$REPO/ops/wsi_control_app.py"

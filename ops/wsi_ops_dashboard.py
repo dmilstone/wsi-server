@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Loopback-only, deliberately started web UI for the manual WSI ingester."""
+"""Deliberately started web UI for the manual WSI ingester.
+
+Default listen address is IPv4 loopback. A LAN bind is opt-in via
+WSI_OPS_DASHBOARD_BIND plus WSI_OPS_DASHBOARD_ALLOW_CIDR and
+WSI_OPS_DASHBOARD_HOSTS. There is no bind/port CLI."""
 import hashlib
 import hmac
 import html
@@ -29,6 +33,95 @@ SESSION_SECONDS = 15 * 60
 MAX_BODY = 8192
 CONTROL = ".wsi-ingest-control"
 ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+
+
+def listen_bind_address():
+    """127.0.0.1 unless WSI_OPS_DASHBOARD_BIND opts into a LAN/all-interfaces bind."""
+    return (os.environ.get("WSI_OPS_DASHBOARD_BIND") or BIND_ADDRESS).strip() or BIND_ADDRESS
+
+
+def listen_port():
+    raw = (os.environ.get("WSI_OPS_DASHBOARD_LISTEN_PORT") or "").strip()
+    if raw.isdigit():
+        value = int(raw)
+        if 1 <= value <= 65535:
+            return value
+    return PORT
+
+
+def parse_allow_networks(raw=None):
+    text = (raw if raw is not None else os.environ.get("WSI_OPS_DASHBOARD_ALLOW_CIDR", "")).strip()
+    if not text:
+        return []
+    networks = []
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError as exc:
+            raise RuntimeError("WSI_OPS_DASHBOARD_ALLOW_CIDR contains an invalid network") from exc
+    return networks
+
+
+def bind_is_loopback(address):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if ip.is_unspecified or ip.is_multicast:
+        return False
+    return ip.is_loopback
+
+
+def parse_allowed_hosts(port, extra=None, bind=None):
+    hosts = {f"localhost:{port}", f"127.0.0.1:{port}"}
+    if bind:
+        try:
+            ip = ipaddress.ip_address(bind)
+        except ValueError:
+            ip = None
+        if ip is not None and not ip.is_unspecified and not ip.is_loopback and not ip.is_multicast:
+            hosts.add(f"{bind}:{port}".lower())
+    text = extra or ""
+    for item in text.split(","):
+        item = item.strip().lower()
+        if not item:
+            continue
+        if ":" not in item:
+            item = f"{item}:{port}"
+        hosts.add(item)
+    return hosts
+
+
+def extra_host_names(allowed_hosts, port):
+    return set(allowed_hosts) - {f"localhost:{port}", f"127.0.0.1:{port}"}
+
+
+def require_safe_listen(bind, networks, allowed_hosts, port):
+    if bind_is_loopback(bind):
+        return
+    if not networks:
+        raise RuntimeError(
+            "WSI_OPS_DASHBOARD_ALLOW_CIDR must be set when WSI_OPS_DASHBOARD_BIND is not loopback"
+        )
+    if not extra_host_names(allowed_hosts, port):
+        raise RuntimeError(
+            "WSI_OPS_DASHBOARD_HOSTS must be set when WSI_OPS_DASHBOARD_BIND is not loopback"
+        )
+
+
+def control_token_from_environment():
+    return (os.environ.get("WSI_OPS_CONTROL_TOKEN") or "").strip()
+
+
+def tls_files():
+    cert = (os.environ.get("WSI_OPS_DASHBOARD_TLS_CERT") or "").strip()
+    key = (os.environ.get("WSI_OPS_DASHBOARD_TLS_KEY") or "").strip()
+    if cert and key:
+        return cert, key
+    return None
 
 # Environment/configuration controls (development only for now -- see
 # docs/LOCAL-OPS-DASHBOARD-VALIDATION.md before widening scope to other
@@ -77,6 +170,20 @@ def _load_network_drop():
 
 
 network_drop = _load_network_drop()
+
+
+def _load_service_control():
+    path = HERE / "wsi_service_control.py"
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("wsi_service_control", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+service_control = _load_service_control()
+SERVICE_CONFIRM = {"start": "START", "stop": "QUIT", "relaunch": "RELAUNCH"}
 CSP = "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 DASHBOARD_STYLE = """
 body { font: 16px system-ui, sans-serif; margin: 2rem; }
@@ -137,6 +244,21 @@ section.env-panel-dev {
 }
 p.dev-tools-link { max-width: 52rem; color: #333; margin-top: 2rem; }
 p.dev-banner { max-width: 52rem; padding: .75rem 1rem; background: #fff6e4; border: 2px solid #8a5a00; border-radius: .4rem; }
+nav.ops-nav { margin: 0 0 1.25rem; }
+nav.ops-nav a { margin-right: 1rem; }
+section.svc-panel {
+  max-width: 52rem;
+  margin: 1.1rem 0;
+  padding: 1rem 1.2rem;
+  border: 2px solid #174b78;
+  border-radius: .5rem;
+  background: #f4f8fc;
+}
+section.svc-panel h2 { margin: 0 0 .5rem; font-size: 1.15rem; }
+.svc-on { color: #0b6b2b; font-weight: 800; }
+.svc-off { color: #8a1f11; font-weight: 800; }
+.svc-actions form { display: inline-block; margin-right: .6rem; }
+p.svc-note { max-width: 52rem; color: #333; }
 """
 
 
@@ -493,7 +615,9 @@ def write_shell_export(path, key, value):
 
 class Dashboard:
     def __init__(self, password, audit_path=None, runner=subprocess.run, clock=time.time,
-                 development_config_path=None, control_script_path=None, ingest_conf_path=None):
+                 development_config_path=None, control_script_path=None, ingest_conf_path=None,
+                 bind_address=None, listen_port_value=None, allow_networks=None,
+                 extra_hosts=None, control_token=None):
         self.password = password
         self.sessions = Sessions(clock=clock)
         self.runner = runner
@@ -503,6 +627,27 @@ class Dashboard:
         self.development_config_path = Path(development_config_path or DEVELOPMENT_CONFIG)
         self.control_script_path = Path(control_script_path or WSI_CONTROL_SCRIPT)
         self.ingest_conf_path = Path(ingest_conf_path or WSI_INGEST_CONF)
+        self.bind_address = BIND_ADDRESS if bind_address is None else bind_address
+        self.listen_port = PORT if listen_port_value is None else listen_port_value
+        self.allow_networks = [] if allow_networks is None else allow_networks
+        self.allowed_hosts = parse_allowed_hosts(self.listen_port, extra_hosts or "", bind=self.bind_address)
+        self.control_token = control_token or ""
+        tls = tls_files()
+        self.tls_files = tls
+        self.secure_cookies = bool(tls)
+        require_safe_listen(self.bind_address, self.allow_networks, self.allowed_hosts, self.listen_port)
+
+    def peer_allowed(self, peer):
+        try:
+            addr = ipaddress.ip_address(peer)
+        except ValueError:
+            return False
+        if addr.is_loopback:
+            return True
+        return any(addr in network for network in self.allow_networks)
+
+    def host_allowed(self, host_header):
+        return (host_header or "").lower() in self.allowed_hosts
 
     def audit(self, action, outcome, transaction_id=None):
         event = {"timestamp": self.clock(), "action": action, "outcome": outcome}
@@ -620,8 +765,15 @@ class OpsHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, dashboard, handler_class=None):
         self.dashboard = dashboard
-        # Deliberately no address parameter: this service can only request IPv4 loopback.
-        super().__init__((BIND_ADDRESS, PORT), handler_class or Handler, bind_and_activate=True)
+        bind = dashboard.bind_address
+        port = dashboard.listen_port
+        super().__init__((bind, port), handler_class or Handler, bind_and_activate=True)
+        if dashboard.tls_files:
+            import ssl
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(dashboard.tls_files[0], dashboard.tls_files[1])
+            self.socket = context.wrap_socket(self.socket, server_side=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -632,11 +784,149 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("wsi-ops request completed\n")
 
     def reject_boundary(self):
+        app = self.server.dashboard
         try:
-            local = ipaddress.ip_address(self.client_address[0]).is_loopback
+            peer = self.client_address[0]
+        except (IndexError, TypeError):
+            return True
+        if not app.peer_allowed(peer):
+            return True
+        return not app.host_allowed(self.headers.get("Host", ""))
+
+    def token_ok(self):
+        expected = (self.server.dashboard.control_token or "").encode()
+        if not expected:
+            return False
+        got = (self.headers.get("X-WSI-Control-Token") or "").encode()
+        if len(got) != len(expected):
+            return False
+        return hmac.compare_digest(expected, got)
+
+    def session_cookie_value(self, sid, clear=False):
+        if clear:
+            cookie = f"{COOKIE}=; Path={COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict"
+        else:
+            cookie = f"{COOKIE}={sid}; Path={COOKIE_PATH}; HttpOnly; SameSite=Strict"
+        if self.server.dashboard.secure_cookies:
+            cookie += "; Secure"
+        return cookie
+
+    def respond_json(self, status, payload, cookie=None):
+        return self.respond(status, json.dumps(payload), "application/json; charset=utf-8", cookie)
+
+    def api_identity(self):
+        if self.token_ok():
+            return "token", None
+        sid, item = self.session()
+        if item:
+            return sid, item[1]
+        return None
+
+    def read_json(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            local = False
-        return not local or self.headers.get("Host", "").lower() not in ALLOWED_HOSTS
+            length = MAX_BODY + 1
+        if length > MAX_BODY:
+            raise ValueError("request too large")
+        raw = self.rfile.read(length)
+        if not raw:
+            return {}
+        data = json.loads(raw.decode())
+        if not isinstance(data, dict):
+            raise ValueError("json object required")
+        return {str(key): value for key, value in data.items()}
+
+    def service_snapshot(self):
+        if service_control is None:
+            raise RuntimeError("unavailable")
+        return service_control.combined_status()
+
+    def run_service_action(self, target, action, confirmation):
+        expected = SERVICE_CONFIRM.get(action)
+        if service_control is None:
+            return "unavailable", None
+        if target not in ("viewer", "ingest", "both") or action not in SERVICE_CONFIRM:
+            return "invalid", None
+        if confirmation != expected:
+            return "confirmation", expected
+        result = service_control.run_action(target, action, wait_seconds=45)
+        return "ok", result
+
+    def do_api_get(self):
+        if not self.api_identity():
+            return self.respond_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+        path = urlsplit(self.path).path
+        if path == "/api/services":
+            if service_control is None:
+                return self.respond_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "unavailable"})
+            try:
+                return self.respond_json(200, self.service_snapshot())
+            except Exception:
+                return self.respond_json(HTTPStatus.BAD_GATEWAY, {"error": "status unavailable"})
+        return self.respond_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_api_post(self):
+        path = urlsplit(self.path).path
+        try:
+            payload = self.read_json()
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            return self.respond_json(400, {"error": "bad request"})
+        app = self.server.dashboard
+        if path == "/api/login":
+            supplied = payload.get("password", "")
+            if not isinstance(supplied, str):
+                supplied = ""
+            try:
+                ok = hmac.compare_digest(supplied.encode(), app.password)
+            except (TypeError, ValueError):
+                ok = False
+            app.audit("login", "success" if ok else "failure")
+            if not ok:
+                return self.respond_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+            sid, csrf = app.sessions.create()
+            return self.respond_json(200, {"ok": True, "csrf": csrf}, self.session_cookie_value(sid))
+        auth = self.api_identity()
+        if not auth:
+            return self.respond_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+        _sid, csrf = auth
+        if csrf is not None:
+            given = payload.get("csrf", "")
+            if not isinstance(given, str):
+                given = ""
+            try:
+                csrf_ok = hmac.compare_digest(given, csrf)
+            except (TypeError, ValueError):
+                csrf_ok = False
+            if not csrf_ok:
+                return self.respond_json(HTTPStatus.FORBIDDEN, {"error": "csrf rejected"})
+        if path != "/api/services":
+            return self.respond_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        target = str(payload.get("target") or "").strip()
+        action = str(payload.get("action") or "").strip()
+        confirmation = str(payload.get("confirmation") or "").strip()
+        app.audit("service-control attempt", f"{target}:{action}")
+        try:
+            outcome, result = self.run_service_action(target, action, confirmation)
+        except subprocess.TimeoutExpired:
+            app.audit("service-control result", "timeout")
+            return self.respond_json(HTTPStatus.GATEWAY_TIMEOUT, {"error": "timeout"})
+        except Exception as error:
+            app.audit("service-control result", "failure")
+            if service_control is not None and isinstance(error, service_control.ServiceError):
+                return self.respond_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return self.respond_json(HTTPStatus.BAD_GATEWAY, {"error": "failed"})
+        if outcome == "unavailable":
+            app.audit("service-control result", "unavailable")
+            return self.respond_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "unavailable"})
+        if outcome == "invalid":
+            app.audit("service-control result", "invalid request")
+            return self.respond_json(400, {"error": "invalid request"})
+        if outcome == "confirmation":
+            app.audit("service-control result", "confirmation rejected")
+            return self.respond_json(400, {"error": "confirmation rejected", "expected": result})
+        app.audit("service-control result", "success")
+        return self.respond_json(200, {"ok": True, "result": result})
 
     def security_headers(self):
         self.send_header("Content-Security-Policy", CSP)
@@ -661,7 +951,14 @@ class Handler(BaseHTTPRequestHandler):
     def page(self, content, csrf=None, title="Dashboard"):
         logout = (f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{html.escape(csrf)}"><button>Logout</button></form>' if csrf else "")
         heading = html.escape(title)
-        return '<!doctype html><html><head><meta charset="utf-8"><title>' + heading + '</title><style>' + DASHBOARD_STYLE + '</style></head><body><h1>' + heading + '</h1>' + logout + content + '</body></html>'
+        nav = (
+            '<nav class="ops-nav" aria-label="Operations pages">'
+            '<a href="/">Dashboard</a>'
+            '<a href="/services">Launch / quit services</a>'
+            '<a href="/ingest-tools">Ingest tools</a>'
+            '</nav>'
+        ) if csrf else ""
+        return '<!doctype html><html><head><meta charset="utf-8"><title>' + heading + '</title><style>' + DASHBOARD_STYLE + '</style></head><body><h1>' + heading + '</h1>' + nav + logout + content + '</body></html>'
 
     def require_session(self):
         sid, item = self.session()
@@ -886,8 +1183,84 @@ class Handler(BaseHTTPRequestHandler):
             safe = "Status unavailable (stop and inspect configuration)."
         return '<pre>' + safe + '</pre>' + ''.join(forms) + links
 
+    def services_html(self, csrf, notice=None):
+        token = html.escape(csrf)
+        notice_html = f'<p><strong>{html.escape(notice)}</strong></p>' if notice else ""
+        if service_control is None:
+            return (
+                notice_html
+                + '<p>Service control is unavailable because <code>wsi_service_control.py</code> is not '
+                'installed next to this dashboard. Copy that file into the dashboard runtime and restart '
+                'the dashboard, or use the standalone WSI Control app.</p>'
+            )
+        try:
+            snapshot = service_control.combined_status()
+        except Exception:
+            snapshot = {
+                "viewer": {"name": "Image server", "running": False, "detail": "status unavailable"},
+                "ingest": {"name": "Ingestion engine", "running": False, "detail": "status unavailable"},
+            }
+
+        def panel(key, title, target):
+            item = snapshot.get(key) or {}
+            running = bool(item.get("running"))
+            mark = '<span class="svc-on">Running</span>' if running else '<span class="svc-off">Stopped</span>'
+            detail = html.escape(str(item.get("detail") or ""))
+            buttons = []
+            for action, label, confirm in (
+                ("start", "Launch", "START"),
+                ("stop", "Quit", "QUIT"),
+                ("relaunch", "Relaunch", "RELAUNCH"),
+            ):
+                buttons.append(
+                    f'<form method="post" action="/services">'
+                    f'<input type="hidden" name="csrf" value="{token}">'
+                    f'<input type="hidden" name="target" value="{target}">'
+                    f'<input type="hidden" name="action" value="{action}">'
+                    f'<label>Type {confirm} <input name="confirmation" size="10"></label> '
+                    f'<button>{label}</button></form>'
+                )
+            return (
+                f'<section class="svc-panel"><h2>{html.escape(title)}</h2>'
+                f'<p>{mark} — {detail}</p>'
+                f'<div class="svc-actions">{"".join(buttons)}</div></section>'
+            )
+
+        on = '<span class="svc-on">Running</span>'
+        off = '<span class="svc-off">Stopped</span>'
+        viewer_mark = on if snapshot.get("viewer", {}).get("running") else off
+        ingest_mark = on if snapshot.get("ingest", {}).get("running") else off
+        return (
+            notice_html
+            + '<p class="svc-note">Launch, quit, or relaunch the image server (viewer on port 8080) and '
+            'the ingestion engine without using a terminal. Typed confirmation matches the rest of this '
+            'dashboard. The standalone <strong>WSI Control</strong> app on the Desktop or in Applications '
+            'does the same thing locally, or against this dashboard over the LAN when remote mode is '
+            'configured. macOS may still block the installed background copy from starting Maven under '
+            'Downloads.</p>'
+            + panel("viewer", "Image server", "viewer")
+            + panel("ingest", "Ingestion engine", "ingest")
+            + (
+                '<section class="svc-panel"><h2>Both in one step</h2>'
+                f'<p>Image server: {viewer_mark} · Ingestion engine: {ingest_mark}</p>'
+                '<div class="svc-actions">'
+                f'<form method="post" action="/services"><input type="hidden" name="csrf" value="{token}">'
+                '<input type="hidden" name="target" value="both"><input type="hidden" name="action" value="start">'
+                '<label>Type START <input name="confirmation" size="10"></label> <button>Launch both</button></form>'
+                f'<form method="post" action="/services"><input type="hidden" name="csrf" value="{token}">'
+                '<input type="hidden" name="target" value="both"><input type="hidden" name="action" value="stop">'
+                '<label>Type QUIT <input name="confirmation" size="10"></label> <button>Quit both</button></form>'
+                f'<form method="post" action="/services"><input type="hidden" name="csrf" value="{token}">'
+                '<input type="hidden" name="target" value="both"><input type="hidden" name="action" value="relaunch">'
+                '<label>Type RELAUNCH <input name="confirmation" size="10"></label> <button>Relaunch both</button></form>'
+                '</div></section>'
+            )
+        )
+
     def do_GET(self):
         if self.reject_boundary(): return self.respond(HTTPStatus.FORBIDDEN, "Forbidden", "text/plain")
+        if urlsplit(self.path).path.startswith("/api/"):
+            return self.do_api_get()
         auth = self.require_session()
         if not auth: return
         sid, csrf = auth
@@ -904,11 +1277,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/":
             content = (
                 self.environment_panels_html(csrf)
+                + '<p class="dev-tools-link"><a href="/services">Launch, quit, or relaunch</a> the image server and '
+                'ingestion engine (also available as the standalone WSI Control app).</p>'
                 + '<p class="dev-tools-link"><a href="/ingest-tools">Ingest tools and development details</a>'
                 ' — seal, observe, promote, status, and cheat sheets. Useful while developing the pipeline, '
                 'not the daily workflow.</p>'
             )
             return self.respond(200, self.page(content, csrf, title="Dashboard"))
+        if self.path == "/services":
+            return self.respond(200, self.page(self.services_html(csrf), csrf, title="Launch / quit services"))
         if self.path == "/ingest-tools":
             content = (
                 '<p class="dev-banner"><strong>Development details.</strong> This page keeps the in-depth ingest '
@@ -926,6 +1303,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.reject_boundary(): return self.respond(HTTPStatus.FORBIDDEN, "Forbidden", "text/plain")
+        if urlsplit(self.path).path.startswith("/api/"):
+            return self.do_api_post()
         try: form = self.read_form()
         except (ValueError, UnicodeDecodeError): return self.respond(400, "Bad request", "text/plain")
         app = self.server.dashboard
@@ -934,7 +1313,7 @@ class Handler(BaseHTTPRequestHandler):
             app.audit("login", "success" if ok else "failure")
             if not ok: return self.respond(HTTPStatus.UNAUTHORIZED, self.page("Login failed"))
             sid, csrf = app.sessions.create()
-            cookie = f"{COOKIE}={sid}; Path={COOKIE_PATH}; HttpOnly; SameSite=Strict"
+            cookie = self.session_cookie_value(sid)
             return self.respond(303, "Logged in", "text/plain", cookie, "/")
         auth = self.require_session()
         if not auth: return
@@ -942,7 +1321,7 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(form.get("csrf", ""), csrf): return self.respond(HTTPStatus.FORBIDDEN, "CSRF rejected", "text/plain")
         if self.path == "/logout":
             app.sessions.remove(sid); app.audit("logout", "success")
-            return self.respond(303, "Logged out", "text/plain", f"{COOKIE}=; Path={COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict", "/")
+            return self.respond(303, "Logged out", "text/plain", self.session_cookie_value("", clear=True), "/")
         if self.path == "/staging-root":
             app.audit("staging-root change attempt", "started")
             new_path = form.get("path", "")
@@ -997,6 +1376,31 @@ class Handler(BaseHTTPRequestHandler):
             if not success:
                 combined += (start.stderr or "")
             return self.respond(200 if success else 502, self.page('<pre>'+html.escape(combined)+'</pre><p><a href="/">Back to Dashboard</a></p>', csrf))
+        if self.path == "/services":
+            target = (form.get("target") or "").strip()
+            action = (form.get("action") or "").strip()
+            expected = SERVICE_CONFIRM.get(action)
+            app.audit("service-control attempt", f"{target}:{action}")
+            if service_control is None:
+                app.audit("service-control result", "unavailable")
+                return self.respond(503, self.page(self.services_html(csrf, "Service control module is not installed."), csrf, title="Launch / quit services"))
+            if target not in ("viewer", "ingest", "both") or action not in SERVICE_CONFIRM:
+                app.audit("service-control result", "invalid request")
+                return self.respond(400, self.page(self.services_html(csrf, "Unknown service or action."), csrf, title="Launch / quit services"))
+            if form.get("confirmation") != expected:
+                app.audit("service-control result", "confirmation rejected")
+                return self.respond(400, self.page(self.services_html(csrf, f'Type {expected} to confirm.'), csrf, title="Launch / quit services"))
+            try:
+                result = service_control.run_action(target, action, wait_seconds=45)
+                message = service_control.format_status(result)
+                app.audit("service-control result", "success")
+                return self.respond(200, self.page(self.services_html(csrf, message), csrf, title="Launch / quit services"))
+            except service_control.ServiceError as error:
+                app.audit("service-control result", "failure")
+                return self.respond(502, self.page(self.services_html(csrf, str(error)), csrf, title="Launch / quit services"))
+            except subprocess.TimeoutExpired:
+                app.audit("service-control result", "timeout")
+                return self.respond(504, self.page(self.services_html(csrf, "The service did not finish starting or stopping in time. Use the WSI Control app or refresh this page."), csrf, title="Launch / quit services"))
         actions = {"/inspect": ("inspect", None), "/seal": ("seal", "SEAL"), "/observe": ("observe", None), "/dry-run": ("promote-dry-run", None), "/promote": ("promote", "PROMOTE")}
         if self.path not in actions: return self.respond(404, "Not found", "text/plain")
         action, required = actions[self.path]; audit_action = "dry-run" if action == "promote-dry-run" else action
@@ -1018,7 +1422,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    app = Dashboard(password_from_environment())
+    app = Dashboard(
+        password_from_environment(),
+        bind_address=listen_bind_address(),
+        listen_port_value=listen_port(),
+        allow_networks=parse_allow_networks(),
+        extra_hosts=os.environ.get("WSI_OPS_DASHBOARD_HOSTS", ""),
+        control_token=control_token_from_environment(),
+    )
     server = OpsHTTPServer(app)
     try: server.serve_forever()
     finally: server.server_close()

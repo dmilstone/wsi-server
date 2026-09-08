@@ -205,9 +205,9 @@ Credentials are not stored in these scripts.
 
 ## Local ingestion dashboard
 
-The dashboard is a separate, deliberately launched Python service. It always
-binds `127.0.0.1:8084`; neither its launcher nor its implementation accepts a
-bind address or port. From the repository root:
+The dashboard is a separate, deliberately launched Python service. By default it
+binds `127.0.0.1:8084`. A LAN bind is opt-in (see Remote access below); there is
+still no bind/port CLI. From the repository root:
 
 ```bash
 set -a
@@ -219,6 +219,51 @@ export WSI_OPS_DASHBOARD_PASSWORD='enter a local password interactively'
 
 Then open `http://127.0.0.1:8084/` in a browser running on the image-server
 host. Stop it with Ctrl-C.
+
+## Launch / quit without a terminal
+
+`ops/wsi_service_control.py` is the single controller for the image server
+(viewer on port 8080) and the ingestion daemon. The ops dashboard always calls
+it locally (on the machine where the dashboard is running). The standalone app
+and `ops/wsi-control` call it locally, or send JSON to the dashboard when
+remote mode is configured.
+
+Web (dashboard, already running as `com.wsi.ops-dashboard` on this host):
+
+- `http://127.0.0.1:8084/services` on the image-server host
+- `http://<image-server-host>:8084/services` after the remote bind below
+
+Standalone app:
+
+- macOS: `ops/macos/WSI Control.app`, or `ops/macos/install-wsi-control-app.sh`
+  to copy it to `~/Applications` and the Desktop. `ops/WSI-Control.command` is
+  the same app as a double-clickable script.
+- Windows 11: `ops/windows/WSI-Control.bat`, or
+  `ops/windows/install-desktop-shortcut.ps1`.
+
+In the app, choose **This computer** or **Another computer**, paste the
+dashboard URL, and a control token (preferred) or the dashboard password. Save
+stores the URL and token in
+`~/Library/Application Support/com.wsi.control/config.json` (macOS) or
+`%APPDATA%\com.wsi.control\config.json` (Windows). The password is not saved.
+
+CLI (same machine as the services, or remote):
+
+```bash
+ops/wsi-control status both
+ops/wsi-control --remote http://192.168.1.10:8084 status both
+```
+
+`WSI_CONTROL_REMOTE` and `WSI_CONTROL_TOKEN` override the saved file.
+`--local` forces process control on the client even if a remote URL is set.
+
+Each surface can launch, quit, or relaunch the image server, the ingestion
+engine, or both in one step. The old `panic_button_recovery.sh` name still
+works; it now only relaunches the image server and no longer runs `git reset`.
+
+The zsh `ops/wsi` script remains the environment-specific CLI for production,
+staging, rehearsal, and development (8080–8083). Do not add a second copy of
+that script.
 
 That home page is the daily dashboard: network drop root, ingestion staging
 root, and (flagged as not part of the usual workflow) the development image
@@ -323,8 +368,43 @@ in the repository, shell history, process arguments, or logs. Use `WSI_PASSWORD`
 if the local annotator password is not the default. `WSI_OPS_AUDIT_FILE` may select an ignored
 local audit file, but cannot change image roots or the listener.
 
-The session cookie is HttpOnly and SameSite=Strict. It intentionally lacks the
-`Secure` attribute because browsers do not send Secure cookies over this
-loopback HTTP endpoint. Secure cookies and HTTPS are mandatory before any
-future remote-administration phase. This local phase must not be exposed using
-a proxy, port forward, alternate bind address, or CORS.
+The session cookie is HttpOnly and SameSite=Strict. On loopback HTTP it
+intentionally lacks `Secure` because browsers do not send Secure cookies over
+plain HTTP. Set `WSI_OPS_DASHBOARD_TLS_CERT` and `WSI_OPS_DASHBOARD_TLS_KEY` to
+serve TLS; cookies then include `Secure`. Do not put this service behind a
+reverse proxy, and do not enable CORS.
+
+## Remote access (opt-in)
+
+Default remains loopback. To reach the dashboard and WSI Control from another
+computer on a trusted LAN, set these on the **image-server host** (for the
+installed copy: `$SUPPORT/.env.local`, then
+`launchctl kickstart -k "gui/$(id -u)/com.wsi.ops-dashboard"`):
+
+```bash
+WSI_OPS_DASHBOARD_BIND=192.168.1.10          # or all IPv4 interfaces: 0.0.0.0
+WSI_OPS_DASHBOARD_ALLOW_CIDR=192.168.0.0/16
+WSI_OPS_DASHBOARD_HOSTS=192.168.1.10         # Host header; required for 0.0.0.0
+WSI_OPS_CONTROL_TOKEN='a long random token'
+```
+
+Startup fails closed if the bind is not loopback and CIDR or extra Host values
+are missing. Binding a single LAN address does not also listen on localhost;
+use all IPv4 interfaces plus CIDR if you still want `http://127.0.0.1:8084/`
+on the server itself. Proxy headers such as `X-Forwarded-For` are still
+ignored; only the TCP peer is checked. Optional TLS:
+
+```bash
+WSI_OPS_DASHBOARD_TLS_CERT=/path/to/cert.pem
+WSI_OPS_DASHBOARD_TLS_KEY=/path/to/key.pem
+```
+
+On the client, point WSI Control at `http://192.168.1.10:8084` (or https) and
+the same token. The image viewer on this workstation already listens on all
+interfaces (`server.address` in `application.properties`), so
+`http://192.168.1.10:8080/` works if the firewall allows port 8080. Rehearsal
+stays loopback-only.
+
+LAN HTTP sends the dashboard password or token in the clear. Use TLS, a token
+rather than the login password in the app, and a narrow CIDR. This is not a
+public internet service.

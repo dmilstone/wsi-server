@@ -24,6 +24,8 @@ assert.doesNotMatch(index, /window\.location\.assign\(url\)/);
 assert.doesNotMatch(index, /if \(!opened\) window\.location\.assign/);
 
 assert.match(directory, /id="dashboard-link"/);
+assert.match(directory, /id="services-link"/);
+assert.match(directory, /127\.0\.0\.1:8084\/services/);
 assert.match(directory, /id="user-guide-link"/);
 assert.match(directory, /href="\/help\?v=20260817"/);
 assert.match(directory, /id="viewer-quick-guide-link"/);
