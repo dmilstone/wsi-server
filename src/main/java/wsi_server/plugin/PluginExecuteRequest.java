@@ -26,7 +26,13 @@ public record PluginExecuteRequest(
         Double maxNucleusRadius,
         Integer rayCount,
         Double boundaryTightness,
-        String modelOverride
+        String modelOverride,
+        Double diameter,
+        Double backgroundRadius,
+        Double sigma,
+        Double minArea,
+        Double maxArea,
+        Double cellExpansion
 ) {
     /** Builds the StarDist fallback-engine parameter bundle from this request. */
     StarDistTensorEngine.Params starDistParams() {
