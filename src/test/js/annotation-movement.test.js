@@ -234,6 +234,21 @@ AnnotationAdapter.launchBrightnessContrastPalette = previousLaunch;
     AnnotationAdapter.toggleDetectionFill = previousDetectionFill;
 }
 
+{
+    let deleteCalls = 0;
+    const previousPrompt = AnnotationAdapter.promptDeleteSelectedAnnotations;
+    AnnotationAdapter.promptDeleteSelectedAnnotations = function() { deleteCalls += 1; };
+    keydownListener(fakeKeyEvent("Delete"));
+    assert.equal(deleteCalls, 1, "Delete must prompt to remove the selected annotation(s)");
+    keydownListener(fakeKeyEvent("Backspace"));
+    assert.equal(deleteCalls, 2, "Backspace must prompt to remove the selected annotation(s)");
+    AnnotationAdapter.qpDrawSession = { tool: "rectangle" };
+    keydownListener(fakeKeyEvent("Delete"));
+    assert.equal(deleteCalls, 2, "Delete must not remove annotations while a draw session is active");
+    AnnotationAdapter.qpDrawSession = null;
+    AnnotationAdapter.promptDeleteSelectedAnnotations = previousPrompt;
+}
+
 // Regression: the detections visibility button and the "Clear Detections" button must
 // both work even when the AI Labs panel has never been opened/bound (no "ai-nuclei-visible"
 // element in the DOM at all).
@@ -265,6 +280,265 @@ AnnotationAdapter.launchBrightnessContrastPalette = previousLaunch;
     assert.ok(cleared && cleared.remove === true,
         "Clear Detections button must call clearAiNucleiOverlay({ remove: true })");
     AnnotationAdapter.clearAiNucleiOverlay = previousClear;
+}
+
+// Clicking an existing rectangle with the rectangle tool must select it, not start a
+// new rubber-band. A click-without-drag on empty canvas must not commit a shape.
+// Viewport spans that look like mixed CSS-pixel units must not paint a whole-view wash.
+{
+    AnnotationAdapter.currentActiveTool = "rectangle";
+    AnnotationAdapter.qpDrawSession = {
+        tool: "rectangle",
+        dragging: true,
+        start: { viewportX: 0.1, viewportY: 0.1 },
+        current: { viewportX: 400, viewportY: 300 }
+    };
+    const shapeNodeStub = { getAttribute: () => "shape-1", classList: { add() {}, remove() {} } };
+    const fakeShapeEvent = {
+        target: { closest: sel => (sel.includes("osd-annotation-shape") ? shapeNodeStub : null) },
+        button: 0,
+        clientX: 120,
+        clientY: 80,
+        preventDefault() {},
+        stopPropagation() {},
+        shiftKey: false
+    };
+    const selectedBefore = AnnotationAdapter.selectedNativeAnnotationId;
+    const hitDown = AnnotationAdapter.onQuPathPointerDown(fakeShapeEvent);
+    assert.equal(hitDown, true);
+    assert.equal(AnnotationAdapter.qpDrawSession, null,
+        "clicking a shape with a drawing tool must cancel any in-progress rubber-band");
+    assert.equal(AnnotationAdapter.selectedNativeAnnotationId, "shape-1",
+        "clicking a rectangle must select it even while the rectangle tool is active");
+    void selectedBefore;
+
+    const huge = AnnotationAdapter.buildQuPathSvgShape("rectangle", {
+        start: { viewportX: 0.2, viewportY: 0.3, overlayX: 100, overlayY: 120 },
+        current: { viewportX: 400, viewportY: 300, overlayX: 400, overlayY: 300 }
+    });
+    assert.equal(huge, null,
+        "a viewport span that looks like mixed CSS pixels must not paint a whole-view rect");
+    assert.equal(AnnotationAdapter.quPathViewportSpanValid(
+        { viewportX: 50000, viewportY: 40000 },
+        { viewportX: 50200, viewportY: 40100 }
+    ), true, "image-pixel fallback pairs must still count as a consistent coordinate space");
+
+    let committed = 0;
+    const previousCommit = AnnotationAdapter.commitQuPathShape;
+    AnnotationAdapter.commitQuPathShape = function() { committed += 1; return { id: "new" }; };
+    AnnotationAdapter.viewer = {
+        element: {
+            contains: () => true,
+            getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 })
+        },
+        viewport: {
+            pointFromPixel(p) { return { x: Number(p.x) / 800, y: Number(p.y) / 600 }; }
+        },
+        setMouseNavEnabled() {},
+        gestureSettingsMouse: { dragToPan: true, scrollToZoom: true }
+    };
+    const canvasEvent = (x, y) => ({
+        target: { closest: () => null },
+        button: 0,
+        clientX: x,
+        clientY: y,
+        preventDefault() {},
+        stopPropagation() {}
+    });
+    AnnotationAdapter.qpDrawSession = null;
+    AnnotationAdapter.onQuPathPointerDown(canvasEvent(100, 100));
+    assert.ok(AnnotationAdapter.qpDrawSession, "rectangle pointerdown must arm a draw session");
+    assert.equal(AnnotationAdapter.qpDrawSession.dragging, false,
+        "a click must not rubber-band until the pointer actually moves");
+    AnnotationAdapter.onQuPathPointerUp(canvasEvent(102, 101));
+    assert.equal(committed, 0, "click without a real drag must not commit a rectangle");
+    assert.equal(AnnotationAdapter.qpDrawSession, null);
+
+    AnnotationAdapter.onQuPathPointerDown(canvasEvent(100, 100));
+    AnnotationAdapter.onQuPathPointerMove(canvasEvent(160, 180));
+    assert.equal(AnnotationAdapter.qpDrawSession?.dragging, true,
+        "moving past the arm threshold must start the rubber-band");
+    AnnotationAdapter.onQuPathPointerUp(canvasEvent(160, 180));
+    assert.equal(committed, 1, "a real rectangle drag must commit");
+    AnnotationAdapter.commitQuPathShape = previousCommit;
+
+    AnnotationAdapter.qpDrawSession = {
+        tool: "rectangle",
+        dragging: true,
+        start: { viewportX: 0.1, viewportY: 0.1, overlayX: 10, overlayY: 10 },
+        current: { viewportX: 400, viewportY: 300, overlayX: 400, overlayY: 300 }
+    };
+    let named = null;
+    const previousOpen = AnnotationAdapter.openAnnotationNamePanelForShape;
+    AnnotationAdapter.openAnnotationNamePanelForShape = function(id) { named = id; return true; };
+    AnnotationAdapter.onQuPathDoubleClick(fakeShapeEvent);
+    assert.equal(AnnotationAdapter.qpDrawSession, null,
+        "double-click must clear a leftover rubber-band (the whole-view wash)");
+    assert.equal(named, "shape-1");
+    AnnotationAdapter.openAnnotationNamePanelForShape = previousOpen;
+}
+
+// Document-capture pointers own dragging: Move/rectangle/etc. on an existing unlocked
+// shape must translate it; locked shapes stay put; Chrome selection is cleared.
+{
+    AnnotationAdapter.qpShapeDragSession = null;
+    AnnotationAdapter.currentActiveTool = "move";
+    AnnotationAdapter._lockedAnnotationsLoaded = true;
+    AnnotationAdapter.lockedAnnotationIds = new Set();
+    const attrs = {};
+    const shape = {
+        id: "drag-1",
+        type: "rectangle",
+        start: { overlayX: 10, overlayY: 20, viewportX: 0.1, viewportY: 0.2, image: { x: 1, y: 2 } },
+        current: { overlayX: 30, overlayY: 50, viewportX: 0.3, viewportY: 0.5, image: { x: 5, y: 8 } },
+        vertices: [],
+        node: { setAttribute(name, value) { attrs[name] = value; } }
+    };
+    AnnotationAdapter.setSavedAnnotations([shape]);
+    AnnotationAdapter.viewer = {
+        viewport: {
+            deltaPointsFromPixels(px) { return { x: (px.x || 0) / 100, y: (px.y || 0) / 100 }; }
+        },
+        element: { contains: () => true }
+    };
+    const hit = {
+        getAttribute: () => "drag-1",
+        classList: { add() {}, remove() {} },
+        closest(sel) { return sel.includes("osd-annotation-shape") ? this : null; }
+    };
+    const down = {
+        target: { closest: sel => (sel.includes("osd-annotation-shape") ? hit : null) },
+        button: 0,
+        clientX: 40,
+        clientY: 50,
+        preventDefault() {},
+        stopPropagation() {}
+    };
+    AnnotationAdapter.onQuPathPointerDown(down);
+    assert.ok(AnnotationAdapter.qpShapeDragSession, "mousedown on a shape must start a drag session");
+    AnnotationAdapter.onQuPathPointerMove({
+        clientX: 50,
+        clientY: 60,
+        preventDefault() {},
+        stopPropagation() {}
+    });
+    assert.equal(shape.start.overlayX, 20, "dragging must move an unlocked annotation");
+    assert.equal(Number(shape.start.viewportX.toFixed(4)), 0.2);
+    AnnotationAdapter.onQuPathPointerUp({ clientX: 50, clientY: 60 });
+    assert.equal(AnnotationAdapter.qpShapeDragSession, null, "mouseup must end the drag session");
+
+    AnnotationAdapter.lockedAnnotationIds.add("drag-1");
+    shape.start.overlayX = 10;
+    AnnotationAdapter.onQuPathPointerDown(down);
+    assert.equal(AnnotationAdapter.qpShapeDragSession, null, "locked annotations must not start a drag");
+    AnnotationAdapter.lockedAnnotationIds.delete("drag-1");
+}
+
+// Clicks land on child path/line/circle nodes for polygon, polyline, line, brush,
+// points, and wand. Those children used to have the overlay class but not
+// data-annotation-id, so only rectangle/ellipse (the host itself) were selectable.
+{
+    function makeShapeNode({ id = null, cls = "osd-annotation-shape", parent = null } = {}) {
+        const node = {
+            parentElement: parent,
+            classList: {
+                contains(name) { return String(cls).split(/\s+/).includes(name); },
+                add() {},
+                remove() {}
+            },
+            getAttribute(name) {
+                if (name === "data-annotation-id") return id;
+                return null;
+            },
+            closest(sel) {
+                const selector = String(sel || "");
+                if (selector.includes("[data-qp-preview]")) return null;
+                let cur = this;
+                while (cur) {
+                    if (selector === "[data-annotation-id]" || selector.includes("[data-annotation-id]")) {
+                        if (cur.getAttribute?.("data-annotation-id")) return cur;
+                    } else if (selector.includes("osd-annotation-shape") || selector.includes("annotation-shape-overlay")) {
+                        if (cur.classList?.contains("osd-annotation-shape")
+                            || cur.classList?.contains("annotation-shape-overlay")) {
+                            return cur;
+                        }
+                    }
+                    cur = cur.parentElement;
+                }
+                return null;
+            }
+        };
+        return node;
+    }
+
+    const group = makeShapeNode({ id: "poly-1", cls: "osd-annotation-shape annotation-shape-overlay" });
+    const path = makeShapeNode({ id: null, cls: "osd-annotation-shape", parent: group });
+    assert.equal(AnnotationAdapter.annotationIdFromNode(path), "poly-1");
+    assert.equal(AnnotationAdapter.annotationShapeFromEvent({ target: path }), group);
+
+    for (const tool of ["move", "selection"]) {
+        AnnotationAdapter.currentActiveTool = tool;
+        AnnotationAdapter.selectedNativeAnnotationId = null;
+        AnnotationAdapter.selectedNativeAnnotationIds?.clear?.();
+        const event = { target: path, button: 0, preventDefault() {}, stopPropagation() {} };
+        assert.equal(AnnotationAdapter.onQuPathPointerDown(event), true, `${tool}: polygon path must be selectable`);
+        assert.equal(AnnotationAdapter.selectedNativeAnnotationId, "poly-1", `${tool}: must select the host annotation id`);
+    }
+
+    const lineHost = makeShapeNode({ id: "line-1", cls: "osd-annotation-shape" });
+    const lineChild = makeShapeNode({ id: null, cls: "osd-annotation-shape", parent: lineHost });
+    AnnotationAdapter.currentActiveTool = "move";
+    AnnotationAdapter.selectedNativeAnnotationId = null;
+    assert.equal(AnnotationAdapter.onQuPathPointerDown({
+        target: lineChild, button: 0, preventDefault() {}, stopPropagation() {}
+    }), true);
+    assert.equal(AnnotationAdapter.selectedNativeAnnotationId, "line-1");
+
+    const pointsHost = makeShapeNode({ id: "pts-1", cls: "osd-annotation-shape" });
+    const circle = makeShapeNode({ id: null, cls: "osd-annotation-shape", parent: pointsHost });
+    AnnotationAdapter.selectedNativeAnnotationId = null;
+    assert.equal(AnnotationAdapter.onQuPathPointerDown({
+        target: circle, button: 0, preventDefault() {}, stopPropagation() {}
+    }), true);
+    assert.equal(AnnotationAdapter.selectedNativeAnnotationId, "pts-1");
+
+    const committedPoly = AnnotationAdapter.buildQuPathSvgShape("polygon", {
+        vertices: [
+            { viewportX: 0.1, viewportY: 0.1 },
+            { viewportX: 0.4, viewportY: 0.2 },
+            { viewportX: 0.2, viewportY: 0.5 }
+        ],
+        start: { viewportX: 0.1, viewportY: 0.1 },
+        current: { viewportX: 0.2, viewportY: 0.5 }
+    });
+    assert.equal(committedPoly.tagName, "g");
+    const committedKids = committedPoly.children || [];
+    assert.ok(committedKids.some(child => child.getAttribute?.("data-annotation-hit") === "1"),
+        "committed polygon must include a click halo");
+    assert.ok(!committedKids.some(child => child.getAttribute?.("stroke-dasharray") === "4 3"),
+        "committed polygon must not keep the live-trace guide line");
+
+    const livePoly = AnnotationAdapter.buildQuPathSvgShape("polygon", {
+        preview: true,
+        vertices: [
+            { viewportX: 0.1, viewportY: 0.1 },
+            { viewportX: 0.4, viewportY: 0.2 }
+        ],
+        start: { viewportX: 0.1, viewportY: 0.1 },
+        current: { viewportX: 0.5, viewportY: 0.4 }
+    });
+    assert.ok((livePoly.children || []).some(child => child.getAttribute?.("stroke-dasharray") === "4 3"),
+        "live polygon preview must still show the rubber-band guide");
+
+    const lineShape = AnnotationAdapter.buildQuPathSvgShape("line", {
+        start: { viewportX: 0.1, viewportY: 0.2 },
+        current: { viewportX: 0.6, viewportY: 0.7 }
+    });
+    assert.equal(lineShape.tagName, "g");
+    AnnotationAdapter.attachAnnotationShapeOverlay(lineShape, "line-host");
+    assert.equal(lineShape.getAttribute("data-annotation-id"), "line-host");
+    assert.ok((lineShape.children || []).some(child => child.getAttribute?.("data-annotation-id") === "line-host"),
+        "child stroke/halo nodes must inherit the annotation id");
 }
 
 console.log("annotation movement checks passed");

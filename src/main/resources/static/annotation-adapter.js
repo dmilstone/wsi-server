@@ -191,7 +191,7 @@ class AnnotationAdapter {
     static caseFilterComboboxState = typeof WeakMap === "function" ? new WeakMap() : null;
     static ZERO_EXPOSURE_STATUS = "Select slides to begin.";
     static EMPTY_VIEWPORT_GUIDANCE =
-        "Search cases in the upper left, then choose a slide from the list.";
+        "Search slides in the upper left, then choose a slide from the list.";
     /** When true, left-column slide rows show async macro label thumbnails. */
     static slideLabelThumbsEnabled = true;
     static slideLabelThumbObserver = null;
@@ -293,10 +293,7 @@ class AnnotationAdapter {
         setText("discovery-status", "");
 
         const imageInfo = root.getElementById("image-info");
-        if (imageInfo) {
-            imageInfo.hidden = false;
-            imageInfo.open = false;
-        }
+        if (imageInfo) imageInfo.hidden = false;
 
         for (const id of [
             "z-controls-card",
@@ -2509,7 +2506,164 @@ class AnnotationAdapter {
         AnnotationAdapter.savedAnnotationsArray = next;
         if (typeof window !== "undefined") window.savedAnnotationsArray = next;
         if (typeof globalThis !== "undefined") globalThis.savedAnnotationsArray = next;
+        AnnotationAdapter.refreshAnnotationListPanel();
         return next;
+    }
+
+    static ANALYSIS_PANE_VIEWS = ["slides", "image", "annotations"];
+
+    static bindAnalysisPaneTabs(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const tablist = doc?.getElementById?.("qp-analysis-tabs");
+        if (!tablist || tablist.dataset?.qpAnalysisTabsBound === "1") return Boolean(tablist);
+        const activate = view => AnnotationAdapter.setAnalysisPaneView(view, doc);
+        tablist.addEventListener("click", event => {
+            const tab = event.target?.closest?.("[role='tab'][data-qp-view]");
+            if (!tab || (typeof tablist.contains === "function" && !tablist.contains(tab))) return;
+            activate(tab.getAttribute?.("data-qp-view") || tab.dataset?.qpView);
+        });
+        tablist.addEventListener("keydown", event => {
+            const key = String(event.key || "");
+            if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") return;
+            const tabs = Array.from(tablist.querySelectorAll?.("[role='tab'][data-qp-view]") || []);
+            if (!tabs.length) return;
+            const current = tabs.findIndex(tab => tab.getAttribute?.("aria-selected") === "true");
+            let next = current < 0 ? 0 : current;
+            if (key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+            if (key === "ArrowRight") next = (current + 1) % tabs.length;
+            if (key === "Home") next = 0;
+            if (key === "End") next = tabs.length - 1;
+            event.preventDefault?.();
+            const view = tabs[next]?.getAttribute?.("data-qp-view") || tabs[next]?.dataset?.qpView;
+            activate(view);
+            tabs[next]?.focus?.();
+        });
+        if (tablist.dataset) tablist.dataset.qpAnalysisTabsBound = "1";
+        return true;
+    }
+
+    static setAnalysisPaneView(view, root = null) {
+        const allowed = AnnotationAdapter.ANALYSIS_PANE_VIEWS;
+        const requested = String(view || "").toLowerCase();
+        const next = allowed.includes(requested) ? requested : "slides";
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        if (!doc?.getElementById) return next;
+        for (const name of allowed) {
+            const tab = doc.getElementById(`qp-tab-${name}`);
+            if (tab?.setAttribute) tab.setAttribute("aria-selected", name === next ? "true" : "false");
+            const panel = doc.getElementById(`qp-view-${name}`);
+            if (panel) panel.hidden = name !== next;
+        }
+        if (next === "annotations") AnnotationAdapter.refreshAnnotationListPanel(doc);
+        return next;
+    }
+
+    static annotationListTypeGlyph(type) {
+        switch (String(type || "").toLowerCase()) {
+            case "rectangle": return "▭";
+            case "ellipse": return "◯";
+            case "line": return "／";
+            case "polygon": return "⬠";
+            case "polyline": return "⋀";
+            case "brush": return "🖌";
+            case "wand": return "✦";
+            case "points": return "⁘";
+            default: return "•";
+        }
+    }
+
+    static annotationListDisplayName(annotation) {
+        const name = AnnotationAdapter.resolveAnnotationName(annotation?.id, annotation);
+        return name || "(unnamed)";
+    }
+
+    static refreshAnnotationListPanel(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const annotations = (Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : []).filter(item => item && item.id);
+        const titleEl = doc?.getElementById?.("qp-annotation-list-title");
+        if (titleEl) titleEl.textContent = `Annotation list (${annotations.length})`;
+        const listEl = doc?.getElementById?.("qp-annotation-list");
+        if (!listEl || typeof doc.createElement !== "function") return annotations.length;
+
+        listEl.textContent = "";
+        if (!annotations.length) {
+            const empty = doc.createElement("li");
+            empty.className = "qp-annotation-list-empty";
+            empty.textContent = "No annotations on this image.";
+            listEl.appendChild(empty);
+            return 0;
+        }
+
+        const selected = AnnotationAdapter.selectedNativeAnnotationIds instanceof Set
+            ? AnnotationAdapter.selectedNativeAnnotationIds
+            : new Set();
+        const primary = AnnotationAdapter.selectedNativeAnnotationId;
+        for (const annotation of annotations) {
+            const li = doc.createElement("li");
+            li.className = "qp-annotation-list-item";
+            if (li.dataset) li.dataset.qpListAnnotationId = annotation.id;
+            li.setAttribute?.("data-qp-list-annotation-id", annotation.id);
+            li.setAttribute?.("role", "button");
+            if ("tabIndex" in li) li.tabIndex = 0;
+            if (selected.has(annotation.id) || primary === annotation.id) {
+                li.classList?.add?.("is-selected");
+                if (!li.classList && typeof li.className === "string" && !li.className.includes("is-selected")) {
+                    li.className += " is-selected";
+                }
+            }
+            const icon = doc.createElement("span");
+            icon.className = "qp-annotation-list-icon";
+            icon.setAttribute?.("aria-hidden", "true");
+            icon.textContent = AnnotationAdapter.annotationListTypeGlyph(annotation.type);
+            const label = doc.createElement("span");
+            label.className = "qp-annotation-list-name";
+            label.textContent = AnnotationAdapter.annotationListDisplayName(annotation);
+            if (typeof li.append === "function") li.append(icon, label);
+            else {
+                li.appendChild(icon);
+                li.appendChild(label);
+            }
+            li.addEventListener?.("click", event => {
+                event.preventDefault?.();
+                event.stopPropagation?.();
+                AnnotationAdapter.selectNativeAnnotationShape(annotation.id, {
+                    additive: Boolean(event.shiftKey)
+                });
+            });
+            li.addEventListener?.("dblclick", event => {
+                event.preventDefault?.();
+                event.stopPropagation?.();
+                AnnotationAdapter.openAnnotationNamePanelForShape(annotation.id, event);
+            });
+            listEl.appendChild(li);
+        }
+        AnnotationAdapter.syncAnnotationListSelection(doc);
+        return annotations.length;
+    }
+
+    static syncAnnotationListSelection(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const listEl = doc?.getElementById?.("qp-annotation-list");
+        if (!listEl) return false;
+        const selected = AnnotationAdapter.selectedNativeAnnotationIds instanceof Set
+            ? AnnotationAdapter.selectedNativeAnnotationIds
+            : new Set();
+        const primary = AnnotationAdapter.selectedNativeAnnotationId;
+        const items = listEl.querySelectorAll?.(".qp-annotation-list-item") || [];
+        items.forEach?.(item => {
+            const id = item.getAttribute?.("data-qp-list-annotation-id")
+                || item.dataset?.qpListAnnotationId;
+            const on = Boolean(id) && (selected.has(id) || primary === id);
+            if (typeof item.classList?.toggle === "function") {
+                item.classList.toggle("is-selected", on);
+                return;
+            }
+            if (on) item.classList?.add?.("is-selected");
+            else item.classList?.remove?.("is-selected");
+        });
+        return true;
     }
 
     static onSlideClicked(image, doc = null) {
@@ -2711,7 +2865,7 @@ class AnnotationAdapter {
 
     /**
      * Visible combobox text for the current native select value. Placeholder
-     * stays an empty field so the "Search cases" prompt remains visible.
+     * stays an empty field so the "Search slides..." prompt remains visible.
      */
     static caseFilterDisplayLabel(selectElement) {
         if (!selectElement) return "";
@@ -2769,13 +2923,29 @@ class AnnotationAdapter {
         if (typeof parts.input.getBoundingClientRect !== "function") return false;
         const rect = parts.input.getBoundingClientRect();
         const list = parts.listbox;
+        const view = parts.document?.defaultView
+            || parts.input.ownerDocument?.defaultView
+            || (typeof window !== "undefined" ? window : null);
+        const viewH = Math.max(1, Number(view?.innerHeight) || 800);
+        const margin = 8;
         const width = Math.max(Math.round(rect.width), 140);
+        const below = Math.max(0, viewH - Number(rect.bottom) - margin);
+        const above = Math.max(0, Number(rect.top) - margin);
+        const openUp = above > below && below < 160;
+        const maxH = Math.max(120, Math.floor(openUp ? above : below));
         list.style.position = "fixed";
         list.style.left = `${Math.round(rect.left)}px`;
-        list.style.top = `${Math.round(rect.bottom + 2)}px`;
         list.style.width = `${width}px`;
         list.style.right = "auto";
         list.style.zIndex = "10050";
+        list.style.maxHeight = `${maxH}px`;
+        if (openUp) {
+            list.style.top = "auto";
+            list.style.bottom = `${Math.round(viewH - Number(rect.top) + 2)}px`;
+        } else {
+            list.style.bottom = "auto";
+            list.style.top = `${Math.round(rect.bottom + 2)}px`;
+        }
         return true;
     }
 
@@ -2883,7 +3053,7 @@ class AnnotationAdapter {
             const empty = doc.createElement("li");
             empty.className = "case-filter-empty";
             empty.setAttribute("aria-disabled", "true");
-            empty.textContent = "No matching cases";
+            empty.textContent = "No matching slides";
             parts.listbox.append(empty);
             state.activeIndex = -1;
             parts.input?.removeAttribute?.("aria-activedescendant");
@@ -3734,6 +3904,7 @@ class AnnotationAdapter {
     /** QuPath-style annotation matrix tool (`move`, `rectangle`, `ellipse`, …). */
     static currentActiveTool = "move";
     static qpDrawSession = null;
+    static qpShapeDragSession = null;
     static qpDrawOverlayEl = null;
     static qpShapeTrackers = [];
     static vectorOutlinesVisible = true;
@@ -4010,6 +4181,9 @@ class AnnotationAdapter {
             this._svg.style.pointerEvents = "none";
             this._svg.style.overflow = "visible";
             this._svg.style.zIndex = "20";
+            this._svg.style.userSelect = "none";
+            this._svg.style.webkitUserSelect = "none";
+            this._svg.style.webkitTapHighlightColor = "transparent";
             this._node = document.createElementNS(svgNS, "g");
             this._svg.appendChild(this._node);
             const host = viewer.canvas || viewer.container || viewer.element;
@@ -4144,13 +4318,41 @@ class AnnotationAdapter {
     }
 
     static shapeCoordX(pt) {
-        const value = Number(pt?.viewportX ?? pt?.overlayX);
+        const vp = Number(pt?.viewportX);
+        if (Number.isFinite(vp)) return vp;
+        const value = Number(pt?.overlayX);
         return Number.isFinite(value) ? value : 0;
     }
 
     static shapeCoordY(pt) {
-        const value = Number(pt?.viewportY ?? pt?.overlayY);
+        const vp = Number(pt?.viewportY);
+        if (Number.isFinite(vp)) return vp;
+        const value = Number(pt?.overlayY);
         return Number.isFinite(value) ? value : 0;
+    }
+
+    /**
+     * Overlay SVG lives in viewport units. Mixing those with CSS-pixel overlayX/Y
+     * (e.g. one pointer event failed pointFromPixel) produces a rect that covers
+     * the whole slide. When only one endpoint has viewport coords, copy them so
+     * both sides stay in the same space (a zero-size preview, not a wash).
+     */
+    static alignShapePointPair(start, current) {
+        const startHas = Number.isFinite(Number(start?.viewportX)) && Number.isFinite(Number(start?.viewportY));
+        const currentHas = Number.isFinite(Number(current?.viewportX)) && Number.isFinite(Number(current?.viewportY));
+        if (startHas === currentHas || !start || !current) {
+            return { start, current };
+        }
+        if (startHas) {
+            return {
+                start,
+                current: { ...current, viewportX: Number(start.viewportX), viewportY: Number(start.viewportY) }
+            };
+        }
+        return {
+            start: { ...start, viewportX: Number(current.viewportX), viewportY: Number(current.viewportY) },
+            current
+        };
     }
 
     static applyOsdAnnotationStyle(node, { filled = true } = {}) {
@@ -4160,18 +4362,26 @@ class AnnotationAdapter {
         if (!existing.includes(cls)) {
             node.setAttribute("class", `${existing} ${cls} annotation-shape-overlay`.trim());
         }
-        node.setAttribute("fill", filled ? AnnotationAdapter.OSD_ANNOTATION_FILL : "none");
-        // fill-opacity is a separate, independent knob from the fill color itself so the
-        // global on/off toggle (Shift+F, see toggleAnnotationFill) never needs to know or
-        // restore whatever color a shape was filled with — it just hides/shows it.
-        node.setAttribute("fill-opacity", AnnotationAdapter.annotationFillEnabled ? "1" : "0");
+        node.setAttribute("data-fillable", filled ? "1" : "0");
+        const showFill = Boolean(filled) && AnnotationAdapter.annotationFillEnabled;
+        // Keep fill="none" while interiors are off. Chrome otherwise paints a pale-blue
+        // ::selection / tap-highlight over the fill region of browser-drawn SVG shapes.
+        node.setAttribute("fill", showFill ? AnnotationAdapter.OSD_ANNOTATION_FILL : "none");
+        node.setAttribute("fill-opacity", showFill ? "1" : "0");
         node.setAttribute("stroke", AnnotationAdapter.OSD_ANNOTATION_STROKE);
         node.setAttribute("stroke-width", "2");
         node.setAttribute("stroke-opacity", "1");
         node.setAttribute("vector-effect", "non-scaling-stroke");
+        // Always "all" so closed unfilled interiors (polygon/wand) and grouped
+        // children stay clickable. Thin open strokes get a separate invisible halo.
+        node.setAttribute("pointer-events", "all");
         if (node.style) {
-            node.style.pointerEvents = "auto";
+            node.style.pointerEvents = "all";
             node.style.cursor = "pointer";
+            node.style.userSelect = "none";
+            node.style.webkitUserSelect = "none";
+            node.style.webkitTapHighlightColor = "transparent";
+            node.style.outline = "none";
         }
         return node;
     }
@@ -4333,11 +4543,87 @@ class AnnotationAdapter {
                 : null;
             AnnotationAdapter.selectedNativeAnnotationId = remaining || null;
         }
-        const node = typeof document !== "undefined"
-            ? document.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`)
-            : null;
-        try { node?.remove?.(); } catch (_error) { /* ignore */ }
+        const doc = typeof document !== "undefined" ? document : null;
+        const nodes = doc?.querySelectorAll?.(
+            `.osd-annotation-shape[data-annotation-id="${id}"], [data-annotation-name-for="${id}"]`
+        ) || [];
+        nodes.forEach(node => {
+            try { node?.remove?.(); } catch (_error) { /* ignore */ }
+        });
+        if (!nodes.length) {
+            const node = doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`);
+            try { node?.remove?.(); } catch (_error) { /* ignore */ }
+        }
         return true;
+    }
+
+    /** Current selection as an id list: the multi-select set when it is non-empty,
+     *  otherwise the single selectedNativeAnnotationId. */
+    static selectedAnnotationIds() {
+        const set = AnnotationAdapter.selectedNativeAnnotationIds;
+        if (set && typeof set.size === "number" && set.size > 0 && typeof set[Symbol.iterator] === "function") {
+            return Array.from(set);
+        }
+        const one = AnnotationAdapter.selectedNativeAnnotationId;
+        return one ? [one] : [];
+    }
+
+    static deleteAnnotationsWarning(count) {
+        const n = Math.max(1, Number(count) || 1);
+        if (n === 1) return "Delete this annotation? This cannot be undone.";
+        return `Delete ${n} selected annotations? This cannot be undone.`;
+    }
+
+    static confirmDeleteAnnotations(count, ask) {
+        const promptFn = typeof ask === "function"
+            ? ask
+            : (typeof confirm === "function" ? confirm : null);
+        if (typeof promptFn !== "function") return false;
+        return Boolean(promptFn(AnnotationAdapter.deleteAnnotationsWarning(count)));
+    }
+
+    static persistAnnotationCollectionAfterEdit() {
+        const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        try { engine?.adapter?.collectionEdited?.(); } catch (_error) { /* persist is best-effort */ }
+        try { engine?.labelLayer?.sync?.(engine.getCurrentImageId?.()); } catch (_error) { /* labels optional */ }
+        try { AnnotationAdapter.refreshExportSelectedAnnotationButtonState(); } catch (_error) { /* export button optional */ }
+    }
+
+    static deleteNativeAnnotations(ids) {
+        const list = [];
+        const seen = new Set();
+        (Array.isArray(ids) ? ids : [ids]).forEach(id => {
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            list.push(id);
+        });
+        if (!list.length) return 0;
+        let removed = 0;
+        list.forEach(id => {
+            if (AnnotationAdapter.removeNativeAnnotation(id)) removed += 1;
+        });
+        if (removed) {
+            try { AnnotationAdapter.hideAnnotationEditorPopup(null, { commit: false }); } catch (_error) { /* ignore */ }
+            AnnotationAdapter.persistAnnotationCollectionAfterEdit();
+        }
+        return removed;
+    }
+
+    static promptDeleteAnnotations(ids, ask) {
+        const list = [];
+        const seen = new Set();
+        (Array.isArray(ids) ? ids : [ids]).forEach(id => {
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            list.push(id);
+        });
+        if (!list.length) return 0;
+        if (!AnnotationAdapter.confirmDeleteAnnotations(list.length, ask)) return 0;
+        return AnnotationAdapter.deleteNativeAnnotations(list);
+    }
+
+    static promptDeleteSelectedAnnotations(ask) {
+        return AnnotationAdapter.promptDeleteAnnotations(AnnotationAdapter.selectedAnnotationIds(), ask);
     }
 
     /** Remember the active OpenSeadragon viewer for mouse-nav + tracker binding. */
@@ -4463,6 +4749,30 @@ class AnnotationAdapter {
     static BIT16_INTENSITY_SCALE = 65535;
     /** Default 16-bit slider ceiling. Prefer {@link channelLevelScale} for the active image. */
     static CHANNEL_LEVEL_MAX = 65535;
+    static QUPATH_UI_CHROME_SELECTOR = [
+        "#floating-channel-palette",
+        "#floating-ai-labs-palette",
+        "#floating-admin-palette",
+        "#floating-zstack-palette",
+        "#floating-measurement-palette",
+        "#floating-wand-palette",
+        "#floating-shortcuts-legend",
+        "#qp-color-chooser",
+        "#qp-channel-properties",
+        "#qp-custom-colors",
+        "#qp-tool-wand",
+        "#wand-config-dropdown",
+        "#secondary-annotation-toolbar",
+        "#annotation-editor-popup",
+        "#annotation-context-menu",
+        "#case-filter-listbox",
+        "header",
+        "aside",
+        "input",
+        "textarea",
+        "select",
+        "button"
+    ].join(", ");
 
     /**
      * Intensity range for B&C sliders, histogram, and the viewport window filter.
@@ -4498,6 +4808,7 @@ class AnnotationAdapter {
     static channelPaletteSidebarSnapshot = null;
     static channelPaletteSelectedIndex = 0;
     static channelPaletteHistogram = null;
+    static channelPaletteHistogramLog = false;
     static channelPaletteDrag = null;
     static channelPaletteLayout = "1";
 
@@ -4995,6 +5306,15 @@ class AnnotationAdapter {
         showAll?.addEventListener?.("change", () => {
             AnnotationAdapter.applyAllChannelPaletteVisibility(showAll.checked, doc);
         });
+        const logHistogram = palette.querySelector?.("#fcp-log-histogram")
+            || doc?.getElementById?.("fcp-log-histogram");
+        if (logHistogram) {
+            logHistogram.checked = Boolean(AnnotationAdapter.channelPaletteHistogramLog);
+            logHistogram.addEventListener("change", () => {
+                AnnotationAdapter.channelPaletteHistogramLog = Boolean(logHistogram.checked);
+                AnnotationAdapter.drawChannelPaletteHistogram(doc);
+            });
+        }
         if (doc && doc._wsiChannelDialogKeysBound !== "1") {
             doc.addEventListener("keydown", event => {
                 if (event.key !== "Escape") return;
@@ -5899,7 +6219,7 @@ class AnnotationAdapter {
         return AnnotationAdapter.CHANNEL_PALETTE_LUT_COLORS[lut] || "#888888";
     }
 
-    static syncFloatingChannelPalette(root = null) {
+    static syncFloatingChannelPalette(root = null, options = {}) {
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const palette = AnnotationAdapter.resolvePaletteNode(doc);
         if (!palette) return false;
@@ -5909,7 +6229,16 @@ class AnnotationAdapter {
         }
         const body = palette.querySelector?.("#floating-channel-palette-rows")
             || doc?.getElementById?.("floating-channel-palette-rows");
-        if (body && typeof body.replaceChildren === "function") {
+        const existingRows = typeof body?.querySelectorAll === "function"
+            ? Array.from(body.querySelectorAll(".bc-channel-cell"))
+            : [];
+        const rebuildRows = options.rebuildRows !== false
+            || existingRows.length !== channels.length;
+        if (body && !rebuildRows) {
+            existingRows.forEach((row, index) => {
+                row.classList?.toggle?.("is-selected", index === AnnotationAdapter.channelPaletteSelectedIndex);
+            });
+        } else if (body && typeof body.replaceChildren === "function") {
             const owner = palette.ownerDocument || doc;
             const rows = channels.map((channel, index) => {
                 const row = owner.createElement("div");
@@ -5923,15 +6252,16 @@ class AnnotationAdapter {
                     AnnotationAdapter.formatChannelPaletteLabel(channel)
                 );
                 row.innerHTML = `
-                    <span class="fcp-swatch" data-fcp-swatch style="background:${color}" title="Channel color" role="button" tabindex="0"></span>
+                    <span class="fcp-swatch" data-fcp-swatch data-color="${color}" style="background:${color}" title="Channel color" role="button" tabindex="0"></span>
                     <span class="bc-channel-name" data-fcp-name style="color:${color}">${name}</span>
                     <input type="checkbox" class="floating-channel-cb" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}" style="--channel-color:${color}">
                     <span class="bc-channel-range">${AnnotationAdapter.formatChannelLevel(channel.black)} – ${AnnotationAdapter.formatChannelLevel(channel.white)}</span>
                 `;
                 row.addEventListener("click", event => {
+                    if (AnnotationAdapter.wasColorPickJustConsumed()) return;
                     if (event.target?.closest?.("input, .floating-channel-cb, .fcp-swatch, [data-fcp-swatch]")) return;
                     AnnotationAdapter.channelPaletteSelectedIndex = index;
-                    AnnotationAdapter.syncFloatingChannelPalette(doc);
+                    AnnotationAdapter.syncFloatingChannelPalette(doc, { rebuildRows: false });
                     AnnotationAdapter.refreshChannelPaletteHistogram(doc);
                 });
                 const checkbox = row.querySelector("input[data-fcp-visible]");
@@ -5942,6 +6272,9 @@ class AnnotationAdapter {
                 swatch?.addEventListener("click", event => {
                     event.preventDefault();
                     event.stopPropagation();
+                    if (AnnotationAdapter.wasColorPickJustConsumed() || AnnotationAdapter._colorDisplayPick) {
+                        return;
+                    }
                     AnnotationAdapter.channelPaletteSelectedIndex = index;
                     AnnotationAdapter.openChannelColorChooser(index, swatch, doc);
                 });
@@ -5964,6 +6297,11 @@ class AnnotationAdapter {
         const showAll = palette.querySelector?.("#fcp-show-all") || doc?.getElementById?.("fcp-show-all");
         if (showAll) {
             showAll.checked = channels.length > 0 && channels.every(channel => channel.visible !== false);
+        }
+        const logHistogram = palette.querySelector?.("#fcp-log-histogram")
+            || doc?.getElementById?.("fcp-log-histogram");
+        if (logHistogram) {
+            logHistogram.checked = Boolean(AnnotationAdapter.channelPaletteHistogramLog);
         }
         const selected = AnnotationAdapter.paletteSelectedChannel();
         if (selected) {
@@ -6089,6 +6427,186 @@ class AnnotationAdapter {
     static rgbToHex(r, g, b) {
         const clamp = value => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
         return `#${[clamp(r), clamp(g), clamp(b)].map(value => value.toString(16).padStart(2, "0")).join("")}`;
+    }
+
+    static parseCssColorToHex(value) {
+        const text = String(value || "").trim();
+        if (!text || text === "transparent" || /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/i.test(text)) {
+            return null;
+        }
+        if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(text)) {
+            let hex = text;
+            if (hex.length === 4) hex = `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+            return hex.toLowerCase();
+        }
+        const rgb = text.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+        if (rgb) return AnnotationAdapter.rgbToHex(rgb[1], rgb[2], rgb[3]);
+        return null;
+    }
+
+    static cssColorToHex(nodeOrValue) {
+        if (typeof nodeOrValue === "string") return AnnotationAdapter.parseCssColorToHex(nodeOrValue);
+        if (!nodeOrValue) return null;
+        const fromData = AnnotationAdapter.parseCssColorToHex(nodeOrValue.dataset?.color);
+        if (fromData) return fromData;
+        const inline = AnnotationAdapter.parseCssColorToHex(nodeOrValue.style?.backgroundColor)
+            || AnnotationAdapter.parseCssColorToHex(nodeOrValue.style?.background)
+            || AnnotationAdapter.parseCssColorToHex(nodeOrValue.style?.color);
+        if (inline) return inline;
+        const view = nodeOrValue.ownerDocument?.defaultView
+            || (typeof window !== "undefined" ? window : null);
+        const computed = view?.getComputedStyle?.(nodeOrValue);
+        if (!computed) return null;
+        const painted = AnnotationAdapter.parseCssColorToHex(computed.backgroundColor);
+        if (painted) return painted;
+        return AnnotationAdapter.parseCssColorToHex(computed.color);
+    }
+
+    static rgbaToHex(r, g, b, a) {
+        if ((a ?? 255) < 8) return null;
+        return AnnotationAdapter.rgbToHex(r, g, b);
+    }
+
+    static read2dCanvasPixel(canvas, x, y) {
+        try {
+            // OSD already created a 2d context without attributes. Asking for
+            // willReadFrequently can return null in Safari and then sampling fails.
+            const ctx = canvas.getContext?.("2d")
+                || canvas.getContext?.("2d", { willReadFrequently: true });
+            if (!ctx || typeof ctx.getImageData !== "function") return null;
+            const data = ctx.getImageData(x, y, 1, 1).data;
+            return AnnotationAdapter.rgbaToHex(data[0], data[1], data[2], data[3]);
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    static readCopiedCanvasPixel(canvas, x, y) {
+        try {
+            const doc = canvas.ownerDocument || (typeof document !== "undefined" ? document : null);
+            const copy = doc?.createElement?.("canvas");
+            if (!copy) return null;
+            copy.width = 1;
+            copy.height = 1;
+            const ctx = copy.getContext?.("2d");
+            if (!ctx || typeof ctx.drawImage !== "function" || typeof ctx.getImageData !== "function") {
+                return null;
+            }
+            ctx.drawImage(canvas, x, y, 1, 1, 0, 0, 1, 1);
+            const data = ctx.getImageData(0, 0, 1, 1).data;
+            return AnnotationAdapter.rgbaToHex(data[0], data[1], data[2], data[3]);
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    static readWebglCanvasPixel(canvas, x, y) {
+        try {
+            const gl = canvas.getContext?.("webgl2") || canvas.getContext?.("webgl")
+                || canvas.getContext?.("webgl2", { preserveDrawingBuffer: true })
+                || canvas.getContext?.("webgl", { preserveDrawingBuffer: true });
+            if (!gl || typeof gl.readPixels !== "function") return null;
+            const pixel = new Uint8Array(4);
+            const glY = Math.max(0, (Number(canvas.height) || 1) - 1 - y);
+            gl.readPixels(x, glY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            return AnnotationAdapter.rgbaToHex(pixel[0], pixel[1], pixel[2], pixel[3]);
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    static sampleCanvasPixel(canvas, sx, sy) {
+        const x = Math.round(Number(sx));
+        const y = Math.round(Number(sy));
+        if (!canvas || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return AnnotationAdapter.read2dCanvasPixel(canvas, x, y)
+            || AnnotationAdapter.readCopiedCanvasPixel(canvas, x, y)
+            || AnnotationAdapter.readWebglCanvasPixel(canvas, x, y);
+    }
+
+    static canvasPixelRect(canvas, viewer) {
+        const host = viewer?.element || viewer?.canvas || canvas;
+        const canvasRect = canvas?.getBoundingClientRect?.();
+        if (canvasRect && canvasRect.width >= 2 && canvasRect.height >= 2) return canvasRect;
+        const hostRect = host?.getBoundingClientRect?.();
+        if (hostRect && hostRect.width >= 2 && hostRect.height >= 2) return hostRect;
+        return canvasRect || hostRect || null;
+    }
+
+    static canvasesForColorSample(clientX, clientY, viewer = AnnotationAdapter.viewer) {
+        const canvases = [];
+        const seen = new Set();
+        const add = node => {
+            if (!node || seen.has(node)) return;
+            const tag = String(node.tagName || "").toLowerCase();
+            if (tag !== "canvas" && typeof node.getContext !== "function") return;
+            seen.add(node);
+            canvases.push(node);
+        };
+        const doc = (typeof document !== "undefined" ? document : null)
+            || viewer?.element?.ownerDocument
+            || null;
+        const stack = typeof doc?.elementsFromPoint === "function"
+            ? (doc.elementsFromPoint(clientX, clientY) || [])
+            : [];
+        for (const node of stack) {
+            add(node);
+            if (typeof node?.querySelector === "function") add(node.querySelector("canvas"));
+        }
+        add(AnnotationAdapter.viewerDrawingCanvas(viewer));
+        const host = viewer?.element || viewer?.canvas;
+        if (typeof host?.querySelectorAll === "function") {
+            host.querySelectorAll("canvas").forEach(add);
+        }
+        return canvases;
+    }
+
+    static sampleDisplayedColorAtClient(clientX, clientY, viewer = AnnotationAdapter.viewer) {
+        const x = Number(clientX);
+        const y = Number(clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const canvases = AnnotationAdapter.canvasesForColorSample(x, y, viewer);
+        for (const canvas of canvases) {
+            const rect = AnnotationAdapter.canvasPixelRect(canvas, viewer);
+            if (!rect) continue;
+            if (x < rect.left || y < rect.top || x >= rect.right || y >= rect.bottom) continue;
+            const scaleX = (Number(canvas.width) || rect.width) / Math.max(1, rect.width);
+            const scaleY = (Number(canvas.height) || rect.height) / Math.max(1, rect.height);
+            const sx = Math.max(0, Math.min((Number(canvas.width) || 1) - 1, Math.floor((x - rect.left) * scaleX)));
+            const sy = Math.max(0, Math.min((Number(canvas.height) || 1) - 1, Math.floor((y - rect.top) * scaleY)));
+            const hex = AnnotationAdapter.sampleCanvasPixel(canvas, sx, sy);
+            if (hex) return hex;
+        }
+        return null;
+    }
+
+    static sampleUiColorFromNode(node) {
+        if (!node?.closest) return null;
+        const painted = node.closest(".fcp-swatch, [data-fcp-swatch], .qp-color-swatch, [data-fcp-name], .bc-channel-name");
+        if (!painted) return null;
+        if (painted.closest?.("#qp-color-chooser, #qp-custom-colors")) return null;
+        return AnnotationAdapter.cssColorToHex(painted);
+    }
+
+    static eventTargetNode(event) {
+        return event?.composedPath?.()[0] || event?.target || null;
+    }
+
+    static sampleColorForChannelAssignment(event) {
+        const node = AnnotationAdapter.eventTargetNode(event);
+        const fromUi = AnnotationAdapter.sampleUiColorFromNode(node);
+        if (fromUi) return fromUi;
+        if (AnnotationAdapter.isQuPathUiChrome(node)) return null;
+        return AnnotationAdapter.sampleDisplayedColorAtClient(event?.clientX, event?.clientY);
+    }
+
+    static wasColorPickJustConsumed(ms = 400) {
+        const consumed = Number(AnnotationAdapter._colorPickConsumedAt) || 0;
+        if (!consumed) return false;
+        const now = (typeof performance !== "undefined" && performance.now)
+            ? performance.now()
+            : Date.now();
+        return (now - consumed) < Math.max(0, Number(ms) || 0);
     }
 
     static rgbToHsb(r, g, b) {
@@ -6238,8 +6756,176 @@ class AnnotationAdapter {
             || (typeof document !== "undefined" ? document : null);
     }
 
+    static screenColorPickerAvailable() {
+        return typeof EyeDropper === "function";
+    }
+
+    static invalidateScreenColorPick() {
+        AnnotationAdapter._eyeDropperGeneration = (Number(AnnotationAdapter._eyeDropperGeneration) || 0) + 1;
+        return AnnotationAdapter._eyeDropperGeneration;
+    }
+
+    static consumeEyeDropperResult(index, result, root, generation) {
+        if (generation !== AnnotationAdapter._eyeDropperGeneration) return false;
+        const applied = AnnotationAdapter.assignPickedChannelColor(index, result?.sRGBHex, root);
+        AnnotationAdapter.invalidateScreenColorPick();
+        return applied;
+    }
+
+    static startScreenWideColorPick(index, root = null, options = {}) {
+        if (!AnnotationAdapter.screenColorPickerAvailable()) return false;
+        const doc = AnnotationAdapter.paletteDocument(root);
+        const generation = AnnotationAdapter.invalidateScreenColorPick();
+        try {
+            const pending = new EyeDropper().open();
+            if (pending && typeof pending.then === "function") {
+                pending.then(result => {
+                    AnnotationAdapter.consumeEyeDropperResult(index, result, doc, generation);
+                }).catch(() => {
+                    if (typeof options.onAbort === "function") options.onAbort();
+                });
+            }
+            return true;
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    static stopChannelColorDisplayPick(root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        const session = AnnotationAdapter._colorDisplayPick;
+        if (session?.screenWide) AnnotationAdapter.invalidateScreenColorPick();
+        if (!session) return false;
+        if (session.move) {
+            doc?.removeEventListener?.("mousemove", session.move, true);
+            doc?.removeEventListener?.("pointermove", session.move, true);
+        }
+        if (session.down) {
+            doc?.removeEventListener?.("mousedown", session.down, true);
+            doc?.removeEventListener?.("pointerdown", session.down, true);
+        }
+        session.loupe?.remove?.();
+        const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
+        host?.classList?.remove?.("is-color-picking");
+        doc?.documentElement?.classList?.remove?.("is-color-picking");
+        AnnotationAdapter._colorDisplayPick = null;
+        return true;
+    }
+
+    static createColorPickLoupe(doc) {
+        const loupe = doc.createElement("div");
+        loupe.id = "qp-color-pick-loupe";
+        loupe.className = "qp-color-pick-loupe";
+        loupe.setAttribute("aria-hidden", "true");
+        const style = loupe.style;
+        if (style) {
+            style.position = "fixed";
+            style.width = "22px";
+            style.height = "22px";
+            style.margin = "0";
+            style.border = "2px solid #fff";
+            style.borderRadius = "50%";
+            style.boxShadow = "0 0 0 1px #111, 0 2px 8px rgba(0,0,0,.35)";
+            style.pointerEvents = "none";
+            style.zIndex = "2147483646";
+            style.boxSizing = "border-box";
+            style.display = "none";
+            style.background = "#fff";
+        }
+        doc.body?.appendChild?.(loupe);
+        return loupe;
+    }
+
+    static refreshChannelColorPickPreview(hex, menu, loupe, clientX, clientY) {
+        const color = AnnotationAdapter.parseCssColorToHex(hex);
+        const preview = menu?.querySelector?.("[data-qp-pick-preview]");
+        const value = menu?.querySelector?.("[data-qp-pick-value]");
+        if (preview?.style) preview.style.background = color || "transparent";
+        if (value) value.textContent = color || "—";
+        if (!loupe?.style) return Boolean(color);
+        const x = Number(clientX);
+        const y = Number(clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            loupe.hidden = true;
+            loupe.style.display = "none";
+            return Boolean(color);
+        }
+        loupe.hidden = false;
+        loupe.style.display = "block";
+        loupe.style.visibility = "visible";
+        loupe.style.left = `${x + 14}px`;
+        loupe.style.top = `${y + 14}px`;
+        loupe.style.background = color || "#ffffff";
+        return Boolean(color);
+    }
+
+    static assignPickedChannelColor(index, hex, root = null) {
+        const color = AnnotationAdapter.parseCssColorToHex(hex);
+        if (!color) return false;
+        AnnotationAdapter._colorPickConsumedAt = (typeof performance !== "undefined" && performance.now)
+            ? performance.now()
+            : Date.now();
+        AnnotationAdapter.saveCustomChannelColor(color);
+        AnnotationAdapter.applyChannelPaletteColor(index, color, { root });
+        AnnotationAdapter.closeChannelColorChooser(root);
+        return true;
+    }
+
+    static isColorPickerInactiveTarget(node) {
+        return Boolean(node?.closest?.(
+            "#qp-color-chooser, .qp-color-grid, .qp-color-row, .qp-color-swatch, #qp-custom-colors, #qp-channel-properties, [data-qp-color-trigger]"
+        ));
+    }
+
+    static startChannelColorDisplayPick(index, menu, root = null) {
+        const doc = AnnotationAdapter.paletteDocument(root);
+        if (!doc?.addEventListener || !menu) return false;
+        AnnotationAdapter.stopChannelColorDisplayPick(doc);
+        const loupe = AnnotationAdapter.createColorPickLoupe(doc);
+        const move = event => {
+            const node = AnnotationAdapter.eventTargetNode(event);
+            if (AnnotationAdapter.isColorPickerInactiveTarget(node)) {
+                AnnotationAdapter.refreshChannelColorPickPreview(null, menu, loupe);
+                return;
+            }
+            const hex = AnnotationAdapter.sampleColorForChannelAssignment(event);
+            AnnotationAdapter.refreshChannelColorPickPreview(hex, menu, loupe, event?.clientX, event?.clientY);
+        };
+        const down = event => {
+            if (AnnotationAdapter._colorDisplayPick?.down !== down) return;
+            const node = AnnotationAdapter.eventTargetNode(event);
+            if (AnnotationAdapter.isColorPickerInactiveTarget(node)) return;
+            const hex = AnnotationAdapter.sampleColorForChannelAssignment(event);
+            if (!hex) {
+                if (AnnotationAdapter.isQuPathUiChrome(node)) return;
+                if (AnnotationAdapter.quPathEventOnViewer(event)) return;
+                AnnotationAdapter.closeChannelColorChooser(doc);
+                return;
+            }
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            AnnotationAdapter.assignPickedChannelColor(index, hex, doc);
+        };
+        AnnotationAdapter._colorDisplayPick = { index, move, down, loupe };
+        doc.addEventListener("pointermove", move, true);
+        doc.addEventListener("mousemove", move, true);
+        doc.addEventListener("pointerdown", down, true);
+        const last = AnnotationAdapter._qpPointerGuard;
+        if (Number.isFinite(Number(last?.x)) && Number.isFinite(Number(last?.y))) {
+            AnnotationAdapter.refreshChannelColorPickPreview(
+                AnnotationAdapter.sampleDisplayedColorAtClient(last.x, last.y),
+                menu,
+                loupe,
+                last.x,
+                last.y
+            );
+        }
+        return true;
+    }
+
     static closeChannelColorChooser(root = null) {
         const doc = AnnotationAdapter.paletteDocument(root);
+        AnnotationAdapter.stopChannelColorDisplayPick(doc);
         if (AnnotationAdapter._colorChooserDismiss) {
             doc?.removeEventListener?.("mousedown", AnnotationAdapter._colorChooserDismiss, true);
             AnnotationAdapter._colorChooserDismiss = null;
@@ -6314,6 +7000,29 @@ class AnnotationAdapter {
         menu.className = "qp-color-chooser";
         menu.setAttribute("role", "dialog");
         menu.setAttribute("aria-label", "Channel color");
+        const pickRow = doc.createElement("div");
+        pickRow.className = "qp-color-pick-row";
+        pickRow.innerHTML = `
+            <label class="qp-color-pick-toggle">
+                <input type="checkbox" data-qp-pick-enable>
+                choose color
+            </label>
+        `;
+        menu.appendChild(pickRow);
+        const enable = pickRow.querySelector("[data-qp-pick-enable]");
+        enable?.addEventListener("change", () => {
+            if (!enable.checked) {
+                AnnotationAdapter.stopChannelColorDisplayPick(doc);
+                return;
+            }
+            const started = AnnotationAdapter.startScreenWideColorPick(index, doc, {
+                onAbort() {
+                    if (!enable.checked) return;
+                    AnnotationAdapter.startChannelColorDisplayPick(index, menu, doc);
+                }
+            });
+            if (!started) AnnotationAdapter.startChannelColorDisplayPick(index, menu, doc);
+        });
         const addRow = (colors, className) => {
             const row = doc.createElement("div");
             row.className = className;
@@ -6379,12 +7088,6 @@ class AnnotationAdapter {
         menu.appendChild(link);
         doc.body.appendChild(menu);
         AnnotationAdapter.positionFixedNear(menu, anchor);
-        const dismiss = event => {
-            if (event.target?.closest?.("#qp-color-chooser, #qp-custom-colors, #qp-channel-properties")) return;
-            AnnotationAdapter.closeChannelColorChooser(doc);
-        };
-        AnnotationAdapter._colorChooserDismiss = dismiss;
-        doc.addEventListener("mousedown", dismiss, true);
         return true;
     }
 
@@ -6989,6 +7692,20 @@ class AnnotationAdapter {
         }
     }
 
+    /**
+     * QuPath B&C "Log histogram": log1p(count) for bar height so dim peaks
+     * stay visible next to a large background bin. Intensity (X) stays linear.
+     */
+    static histogramBarHeights(bins, logScale = false) {
+        const counts = Array.isArray(bins) ? bins : [];
+        const values = counts.map(count => {
+            const n = Math.max(0, Number(count) || 0);
+            return logScale ? Math.log1p(n) : n;
+        });
+        const max = values.reduce((peak, value) => Math.max(peak, value), 0);
+        return { values, max: Math.max(1, max) };
+    }
+
     static syntheticHistogram(channel, binCount = 256) {
         const bins = new Array(binCount).fill(0);
         const black = Math.max(0, Number(channel?.black) || 0);
@@ -7020,15 +7737,16 @@ class AnnotationAdapter {
         const channel = AnnotationAdapter.paletteSelectedChannel();
         const bins = AnnotationAdapter.channelPaletteHistogram
             || AnnotationAdapter.syntheticHistogram(channel);
-        const maxBin = Math.max(1, ...bins);
+        const log = Boolean(AnnotationAdapter.channelPaletteHistogramLog);
+        const { values, max: maxBin } = AnnotationAdapter.histogramBarHeights(bins, log);
         const color = AnnotationAdapter.channelPaletteColor(channel);
         ctx.clearRect(0, 0, width, height);
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, width, height);
         ctx.fillStyle = color;
-        const barWidth = width / bins.length;
-        for (let i = 0; i < bins.length; i += 1) {
-            const h = (bins[i] / maxBin) * (height - 2);
+        const barWidth = width / Math.max(1, values.length);
+        for (let i = 0; i < values.length; i += 1) {
+            const h = (values[i] / maxBin) * (height - 2);
             ctx.fillRect(i * barWidth, height - h, Math.max(1, barWidth), h);
         }
         const scale = AnnotationAdapter.channelLevelScale();
@@ -7667,7 +8385,8 @@ class AnnotationAdapter {
                 || (typeof active.closest === "function" && active.closest("#annotation-editor-popup")))) {
                 return;
             }
-            if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+            if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA"
+                || active.isContentEditable)) {
                 return;
             }
             if (e.isComposing || !e.key) return;
@@ -7706,6 +8425,13 @@ class AnnotationAdapter {
                     e.preventDefault();
                     let detBtn = document.getElementById("toggle-detections-visibility-btn");
                     if (detBtn) detBtn.click();
+                    break;
+
+                case "delete":
+                case "backspace":
+                    e.preventDefault();
+                    if (AnnotationAdapter.qpDrawSession || AnnotationAdapter.isDrawing) break;
+                    AnnotationAdapter.promptDeleteSelectedAnnotations();
                     break;
 
                 case "f": // Interior fill toggle: plain F = detections (nuclei), Shift+F =
@@ -7833,7 +8559,7 @@ class AnnotationAdapter {
                 }
                 return;
             }
-            if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "_", "-", "."].includes(key)) {
+            if (["a", "n", "d", "h", "b", "m", "r", "o", "l", "p", "v", "w", "s", "c", "z", "_", "-", ".", "delete", "backspace"].includes(key)) {
                 event.preventDefaultAction = true; // Suppresses OSD's default pan/zoom behavior on these keys
                 if (typeof event.originalEvent?.preventDefault === "function") {
                     event.originalEvent.preventDefault();
@@ -7857,6 +8583,26 @@ class AnnotationAdapter {
         browser: true,
         contrast: true
     };
+
+    static QUPATH_DRAW_TOOLS = {
+        rectangle: true,
+        ellipse: true,
+        line: true,
+        polygon: true,
+        polyline: true,
+        brush: true,
+        wand: true,
+        points: true
+    };
+    /** Screen-pixel travel before a rectangle/ellipse/line click becomes a rubber-band. */
+    static QUPATH_RUBBERBAND_ARM_PX = 5;
+    /** Viewport-unit cap: mixing CSS pixels into overlay space can span hundreds of image widths. */
+    static QUPATH_VIEWPORT_SPAN_MAX = 4;
+
+    static annotationToolBlocksDragPan(tool) {
+        const name = AnnotationAdapter.QUPATH_TOOL_ALIASES[tool] || String(tool || "").toLowerCase();
+        return Boolean(AnnotationAdapter.QUPATH_DRAW_TOOLS[name]) || name === "zoom";
+    }
 
     static ensureCurrentActiveTool(name = "move") {
         const tool = String(name || "move").toLowerCase();
@@ -7990,7 +8736,8 @@ class AnnotationAdapter {
         if (typeof viewer.setMouseNavEnabled === "function") {
             viewer.setMouseNavEnabled(true);
         }
-        const draggingDraw = Boolean(AnnotationAdapter.qpDrawSession?.dragging);
+        const blockPan = AnnotationAdapter.annotationToolBlocksDragPan(AnnotationAdapter.currentActiveTool)
+            || Boolean(AnnotationAdapter.qpDrawSession?.dragging);
         const settingsList = [
             viewer.gestureSettingsMouse,
             viewer.gestureSettingsTouch,
@@ -7999,7 +8746,8 @@ class AnnotationAdapter {
         for (const settings of settingsList) {
             if (!settings) continue;
             if (!AnnotationAdapter.zoomFitActive) settings.scrollToZoom = true;
-            settings.dragToPan = !draggingDraw;
+            settings.dragToPan = !blockPan;
+            if ("flickEnabled" in settings) settings.flickEnabled = !blockPan;
         }
         return true;
     }
@@ -8155,23 +8903,55 @@ class AnnotationAdapter {
 
     static bindQuPathToolPointers() {
         if (typeof document === "undefined" || document._wsiQuPathPointersBound) return false;
-        document.addEventListener("mousedown", event => {
-            AnnotationAdapter.onQuPathPointerDown(event);
-        }, true);
-        document.addEventListener("mousemove", event => {
-            AnnotationAdapter.onQuPathPointerMove(event);
-        }, true);
-        document.addEventListener("mouseup", event => {
+        const down = event => {
+            if (AnnotationAdapter.isEchoedMouseEvent(event)) return;
+            if (AnnotationAdapter._colorDisplayPick) return;
+            if (AnnotationAdapter.isQuPathUiChrome(event.target)) return;
+            AnnotationAdapter.rememberPointerEvent(event);
+            const handled = AnnotationAdapter.onQuPathPointerDown(event);
+            if (!handled) return;
+            if (typeof event.stopPropagation === "function") event.stopPropagation();
+            const hit = AnnotationAdapter.annotationShapeFromEvent(event);
+            if (hit || AnnotationAdapter.qpShapeDragSession
+                || AnnotationAdapter.annotationToolBlocksDragPan(AnnotationAdapter.currentActiveTool)) {
+                if (typeof event.preventDefault === "function") event.preventDefault();
+            }
+            if (hit) AnnotationAdapter.clearBrowserSelection();
+        };
+        const move = event => {
+            if (AnnotationAdapter.isEchoedMouseEvent(event)) return;
+            AnnotationAdapter.rememberPointerEvent(event);
+            if (!AnnotationAdapter.onQuPathPointerMove(event)) return;
+            if ((AnnotationAdapter.qpDrawSession?.dragging || AnnotationAdapter.qpShapeDragSession)
+                && typeof event.stopPropagation === "function") {
+                event.stopPropagation();
+            }
+            if (AnnotationAdapter.qpShapeDragSession && typeof event.preventDefault === "function") {
+                event.preventDefault();
+            }
+        };
+        const up = event => {
+            if (AnnotationAdapter.isEchoedMouseEvent(event)) return;
+            AnnotationAdapter.rememberPointerEvent(event);
             AnnotationAdapter.onQuPathPointerUp(event);
-        }, true);
+        };
+        document.addEventListener("pointerdown", down, true);
+        document.addEventListener("pointermove", move, true);
+        document.addEventListener("pointerup", up, true);
+        document.addEventListener("mousedown", down, true);
+        document.addEventListener("mousemove", move, true);
+        document.addEventListener("mouseup", up, true);
         document.addEventListener("click", event => {
+            if (AnnotationAdapter._colorDisplayPick) return;
+            if (AnnotationAdapter.wasColorPickJustConsumed()) return;
             const tool = AnnotationAdapter.currentActiveTool || "move";
             if (tool === "polygon" || tool === "polyline") return;
-            const hit = event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay");
+            const hit = AnnotationAdapter.annotationShapeFromEvent(event);
             if (hit) {
                 event.preventDefault();
                 event.stopPropagation();
-                AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"), {
+                AnnotationAdapter.clearBrowserSelection();
+                AnnotationAdapter.selectNativeAnnotationShape(AnnotationAdapter.annotationIdFromNode(hit), {
                     additive: Boolean(event.shiftKey)
                 });
                 return;
@@ -8187,15 +8967,54 @@ class AnnotationAdapter {
             }
         }, true);
         document.addEventListener("dblclick", event => {
+            if (AnnotationAdapter.isQuPathUiChrome(event.target)) return;
             AnnotationAdapter.onQuPathDoubleClick(event);
+        }, true);
+        document.addEventListener("selectstart", event => {
+            if (event.target?.closest?.(".osd-annotation-shape, .osd-svg-overlay, .wsi-qp-draw-overlay")) {
+                event.preventDefault();
+            }
         }, true);
         document._wsiQuPathPointersBound = true;
         return true;
     }
 
+    static clearBrowserSelection() {
+        try {
+            const sel = typeof window !== "undefined" ? window.getSelection?.() : null;
+            if (sel && typeof sel.removeAllRanges === "function" && sel.rangeCount) sel.removeAllRanges();
+        } catch (_error) { /* ignore */ }
+        return true;
+    }
+
+    static rememberPointerEvent(event) {
+        if (!String(event?.type || "").startsWith("pointer")) return false;
+        AnnotationAdapter._qpPointerGuard = {
+            kind: String(event.type).slice("pointer".length),
+            x: event.clientX,
+            y: event.clientY,
+            t: event.timeStamp
+        };
+        return true;
+    }
+
+    static isEchoedMouseEvent(event) {
+        const type = String(event?.type || "");
+        if (!type.startsWith("mouse")) return false;
+        const guard = AnnotationAdapter._qpPointerGuard;
+        if (!guard) return false;
+        return guard.kind === type.slice("mouse".length)
+            && guard.x === event.clientX
+            && guard.y === event.clientY;
+    }
+
+    static isQuPathUiChrome(node) {
+        return Boolean(node?.closest?.(AnnotationAdapter.QUPATH_UI_CHROME_SELECTOR));
+    }
+
     static quPathEventOnViewer(event) {
         if (!event) return false;
-        if (event.target?.closest?.("#secondary-annotation-toolbar, header, aside, #annotation-editor-popup, #floating-wand-palette, #floating-shortcuts-legend, input, textarea, select, button")) {
+        if (AnnotationAdapter.isQuPathUiChrome(event.target)) {
             return false;
         }
         const host = AnnotationAdapter.viewer?.element || AnnotationAdapter.viewer?.canvas;
@@ -8218,20 +9037,76 @@ class AnnotationAdapter {
         const overlayX = x - rect.left;
         const overlayY = y - rect.top;
         let image = null;
-        let viewportX = overlayX;
-        let viewportY = overlayY;
+        let viewportX;
+        let viewportY;
         try {
             const viewer = AnnotationAdapter.viewer;
             if (viewer?.viewport) {
                 const OSD = AnnotationAdapter._openSeadragon();
                 const pixel = OSD ? new OSD.Point(overlayX, overlayY) : { x: overlayX, y: overlayY };
                 const vp = viewer.viewport.pointFromPixel(pixel, true);
-                viewportX = Number(vp?.x);
-                viewportY = Number(vp?.y);
+                const vx = Number(vp?.x);
+                const vy = Number(vp?.y);
+                if (Number.isFinite(vx)) viewportX = vx;
+                if (Number.isFinite(vy)) viewportY = vy;
             }
             image = AnnotationAdapter.screenPixelToImagePoint(AnnotationAdapter.viewer, overlayX, overlayY);
-        } catch (_error) { /* keep overlay point */ }
+        } catch (_error) { /* keep overlay point; do not treat CSS pixels as viewport units */ }
         return { overlayX, overlayY, viewportX, viewportY, image };
+    }
+
+    /**
+     * Outermost committed shape that owns `node`. Polygon/polyline/brush/points/wand
+     * are SVG `<g>` hosts; the click target is often a child path/line/circle that
+     * has the overlay class but not `data-annotation-id`. Returning that child made
+     * only rectangle/ellipse selectable (those are the host themselves).
+     */
+    static annotationHostFromNode(node) {
+        if (!node || typeof node.closest !== "function") return null;
+        if (node.closest("[data-qp-preview]")) return null;
+        const candidate = node.closest("[data-annotation-id]")
+            || node.closest(".osd-annotation-shape, .annotation-shape-overlay");
+        if (!candidate || candidate.closest?.("[data-qp-preview]")) return null;
+        const id = candidate.getAttribute?.("data-annotation-id");
+        let host = candidate;
+        let parent = candidate.parentElement;
+        while (id && parent && parent.getAttribute?.("data-annotation-id") === id) {
+            host = parent;
+            parent = parent.parentElement;
+        }
+        return host;
+    }
+
+    static annotationIdFromNode(node) {
+        const host = AnnotationAdapter.annotationHostFromNode(node) || node;
+        return host?.getAttribute?.("data-annotation-id") || null;
+    }
+
+    /**
+     * Shape under the pointer, including unfilled interiors that SVG "visiblePainted"
+     * hit-testing would miss. Preview rubber-bands are ignored so they cannot steal
+     * the click that should select an existing annotation underneath.
+     */
+    static annotationShapeFromEvent(event) {
+        if (AnnotationAdapter.isQuPathUiChrome(event?.target)) return null;
+        const fromTarget = AnnotationAdapter.annotationHostFromNode(event?.target);
+        if (fromTarget) return fromTarget;
+        const x = Number(event?.clientX);
+        const y = Number(event?.clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const doc = (typeof document !== "undefined" ? document : null)
+            || event?.view?.document
+            || event?.target?.ownerDocument
+            || null;
+        const stack = typeof doc?.elementsFromPoint === "function" ? doc.elementsFromPoint(x, y) : [];
+        for (const el of stack) {
+            if (!el?.closest) continue;
+            if (el.closest("[data-qp-preview]")) continue;
+            if (AnnotationAdapter.isQuPathUiChrome(el)) return null;
+            const hit = AnnotationAdapter.annotationHostFromNode(el);
+            if (hit) return hit;
+        }
+        return null;
     }
 
     /**
@@ -8266,10 +9141,12 @@ class AnnotationAdapter {
 
         if (additive && set.has(id)) {
             set.delete(id);
-            doc?.querySelector?.(`[data-annotation-id="${id}"]`)?.classList?.remove?.("is-annotation-selected");
+            doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`)
+                ?.classList?.remove?.("is-annotation-selected");
             const remaining = set.size ? set.values().next().value : null;
             AnnotationAdapter.selectedNativeAnnotationId = remaining;
             AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
+            AnnotationAdapter.syncAnnotationListSelection(doc);
             return true;
         }
 
@@ -8279,8 +9156,10 @@ class AnnotationAdapter {
         }
         set.add(id);
         AnnotationAdapter.selectedNativeAnnotationId = id;
-        doc?.querySelector?.(`[data-annotation-id="${id}"]`)?.classList?.add?.("is-annotation-selected");
+        doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`)
+            ?.classList?.add?.("is-annotation-selected");
         AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
+        AnnotationAdapter.syncAnnotationListSelection(doc);
         return true;
     }
 
@@ -8294,6 +9173,7 @@ class AnnotationAdapter {
         AnnotationAdapter.selectedNativeAnnotationId = null;
         AnnotationAdapter.selectedNativeAnnotationIds?.clear?.();
         AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
+        AnnotationAdapter.syncAnnotationListSelection();
         return true;
     }
 
@@ -8338,7 +9218,7 @@ class AnnotationAdapter {
         else AnnotationAdapter.lockedAnnotationIds.delete(id);
         AnnotationAdapter.persistLockedAnnotationIds();
         const doc = typeof document !== "undefined" ? document : null;
-        doc?.querySelector?.(`[data-annotation-id="${id}"]`)
+        doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`)
             ?.classList?.toggle?.("is-annotation-locked", Boolean(locked));
         return true;
     }
@@ -8365,10 +9245,14 @@ class AnnotationAdapter {
         if (!menu) return false;
         if (menu.dataset) menu.dataset.targetAnnotationIds = JSON.stringify(list);
         const toggleBtn = doc.getElementById("annotation-context-menu-lock-toggle");
+        const suffix = list.length > 1 ? ` (${list.length} Selected)` : "";
         if (toggleBtn) {
             const allLocked = list.every(id => AnnotationAdapter.isAnnotationLocked(id));
-            const suffix = list.length > 1 ? ` (${list.length} Selected)` : "";
             toggleBtn.textContent = (allLocked ? "🔓 Unlock Position" : "🔒 Lock Position") + suffix;
+        }
+        const deleteBtn = doc.getElementById("annotation-context-menu-delete");
+        if (deleteBtn) {
+            deleteBtn.textContent = (list.length > 1 ? "Delete selected" : "Delete") + suffix;
         }
         if (menu.style) {
             menu.style.display = "block";
@@ -8377,7 +9261,7 @@ class AnnotationAdapter {
             const vh = doc.documentElement?.clientHeight
                 || (typeof window !== "undefined" ? window.innerHeight : 0) || 0;
             const width = menu.offsetWidth || 190;
-            const height = menu.offsetHeight || 40;
+            const height = menu.offsetHeight || 80;
             const left = Math.max(0, Math.min(Number(clientX) || 0, vw - width - 4));
             const top = Math.max(0, Math.min(Number(clientY) || 0, vh - height - 4));
             menu.style.left = `${left}px`;
@@ -8414,6 +9298,19 @@ class AnnotationAdapter {
                     ids.forEach(id => AnnotationAdapter.setAnnotationLocked(id, nextLocked));
                 }
                 AnnotationAdapter.closeAnnotationContextMenu(doc);
+            });
+        }
+        const deleteBtn = doc.getElementById("annotation-context-menu-delete");
+        if (deleteBtn) {
+            deleteBtn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                let ids = [];
+                try { ids = JSON.parse(menu.dataset?.targetAnnotationIds || "[]"); } catch (_error) { ids = []; }
+                AnnotationAdapter.closeAnnotationContextMenu(doc);
+                if (Array.isArray(ids) && ids.length) {
+                    AnnotationAdapter.promptDeleteAnnotations(ids);
+                }
             });
         }
         doc.addEventListener("click", event => {
@@ -8466,7 +9363,35 @@ class AnnotationAdapter {
         return ((dx * dx) + (dy * dy)) > (thresholdPx * thresholdPx);
     }
 
+    static quPathOverlayDistanceSq(a, b) {
+        const dx = Number(a?.overlayX) - Number(b?.overlayX);
+        const dy = Number(a?.overlayY) - Number(b?.overlayY);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) return Number.POSITIVE_INFINITY;
+        return (dx * dx) + (dy * dy);
+    }
+
+    static quPathRubberBandMovedEnough(start, current) {
+        const min = AnnotationAdapter.QUPATH_RUBBERBAND_ARM_PX;
+        return AnnotationAdapter.quPathOverlayDistanceSq(start, current) >= (min * min);
+    }
+
+    /** False when start/current mix viewport units (~0–1) with CSS/image pixels. */
+    static quPathViewportSpanValid(start, current) {
+        const x0 = Number(start?.viewportX);
+        const y0 = Number(start?.viewportY);
+        const x1 = Number(current?.viewportX);
+        const y1 = Number(current?.viewportY);
+        if (![x0, y0, x1, y1].every(Number.isFinite)) return true;
+        const max = AnnotationAdapter.QUPATH_VIEWPORT_SPAN_MAX;
+        if (Math.abs(x1 - x0) < max && Math.abs(y1 - y0) < max) return true;
+        const vals = [x0, y0, x1, y1];
+        const hasViewportLike = vals.some(value => Math.abs(value) <= 2);
+        const hasPixelLike = vals.some(value => Math.abs(value) >= 10);
+        return !(hasViewportLike && hasPixelLike);
+    }
+
     static onQuPathPointerDown(event) {
+        if (AnnotationAdapter._colorDisplayPick) return false;
         AnnotationAdapter._qpMouseDownPoint = { x: Number(event?.clientX), y: Number(event?.clientY) };
         const tool = AnnotationAdapter.currentActiveTool || "move";
         if (tool === "polygon" || tool === "polyline") {
@@ -8474,8 +9399,13 @@ class AnnotationAdapter {
                 finish: Number(event.detail) >= 2
             });
         }
-        const hit = event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay");
+        const hit = AnnotationAdapter.annotationShapeFromEvent(event);
         if (hit) {
+            // Clicking an existing shape must never start a new rubber-band. A leftover
+            // preview (or a click-through on an unfilled interior) was painting a
+            // whole-view wash; cancel any in-progress draw and just select.
+            AnnotationAdapter.cancelQuPathDrawSession();
+            AnnotationAdapter.clearBrowserSelection();
             // Skip the shift-held case here: the document "click" handler right below is the
             // single place that runs the additive add/remove toggle, so it doesn't get invoked
             // twice per shift-click (mousedown + click on the same shape), which would otherwise
@@ -8483,8 +9413,10 @@ class AnnotationAdapter {
             // safe/harmless to also pre-select here on mousedown (keeps a fast click+drag feeling
             // instantly responsive).
             if (!event.shiftKey) {
-                AnnotationAdapter.selectNativeAnnotationShape(hit.getAttribute("data-annotation-id"));
+                AnnotationAdapter.selectNativeAnnotationShape(AnnotationAdapter.annotationIdFromNode(hit));
             }
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            AnnotationAdapter.beginNativeAnnotationDrag(event, hit);
             return true;
         }
         if (tool === "move" || tool === "selection" || tool === "browser" || tool === "contrast") {
@@ -8493,7 +9425,24 @@ class AnnotationAdapter {
         if (!AnnotationAdapter.quPathEventOnViewer(event) || event.button !== 0) return false;
         const point = AnnotationAdapter.quPathClientPoint(event);
         const shiftKey = Boolean(event.shiftKey || event.originalEvent?.shiftKey);
-        if (tool === "rectangle" || tool === "ellipse" || tool === "line" || tool === "brush") {
+        if (tool === "rectangle" || tool === "ellipse" || tool === "line") {
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            if (typeof event.stopPropagation === "function") event.stopPropagation();
+            // Arm only: a click without a real drag selects/does nothing. Preview
+            // starts on pointermove once the pointer has traveled a few pixels.
+            AnnotationAdapter.qpDrawSession = {
+                tool,
+                dragging: false,
+                armed: true,
+                shiftKey,
+                start: point,
+                current: AnnotationAdapter.applyQuPathShiftConstraint(point, point, tool, shiftKey),
+                vertices: [{ ...point }]
+            };
+            AnnotationAdapter.syncViewerNavigationForActiveTool();
+            return true;
+        }
+        if (tool === "brush") {
             if (typeof event.preventDefault === "function") event.preventDefault();
             if (typeof event.stopPropagation === "function") event.stopPropagation();
             AnnotationAdapter.qpDrawSession = {
@@ -8533,6 +9482,9 @@ class AnnotationAdapter {
     }
 
     static onQuPathPointerMove(event) {
+        if (AnnotationAdapter.qpShapeDragSession) {
+            return AnnotationAdapter.onNativeAnnotationDragMove(event);
+        }
         const session = AnnotationAdapter.qpDrawSession;
         if (!session) return false;
         const shiftKey = Boolean(event.shiftKey || event.originalEvent?.shiftKey);
@@ -8547,12 +9499,23 @@ class AnnotationAdapter {
         if (session.tool === "wand") {
             return AnnotationAdapter.growWandDrawSession(event);
         }
+        if (session.armed && !session.dragging) {
+            if (!AnnotationAdapter.quPathRubberBandMovedEnough(session.start, point)) return true;
+            session.dragging = true;
+        }
+        const aligned = AnnotationAdapter.alignShapePointPair(session.start, point);
+        session.start = aligned.start;
         session.current = AnnotationAdapter.applyQuPathShiftConstraint(
-            session.start,
-            point,
+            aligned.start,
+            aligned.current,
             session.tool,
             shiftKey
         );
+        if (!AnnotationAdapter.quPathViewportSpanValid(session.start, session.current)) {
+            session.current = { ...session.start };
+            AnnotationAdapter.clearQuPathPreview();
+            return true;
+        }
         if (session.tool === "brush" && session.dragging) {
             session.vertices.push(session.current);
         }
@@ -8578,6 +9541,7 @@ class AnnotationAdapter {
         if (!AnnotationAdapter.quPathEventOnViewer(event)) return false;
         if (event.button != null && event.button !== 0) return false;
         if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
         const point = AnnotationAdapter.quPathClientPoint(event);
         const finish = Boolean(options.finish) || Number(event.detail) >= 2;
         AnnotationAdapter.appendPolygonTraceVertex(point, tool);
@@ -8586,10 +9550,17 @@ class AnnotationAdapter {
     }
 
     static onQuPathDoubleClick(event) {
-        const hit = event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay");
+        // A leftover rubber-band (the whole-view wash) is cleared first so double-click
+        // on a shape both names it and restores the slide, matching the user workaround.
+        if (AnnotationAdapter.qpDrawSession
+            && AnnotationAdapter.qpDrawSession.tool !== "polygon"
+            && AnnotationAdapter.qpDrawSession.tool !== "polyline") {
+            AnnotationAdapter.cancelQuPathDrawSession();
+        }
+        const hit = AnnotationAdapter.annotationShapeFromEvent(event);
         if (hit) {
             AnnotationAdapter.openAnnotationNamePanelForShape(
-                hit.getAttribute("data-annotation-id"),
+                AnnotationAdapter.annotationIdFromNode(hit),
                 event
             );
             return true;
@@ -8629,16 +9600,41 @@ class AnnotationAdapter {
     }
 
     static onQuPathPointerUp(event) {
+        if (AnnotationAdapter.qpShapeDragSession) {
+            return AnnotationAdapter.finishNativeAnnotationDrag(event);
+        }
         const session = AnnotationAdapter.qpDrawSession;
-        if (!session || !session.dragging) return false;
+        if (!session) return false;
+        if (session.tool === "wand") {
+            return AnnotationAdapter.finishWandDrawSession(event);
+        }
+        if (session.tool === "polygon" || session.tool === "polyline") {
+            return false;
+        }
         const shiftKey = Boolean(event.shiftKey || event.originalEvent?.shiftKey);
         session.shiftKey = shiftKey;
+        const point = AnnotationAdapter.quPathClientPoint(event);
+        const aligned = AnnotationAdapter.alignShapePointPair(session.start, point);
+        session.start = aligned.start;
         session.current = AnnotationAdapter.applyQuPathShiftConstraint(
-            session.start,
-            AnnotationAdapter.quPathClientPoint(event),
+            aligned.start,
+            aligned.current,
             session.tool,
             shiftKey
         );
+        const rubber = session.tool === "rectangle" || session.tool === "ellipse" || session.tool === "line";
+        if (rubber && (!session.dragging || !AnnotationAdapter.quPathRubberBandMovedEnough(session.start, session.current))) {
+            AnnotationAdapter.cancelQuPathDrawSession();
+            const hit = AnnotationAdapter.annotationShapeFromEvent(event);
+            if (hit && !event.shiftKey) {
+                AnnotationAdapter.selectNativeAnnotationShape(AnnotationAdapter.annotationIdFromNode(hit));
+            }
+            return true;
+        }
+        if (rubber && !AnnotationAdapter.quPathViewportSpanValid(session.start, session.current)) {
+            AnnotationAdapter.cancelQuPathDrawSession();
+            return true;
+        }
         session.dragging = false;
         if (session.tool === "rectangle" || session.tool === "ellipse" || session.tool === "line" || session.tool === "brush") {
             AnnotationAdapter.commitQuPathShape({
@@ -8652,9 +9648,6 @@ class AnnotationAdapter {
             AnnotationAdapter.clearQuPathPreview();
         }
         AnnotationAdapter.syncViewerNavigationForActiveTool();
-        if (session.tool === "wand") {
-            return AnnotationAdapter.finishWandDrawSession(event);
-        }
         return true;
     }
 
@@ -8797,7 +9790,7 @@ class AnnotationAdapter {
         const group = AnnotationAdapter.quPathPreviewGroup();
         if (!session || !group) return false;
         group.innerHTML = "";
-        const node = AnnotationAdapter.buildQuPathSvgShape(session.tool, session);
+        const node = AnnotationAdapter.buildQuPathSvgShape(session.tool, { ...session, preview: true });
         if (node) {
             if (node.style) node.style.pointerEvents = "none";
             node.setAttribute?.("pointer-events", "none");
@@ -8819,8 +9812,10 @@ class AnnotationAdapter {
         if (type === "polygon" && list.length > 2 && !current) d += "Z";
         const path = AnnotationAdapter._svgEl("path");
         path.setAttribute("d", d);
-        AnnotationAdapter.applyOsdAnnotationStyle(path, { filled: type === "polygon" && list.length > 2 && !current });
-        if (type !== "polygon" || current || list.length < 3) path.setAttribute("fill", "none");
+        const closed = type === "polygon" && list.length > 2 && !current;
+        AnnotationAdapter.applyOsdAnnotationStyle(path, { filled: closed });
+        if (!closed) path.setAttribute("fill", "none");
+        AnnotationAdapter.appendAnnotationHitHalo(g, path, { kind: closed ? "area" : "stroke" });
         g.appendChild(path);
         const last = list[list.length - 1];
         if (current && last) {
@@ -8836,9 +9831,66 @@ class AnnotationAdapter {
         return AnnotationAdapter.applyOsdAnnotationStyle(g, { filled: false });
     }
 
+    /** Invisible wider clone so thin lines/polylines/points are easy to click. */
+    static ANNOTATION_HIT_SLOP_PX = 14;
+
+    static appendAnnotationHitHalo(host, visual, options = {}) {
+        if (!host || !visual || typeof host.appendChild !== "function") return null;
+        const kind = String(options.kind || "stroke");
+        const tag = String(visual.tagName || "path").toLowerCase();
+        const halo = AnnotationAdapter._svgEl(tag);
+        const copyAttrs = tag === "line"
+            ? ["x1", "y1", "x2", "y2"]
+            : tag === "circle"
+                ? ["cx", "cy"]
+                : ["d", "points"];
+        copyAttrs.forEach(name => {
+            const value = visual.getAttribute?.(name);
+            if (value != null) halo.setAttribute(name, value);
+        });
+        halo.setAttribute("data-annotation-hit", "1");
+        halo.setAttribute("data-hit-kind", kind);
+        halo.setAttribute("class", "annotation-hit-halo");
+        halo.setAttribute("fill", kind === "point" ? "#000" : "none");
+        halo.setAttribute("fill-opacity", "0");
+        halo.setAttribute("stroke", "#000");
+        halo.setAttribute("stroke-opacity", "0");
+        halo.setAttribute("vector-effect", "non-scaling-stroke");
+        if (kind === "point") {
+            const radius = Number(visual.getAttribute?.("r")) || 4;
+            halo.setAttribute("r", String(Math.max(radius, AnnotationAdapter.ANNOTATION_HIT_SLOP_PX / 2)));
+            halo.setAttribute("pointer-events", "all");
+        } else {
+            halo.setAttribute("stroke-width", String(AnnotationAdapter.ANNOTATION_HIT_SLOP_PX));
+            halo.setAttribute("pointer-events", kind === "area" ? "all" : "stroke");
+        }
+        if (halo.style) {
+            halo.style.pointerEvents = kind === "stroke" ? "stroke" : "all";
+            halo.style.opacity = "0";
+        }
+        host.appendChild(halo);
+        return halo;
+    }
+
+    static stampAnnotationIdOnShapeTree(node, id) {
+        if (!node || !id) return node;
+        node.setAttribute?.("data-annotation-id", id);
+        const kids = node.children || node.childNodes || [];
+        for (let i = 0; i < kids.length; i += 1) {
+            const child = kids[i];
+            if (child && (child.setAttribute || child.children || child.childNodes)) {
+                AnnotationAdapter.stampAnnotationIdOnShapeTree(child, id);
+            }
+        }
+        return node;
+    }
+
     static buildQuPathSvgShape(type, payload) {
-        const start = payload?.start || payload?.vertices?.[0];
-        const current = payload?.current || payload?.vertices?.[payload?.vertices?.length - 1];
+        const rawStart = payload?.start || payload?.vertices?.[0];
+        const rawCurrent = payload?.current || payload?.vertices?.[payload?.vertices?.length - 1];
+        const aligned = AnnotationAdapter.alignShapePointPair(rawStart, rawCurrent);
+        const start = aligned.start;
+        const current = aligned.current;
         const vertices = Array.isArray(payload?.vertices) ? payload.vertices : [];
         const xOf = pt => AnnotationAdapter.shapeCoordX(pt);
         const yOf = pt => AnnotationAdapter.shapeCoordY(pt);
@@ -8846,10 +9898,12 @@ class AnnotationAdapter {
             const constrained = AnnotationAdapter.applyQuPathShiftConstraint(
                 start, current, "rectangle", Boolean(payload?.shiftKey)
             );
+            if (!AnnotationAdapter.quPathViewportSpanValid(start, constrained)) return null;
             const x = Math.min(xOf(start), xOf(constrained));
             const y = Math.min(yOf(start), yOf(constrained));
             const width = Math.abs(xOf(constrained) - xOf(start));
             const height = Math.abs(yOf(constrained) - yOf(start));
+            if (!(width > 0) || !(height > 0)) return null;
             const rect = AnnotationAdapter._svgEl("rect");
             rect.setAttribute("x", String(x));
             rect.setAttribute("y", String(y));
@@ -8861,6 +9915,7 @@ class AnnotationAdapter {
             const constrained = AnnotationAdapter.applyQuPathShiftConstraint(
                 start, current, "ellipse", Boolean(payload?.shiftKey)
             );
+            if (!AnnotationAdapter.quPathViewportSpanValid(start, constrained)) return null;
             let rx = Math.abs(xOf(constrained) - xOf(start)) / 2;
             let ry = Math.abs(yOf(constrained) - yOf(start)) / 2;
             if (payload?.shiftKey) {
@@ -8876,15 +9931,20 @@ class AnnotationAdapter {
             return AnnotationAdapter.applyOsdAnnotationStyle(ellipse);
         }
         if (type === "line" && start && current) {
+            const g = AnnotationAdapter._svgEl("g");
             const line = AnnotationAdapter._svgEl("line");
             line.setAttribute("x1", String(xOf(start)));
             line.setAttribute("y1", String(yOf(start)));
             line.setAttribute("x2", String(xOf(current)));
             line.setAttribute("y2", String(yOf(current)));
-            return AnnotationAdapter.applyOsdAnnotationStyle(line, { filled: false });
+            AnnotationAdapter.applyOsdAnnotationStyle(line, { filled: false });
+            AnnotationAdapter.appendAnnotationHitHalo(g, line, { kind: "stroke" });
+            g.appendChild(line);
+            return AnnotationAdapter.applyOsdAnnotationStyle(g, { filled: false });
         }
         if ((type === "polygon" || type === "polyline" || type === "brush") && vertices.length) {
-            return AnnotationAdapter.buildPolygonTracePreview(type, vertices, current);
+            const liveGuide = Boolean(payload?.preview);
+            return AnnotationAdapter.buildPolygonTracePreview(type, vertices, liveGuide ? current : null);
         }
         if (type === "points" && vertices.length) {
             const g = AnnotationAdapter._svgEl("g");
@@ -8895,6 +9955,7 @@ class AnnotationAdapter {
                 c.setAttribute("cy", String(yOf(v)));
                 c.setAttribute("r", "4");
                 AnnotationAdapter.applyOsdAnnotationStyle(c);
+                AnnotationAdapter.appendAnnotationHitHalo(g, c, { kind: "point" });
                 g.appendChild(c);
             });
             return g;
@@ -8991,6 +10052,8 @@ class AnnotationAdapter {
         return {
             id,
             type: shape.type,
+            // Leave blank until the user types in the name field. Do not invent
+            // ImageJ-style "wand1" / "line1" labels from the tool type.
             name: null,
             visible: true,
             x,
@@ -9007,6 +10070,7 @@ class AnnotationAdapter {
     static attachAnnotationShapeOverlay(node, id) {
         if (!node) return node;
         node.setAttribute("data-annotation-id", id);
+        AnnotationAdapter.stampAnnotationIdOnShapeTree(node, id);
         AnnotationAdapter.applyOsdAnnotationStyle(node, {
             filled: String(node.getAttribute("fill") || "") !== "none"
         });
@@ -9016,7 +10080,7 @@ class AnnotationAdapter {
             if (AnnotationAdapter.isAnnotationLocked(id)) node.classList.add("is-annotation-locked");
         }
         if (node.style) {
-            node.style.pointerEvents = "auto";
+            node.style.pointerEvents = "all";
             node.style.cursor = "pointer";
         }
         if (typeof node.addEventListener === "function") {
@@ -9049,6 +10113,130 @@ class AnnotationAdapter {
         return node;
     }
 
+    static nativeAnnotationDragToolActive() {
+        // Shape hits always drag (unless locked). Draw tools only rubber-band on empty
+        // canvas; requiring the Move tool made every annotation immovable after the
+        // document-capture pointer handlers started swallowing OSD MouseTracker events.
+        return true;
+    }
+
+    static shapeObjectForId(id, node = null) {
+        if (!id) return null;
+        const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        const entry = list.find(item => item && item.id === id);
+        if (!entry) return null;
+        if (node) entry.node = node;
+        else if (!entry.node && typeof document !== "undefined") {
+            entry.node = document.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`) || entry.node;
+        }
+        return entry;
+    }
+
+    static pixelDeltaToViewportDelta(pixelDelta) {
+        const dx = Number(pixelDelta?.x) || 0;
+        const dy = Number(pixelDelta?.y) || 0;
+        const viewer = AnnotationAdapter.viewer;
+        if (!viewer?.viewport?.deltaPointsFromPixels) return { x: 0, y: 0 };
+        try {
+            const OSD = AnnotationAdapter._openSeadragon();
+            const px = (OSD && typeof OSD.Point === "function")
+                ? new OSD.Point(dx, dy)
+                : { x: dx, y: dy };
+            const vp = viewer.viewport.deltaPointsFromPixels(px);
+            return { x: Number(vp?.x) || 0, y: Number(vp?.y) || 0 };
+        } catch (_error) {
+            return { x: 0, y: 0 };
+        }
+    }
+
+    /**
+     * Document-capture pointer handlers swallow OSD MouseTracker events, so shape
+     * dragging is owned here. Move/selection tools only; locked shapes stay put.
+     */
+    static beginNativeAnnotationDrag(event, hit) {
+        if (!hit || !AnnotationAdapter.nativeAnnotationDragToolActive()) return false;
+        if (event?.button != null && event.button !== 0) return false;
+        const x = Number(event?.clientX);
+        const y = Number(event?.clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+        const host = AnnotationAdapter.annotationHostFromNode(hit) || hit;
+        const id = AnnotationAdapter.annotationIdFromNode(host);
+        if (!id) return false;
+        const selected = AnnotationAdapter.selectedNativeAnnotationIds;
+        const ids = (selected instanceof Set && selected.size > 1 && selected.has(id))
+            ? Array.from(selected)
+            : [id];
+        const shapes = ids
+            .map(shapeId => AnnotationAdapter.shapeObjectForId(shapeId, shapeId === id ? host : null))
+            .filter(shape => shape && !AnnotationAdapter.isAnnotationLocked(shape.id));
+        if (!shapes.length) return false;
+        AnnotationAdapter.qpShapeDragSession = {
+            lastX: x,
+            lastY: y,
+            shapes,
+            moved: false
+        };
+        try {
+            if (typeof event.target?.setPointerCapture === "function" && event.pointerId != null) {
+                event.target.setPointerCapture(event.pointerId);
+            }
+        } catch (_error) { /* ignore */ }
+        return true;
+    }
+
+    static onNativeAnnotationDragMove(event) {
+        const drag = AnnotationAdapter.qpShapeDragSession;
+        if (!drag) return false;
+        const x = Number(event?.clientX);
+        const y = Number(event?.clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return true;
+        const dx = x - drag.lastX;
+        const dy = y - drag.lastY;
+        if (dx === 0 && dy === 0) return true;
+        drag.lastX = x;
+        drag.lastY = y;
+        const pixelDelta = { x: dx, y: dy };
+        const delta = AnnotationAdapter.pixelDeltaToViewportDelta(pixelDelta);
+        for (const shape of drag.shapes) {
+            AnnotationAdapter.updateShapeGeometryPosition(shape, delta, pixelDelta);
+        }
+        drag.moved = true;
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        return true;
+    }
+
+    static finishNativeAnnotationDrag(event = null) {
+        const drag = AnnotationAdapter.qpShapeDragSession;
+        AnnotationAdapter.qpShapeDragSession = null;
+        if (!drag) return false;
+        try {
+            if (typeof event?.target?.releasePointerCapture === "function" && event.pointerId != null) {
+                event.target.releasePointerCapture(event.pointerId);
+            }
+        } catch (_error) { /* ignore */ }
+        AnnotationAdapter.clearBrowserSelection();
+        if (drag.moved) AnnotationAdapter.persistMovedAnnotations(drag.shapes);
+        return true;
+    }
+
+    static persistMovedAnnotations(shapes) {
+        const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        AnnotationAdapter.setSavedAnnotations(list);
+        const adapter = AnnotationAdapter.annotationEngine?.adapter
+            || AnnotationAdapter.annotationSpike?.adapter;
+        if (!adapter || typeof adapter.annotationUpdated !== "function") return true;
+        (Array.isArray(shapes) ? shapes : []).forEach(shape => {
+            try { adapter.annotationUpdated(AnnotationAdapter.unifiedRecordToW3c(shape)); }
+            catch (_error) { /* keep local geometry even if save fails */ }
+        });
+        return true;
+    }
+
     static bindQuPathShapeDragTracker(elementNode, shapeObject) {
         const viewer = AnnotationAdapter.viewer
             || (typeof globalThis !== "undefined" ? globalThis.viewer : null);
@@ -9061,10 +10249,9 @@ class AnnotationAdapter {
         const tracker = new OSD.MouseTracker({
             element: elementNode,
             dragHandler: function(event) {
-                // "move" is the default/most commonly active tool, and clicking directly on an
-                // existing shape never starts a new drawing (onQuPathPointerDown always intercepts
-                // shape hits first), so dragging a shape is safe to allow in both "move" and the
-                // dedicated "selection" tool — not "selection" only.
+                // Document-capture pointers own dragging via qpShapeDragSession. Skip the
+                // OSD tracker while that session is live so deltas are not applied twice.
+                if (AnnotationAdapter.qpShapeDragSession) return;
                 if (window.currentActiveTool !== "selection" && window.currentActiveTool !== "move") return;
                 if (AnnotationAdapter.isAnnotationLocked(shapeObject?.id)) return;
                 let delta = viewer.viewport.deltaPointsFromPixels(event.delta);
@@ -9295,6 +10482,14 @@ class AnnotationAdapter {
             });
             if (clearDetBtn.dataset) clearDetBtn.dataset.clearDetBound = "1";
         }
+        const deleteSelectedBtn = doc.getElementById("delete-selected-annotations-btn");
+        if (deleteSelectedBtn && deleteSelectedBtn.dataset?.deleteSelectedBound !== "1") {
+            deleteSelectedBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                AnnotationAdapter.promptDeleteSelectedAnnotations();
+            });
+            if (deleteSelectedBtn.dataset) deleteSelectedBtn.dataset.deleteSelectedBound = "1";
+        }
         const clearBtn = doc.getElementById("clear-all-annotations-btn");
         if (clearBtn && clearBtn.dataset?.sanitizeBound !== "1") {
             clearBtn.addEventListener("click", function(e) {
@@ -9372,18 +10567,25 @@ class AnnotationAdapter {
 
     /**
      * Shift+F: toggles whether annotation shapes (rectangle/ellipse/closed polygon) show
-     * a colored interior or just their outline. Only touches `fill-opacity` — never the
-     * `fill` color attribute itself — so it composes cleanly with per-shape coloring and
-     * doesn't need to remember/restore anything. Independent of vectorOutlinesVisible
-     * (which hides shapes entirely) and of detectionFillEnabled (nuclei/detections, "F").
+     * a colored interior or just their outline. Fillable shapes also drop fill="none"
+     * while off so Chrome cannot paint a ::selection wash over the fill region.
+     * Independent of vectorOutlinesVisible (which hides shapes entirely) and of
+     * detectionFillEnabled (nuclei/detections, "F").
      */
     static toggleAnnotationFill(root = null) {
         const doc = AnnotationAdapter._documentFromRoot(root)
             || (typeof document !== "undefined" ? document : null);
         AnnotationAdapter.annotationFillEnabled = !AnnotationAdapter.annotationFillEnabled;
         const opacity = AnnotationAdapter.annotationFillEnabled ? "1" : "0";
+        const fill = AnnotationAdapter.annotationFillEnabled
+            ? AnnotationAdapter.OSD_ANNOTATION_FILL
+            : "none";
         const shapes = doc?.querySelectorAll?.(`.${AnnotationAdapter.OSD_ANNOTATION_SHAPE_CLASS}`) || [];
-        shapes.forEach(el => el?.setAttribute?.("fill-opacity", opacity));
+        shapes.forEach(el => {
+            if (!el?.setAttribute) return;
+            el.setAttribute("fill-opacity", opacity);
+            if (el.getAttribute?.("data-fillable") === "1") el.setAttribute("fill", fill);
+        });
         const btn = doc?.getElementById?.("toggle-annotation-fill-btn");
         btn?.setAttribute?.("aria-pressed", String(AnnotationAdapter.annotationFillEnabled));
         return AnnotationAdapter.annotationFillEnabled;
@@ -10340,10 +11542,18 @@ class AnnotationAdapter {
         AnnotationAdapter.bindAnnotationEditorViewportFollow(viewer || AnnotationAdapter.viewer);
         const input = popup.querySelector?.("#annotation-name-input")
             || AnnotationAdapter._documentFromRoot(options.root)?.getElementById?.("annotation-name-input");
-        if (input && !input.disabled) {
-            queueMicrotask(() => {
-                try { input.focus(); } catch (_error) { /* ignore */ }
-            });
+        if (input) {
+            const name = AnnotationAdapter.resolveAnnotationName(annotation.id, annotation);
+            input.value = name;
+            input.placeholder = "Enter annotation name...";
+            if (!input.disabled) {
+                const later = typeof queueMicrotask === "function"
+                    ? queueMicrotask
+                    : (fn => setTimeout(fn, 0));
+                later(() => {
+                    try { input.focus(); } catch (_error) { /* ignore */ }
+                });
+            }
         }
         return true;
     }
@@ -10414,6 +11624,10 @@ class AnnotationAdapter {
         ) || [];
         labeled.forEach(node => {
             if (!node || !("textContent" in node)) return;
+            if (node.getAttribute?.("data-annotation-hit") === "1"
+                || node.classList?.contains("annotation-hit-halo")) {
+                return;
+            }
             if (node.classList?.contains("osd-annotation-shape")
                 || node.classList?.contains("annotation-shape-overlay")
                 || node.querySelector?.("path, polygon, polyline, line, rect, ellipse, circle, g")) {
@@ -11514,8 +12728,46 @@ class AnnotationAdapter {
     }
 
     getAnnotationName(clientId) {
-        const value = this.metadataById.get(clientId)?.name;
-        return typeof value === "string" ? value : "";
+        return AnnotationAdapter.resolveAnnotationName(clientId, null, this);
+    }
+
+    /**
+     * Canonical display/edit value for an annotation. Always the stored `name`
+     * field — never the shape type plus an index ("wand1", "line1"). Those
+     * strings appeared when the editor/labels fell back to the SVG tag or tool
+     * type after grouped shapes (line/wand/polygon) stopped carrying `name` on
+     * the clicked child node.
+     */
+    static resolveAnnotationName(id, annotation = null, adapter = null) {
+        const clientId = id || annotation?.id || null;
+        const inst = adapter
+            || AnnotationAdapter.annotationEngine?.adapter
+            || AnnotationAdapter.annotationSpike?.adapter
+            || null;
+        const candidates = [];
+        if (inst?.metadataById && clientId) {
+            candidates.push(inst.metadataById.get(clientId)?.name);
+            const backendId = inst.backendIdByClientId?.get?.(clientId);
+            if (backendId && backendId !== clientId) {
+                candidates.push(inst.metadataById.get(backendId)?.name);
+            }
+        }
+        if (clientId) {
+            const saved = (AnnotationAdapter.savedAnnotationsArray || []).find(item => item?.id === clientId);
+            candidates.push(saved?.name);
+        }
+        if (annotation) candidates.push(annotation.name);
+        for (const value of candidates) {
+            if (typeof value === "string" && value.trim()) return value.trim();
+        }
+        return "";
+    }
+
+    static looksLikeGeneratedTypeIndexName(name, type) {
+        const n = String(name || "").trim();
+        const t = String(type || "").trim().toLowerCase();
+        if (!n || !t) return false;
+        return new RegExp(`^${t}\\d+$`, "i").test(n);
     }
 
     setAnnotationName(clientId, value) {
@@ -11792,6 +13044,17 @@ class AnnotationAdapter {
     static AI_DEFAULT_RAY_COUNT = 32;
     static AI_DEFAULT_BOUNDARY_TIGHTNESS = 0.82;
     static AI_DEFAULT_MODEL_OVERRIDE = "auto";
+    static AI_DETECTOR_STARDIST = "stardist-segmentation";
+    static AI_DETECTOR_CELLPOSE = "cellpose-segmentation";
+    static AI_DETECTOR_QUPATH = "qupath-cell-detection";
+    static AI_DEFAULT_DETECTOR = "stardist-segmentation";
+    static AI_DEFAULT_CELLPOSE_MODEL = "nuclei";
+    static AI_DEFAULT_CELLPOSE_DIAMETER = 30;
+    static AI_DEFAULT_QUPATH_BACKGROUND_RADIUS = 8;
+    static AI_DEFAULT_QUPATH_SIGMA = 1.5;
+    static AI_DEFAULT_QUPATH_MIN_AREA = 10;
+    static AI_DEFAULT_QUPATH_MAX_AREA = 400;
+    static AI_DEFAULT_QUPATH_CELL_EXPANSION = 4;
     static AI_HIGH_DENSITY_PROB_DELTA = 0.15;
     static AI_HIGH_DENSITY_NMS_DELTA = 0.15;
     static AI_HIGH_DENSITY_VARIANCE_LIMIT = 0.045;
@@ -11887,6 +13150,14 @@ class AnnotationAdapter {
         const rayCountEl = get("ai-ray-count");
         const boundaryTightnessEl = get("ai-boundary-tightness");
         const modelOverrideEl = get("ai-model-override");
+        const detectorEl = get("ai-detector-selector");
+        const cellposeModelEl = get("ai-cellpose-model");
+        const cellposeDiameterEl = get("ai-cellpose-diameter");
+        const qupathBackgroundEl = get("ai-qupath-background-radius");
+        const qupathSigmaEl = get("ai-qupath-sigma");
+        const qupathMinAreaEl = get("ai-qupath-min-area");
+        const qupathMaxAreaEl = get("ai-qupath-max-area");
+        const qupathExpansionEl = get("ai-qupath-cell-expansion");
         const channel = options.channel ?? channelEl?.value ?? "default";
         const segTarget = options.segTarget ?? targetEl?.value ?? "viewport";
         const probability = AnnotationAdapter.clampAiParam(
@@ -11919,13 +13190,85 @@ class AnnotationAdapter {
         const modelOverride = ["auto", "fluorescence", "he"].includes(rawModelOverride)
             ? rawModelOverride
             : AnnotationAdapter.AI_DEFAULT_MODEL_OVERRIDE;
+        const detector = AnnotationAdapter.normalizeAiDetector(
+            options.pluginId ?? options.detector ?? detectorEl?.value
+        );
+        const rawCellposeModel = String(options.cellposeModel ?? cellposeModelEl?.value
+            ?? AnnotationAdapter.AI_DEFAULT_CELLPOSE_MODEL).toLowerCase();
+        const cellposeModel = ["nuclei", "cyto", "cyto2", "cyto3"].includes(rawCellposeModel)
+            ? rawCellposeModel
+            : AnnotationAdapter.AI_DEFAULT_CELLPOSE_MODEL;
+        const diameter = AnnotationAdapter.clampAiParam(
+            options.diameter ?? cellposeDiameterEl?.value,
+            AnnotationAdapter.AI_DEFAULT_CELLPOSE_DIAMETER,
+            6,
+            80
+        );
+        const backgroundRadius = AnnotationAdapter.clampAiParam(
+            options.backgroundRadius ?? qupathBackgroundEl?.value,
+            AnnotationAdapter.AI_DEFAULT_QUPATH_BACKGROUND_RADIUS,
+            0,
+            24
+        );
+        const sigma = AnnotationAdapter.clampAiParam(
+            options.sigma ?? qupathSigmaEl?.value,
+            AnnotationAdapter.AI_DEFAULT_QUPATH_SIGMA,
+            0.5,
+            4
+        );
+        const minArea = AnnotationAdapter.clampAiParam(
+            options.minArea ?? qupathMinAreaEl?.value,
+            AnnotationAdapter.AI_DEFAULT_QUPATH_MIN_AREA,
+            4,
+            200
+        );
+        const maxArea = AnnotationAdapter.clampAiParam(
+            options.maxArea ?? qupathMaxAreaEl?.value,
+            AnnotationAdapter.AI_DEFAULT_QUPATH_MAX_AREA,
+            40,
+            2000
+        );
+        const cellExpansion = AnnotationAdapter.clampAiParam(
+            options.cellExpansion ?? qupathExpansionEl?.value,
+            AnnotationAdapter.AI_DEFAULT_QUPATH_CELL_EXPANSION,
+            0,
+            20
+        );
         const overlayVisible = options.overlayVisible ?? (overlayEl ? overlayEl.checked !== false : AnnotationAdapter.aiOverlayVisible);
         return {
             channel, probability, nms, overlayVisible, segTarget,
             maxNucleusRadius, rayCount, boundaryTightness, modelOverride,
+            detector, cellposeModel, diameter, backgroundRadius, sigma, minArea, maxArea, cellExpansion,
             channelEl, probEl, nmsEl, overlayEl, targetEl,
-            maxNucleusRadiusEl, rayCountEl, boundaryTightnessEl, modelOverrideEl
+            maxNucleusRadiusEl, rayCountEl, boundaryTightnessEl, modelOverrideEl, detectorEl
         };
+    }
+
+    static normalizeAiDetector(value) {
+        const raw = String(value || "").trim().toLowerCase();
+        if (raw === "cellpose-segmentation" || raw === "cellpose") {
+            return AnnotationAdapter.AI_DETECTOR_CELLPOSE;
+        }
+        if (raw === "qupath-cell-detection" || raw === "qupath" || raw === "qupath-cell") {
+            return AnnotationAdapter.AI_DETECTOR_QUPATH;
+        }
+        return AnnotationAdapter.AI_DETECTOR_STARDIST;
+    }
+
+    static syncAiDetectorParamPanels(root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        if (!host || typeof host.querySelectorAll !== "function") return false;
+        const detector = AnnotationAdapter.normalizeAiDetector(
+            host.getElementById?.("ai-detector-selector")?.value
+        );
+        const panels = host.querySelectorAll?.("[data-detector]") || [];
+        panels.forEach(panel => {
+            const match = String(panel.getAttribute("data-detector") || "") === detector;
+            if (panel.hidden !== undefined) panel.hidden = !match;
+            if (match) panel.removeAttribute?.("hidden");
+            else panel.setAttribute?.("hidden", "");
+        });
+        return true;
     }
 
     static writeAiLabSlider(inputEl, value, outputId, root) {
@@ -12000,6 +13343,19 @@ class AnnotationAdapter {
         bindSlider("ai-max-nucleus-radius", "ai-max-nucleus-radius-value");
         bindSlider("ai-ray-count", "ai-ray-count-value");
         bindSlider("ai-boundary-tightness", "ai-boundary-tightness-value");
+        bindSlider("ai-cellpose-diameter", "ai-cellpose-diameter-value");
+        bindSlider("ai-qupath-background-radius", "ai-qupath-background-radius-value");
+        bindSlider("ai-qupath-sigma", "ai-qupath-sigma-value");
+        bindSlider("ai-qupath-min-area", "ai-qupath-min-area-value");
+        bindSlider("ai-qupath-max-area", "ai-qupath-max-area-value");
+        bindSlider("ai-qupath-cell-expansion", "ai-qupath-cell-expansion-value");
+        const detectorEl = host.getElementById("ai-detector-selector");
+        if (detectorEl && typeof detectorEl.addEventListener === "function"
+            && detectorEl.dataset?.aiBound !== "1") {
+            detectorEl.addEventListener("change", () => AnnotationAdapter.syncAiDetectorParamPanels(host));
+            if (detectorEl.dataset) detectorEl.dataset.aiBound = "1";
+        }
+        AnnotationAdapter.syncAiDetectorParamPanels(host);
         // "ai-model-override" (like "ai-seg-target") is read live via readAiLabConfig()
         // at click time; it needs no dedicated listener/binding of its own.
         const toggle = host.getElementById("ai-overlay-visible");
@@ -14285,7 +15641,21 @@ class AnnotationAdapter {
         return typeof fetch === "function" ? fetch : null;
     }
 
+    static detectorDisplayName(pluginId) {
+        const id = AnnotationAdapter.normalizeAiDetector(pluginId);
+        if (id === AnnotationAdapter.AI_DETECTOR_CELLPOSE) return "Cellpose";
+        if (id === AnnotationAdapter.AI_DETECTOR_QUPATH) return "QuPath Cell Detection";
+        return "StarDist";
+    }
+
     static async runStarDistSegmentation(options = {}) {
+        return AnnotationAdapter.runNucleiDetectionPlugin({
+            ...options,
+            pluginId: options.pluginId || AnnotationAdapter.AI_DETECTOR_STARDIST
+        });
+    }
+
+    static async runNucleiDetectionPlugin(options = {}) {
         const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
         const viewer = options.viewer || AnnotationAdapter.viewer;
         const imageId = options.imageId || AnnotationAdapter.currentImageId;
@@ -14298,6 +15668,8 @@ class AnnotationAdapter {
         // second click with different values actually reaches the backend tensor engine —
         // see StarDistSegmentationPlugin#execute / StarDistTensorEngine#infer for the consumer.
         const config = AnnotationAdapter.readAiLabConfig(root, options);
+        const pluginId = AnnotationAdapter.normalizeAiDetector(options.pluginId || config.detector);
+        const detectorName = AnnotationAdapter.detectorDisplayName(pluginId);
         const payload = {
             imageId,
             x: Math.max(0, Math.floor(Number(bounds?.x) || 0)),
@@ -14307,7 +15679,7 @@ class AnnotationAdapter {
             channels: AnnotationAdapter.isRgbSeriesView(AnnotationAdapter.imageMetadata, AnnotationAdapter.currentSeries)
                 ? ["R", "G", "B"]
                 : AnnotationAdapter.resolveSegmentationChannels(config.channel),
-            pluginId: "stardist-segmentation",
+            pluginId,
             series: Number(AnnotationAdapter.currentSeries) || 0,
             z: Number(AnnotationAdapter.currentZ) || 0,
             probability: config.probability,
@@ -14315,9 +15687,17 @@ class AnnotationAdapter {
             maxNucleusRadius: config.maxNucleusRadius,
             rayCount: config.rayCount,
             boundaryTightness: config.boundaryTightness,
-            modelOverride: config.modelOverride
+            modelOverride: pluginId === AnnotationAdapter.AI_DETECTOR_CELLPOSE
+                ? config.cellposeModel
+                : config.modelOverride,
+            diameter: config.diameter,
+            backgroundRadius: config.backgroundRadius,
+            sigma: config.sigma,
+            minArea: config.minArea,
+            maxArea: config.maxArea,
+            cellExpansion: config.cellExpansion
         };
-        AnnotationAdapter.setAiStatus("AI Pipeline: Running StarDist nuclear contours…", root);
+        AnnotationAdapter.setAiStatus(`AI Pipeline: Running ${detectorName}…`, root);
         try {
             const fetchFn = AnnotationAdapter.pluginCsrfFetch();
             if (!fetchFn) throw new Error("fetch is unavailable");
@@ -14343,9 +15723,9 @@ class AnnotationAdapter {
                 AnnotationAdapter.clearNucleiCircleOverlays(viewer);
             }
             AnnotationAdapter.restoreViewerMouseNavUnlessModal(viewer);
-            const model = String(result?.title || "StarDist").replace(/^.*\(([^)]+)\).*$/, "$1");
+            const model = String(result?.title || detectorName).replace(/^.*\(([^)]+)\).*$/, "$1");
             AnnotationAdapter.setAiStatus(
-                `AI Pipeline: Locked ${polygons.length} StarDist polygons (${model}).`,
+                `AI Pipeline: Locked ${polygons.length} ${detectorName} polygons (${model}).`,
                 root
             );
             return {
@@ -14357,7 +15737,7 @@ class AnnotationAdapter {
             };
         } catch (error) {
             AnnotationAdapter.setAiStatus(
-                `AI Pipeline: StarDist plugin unavailable (${error?.message || error}); using local contours.`,
+                `AI Pipeline: ${detectorName} plugin unavailable (${error?.message || error}); using local contours.`,
                 root
             );
             return null;
@@ -14365,7 +15745,11 @@ class AnnotationAdapter {
     }
 
     static async segmentCellNuclei(options = {}) {
-        const plugin = await AnnotationAdapter.runStarDistSegmentation(options);
+        const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
+        const pluginId = AnnotationAdapter.normalizeAiDetector(
+            options.pluginId || options.detector || AnnotationAdapter.readAiLabConfig(root, options).detector
+        );
+        const plugin = await AnnotationAdapter.runNucleiDetectionPlugin({ ...options, pluginId });
         if (plugin && plugin.count > 0) return plugin;
         return AnnotationAdapter.paintViewportNucleiCircles(options);
     }
@@ -14585,6 +15969,7 @@ AnnotationAdapter.bindFloatingAdminPalette();
 AnnotationAdapter.bindFloatingZStackPalette();
 AnnotationAdapter.bindFloatingMeasurementPalette();
 AnnotationAdapter.bindFloatingWandPalette();
+AnnotationAdapter.bindAnalysisPaneTabs();
 AnnotationAdapter.installViewerToolAlias();
 AnnotationAdapter.bindGlobalUiTooltip();
 if (typeof document !== "undefined" && document.readyState === "loading") {
@@ -14596,9 +15981,11 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
         AnnotationAdapter.bindFloatingZStackPalette();
         AnnotationAdapter.bindFloatingMeasurementPalette();
         AnnotationAdapter.bindFloatingWandPalette();
+        AnnotationAdapter.bindAnalysisPaneTabs();
         AnnotationAdapter.ensureMeasurementPopupOverlay();
         AnnotationAdapter.ensureAnnotationEditorPopup();
         AnnotationAdapter.bindGlobalUiTooltip();
+        AnnotationAdapter.refreshAnnotationListPanel();
     });
 } else if (typeof document !== "undefined") {
     AnnotationAdapter.bindAdvancedChannelPalette();
@@ -14607,7 +15994,9 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
     AnnotationAdapter.bindFloatingZStackPalette();
     AnnotationAdapter.bindFloatingMeasurementPalette();
     AnnotationAdapter.bindFloatingWandPalette();
+    AnnotationAdapter.bindAnalysisPaneTabs();
     AnnotationAdapter.ensureMeasurementPopupOverlay();
     AnnotationAdapter.ensureAnnotationEditorPopup();
     AnnotationAdapter.bindGlobalUiTooltip();
+    AnnotationAdapter.refreshAnnotationListPanel();
 }

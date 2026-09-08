@@ -106,8 +106,9 @@ assert.deepEqual(
 {
     const list = { style: {}, parentNode: null };
     const body = { children: [], append(node) { this.children.push(node); node.parentNode = this; } };
+    const view = { innerHeight: 800 };
     const input = {
-        getBoundingClientRect() { return { left: 40, bottom: 80, width: 180 }; }
+        getBoundingClientRect() { return { left: 40, top: 48, bottom: 80, width: 180 }; }
     };
     const select = {
         closest() {
@@ -119,7 +120,7 @@ assert.deepEqual(
                 }
             };
         },
-        ownerDocument: { body, getElementById() { return null; } },
+        ownerDocument: { body, getElementById() { return null; }, defaultView: view },
         dataset: {}
     };
     AnnotationAdapter.ensureCaseFilterListboxPortal(select);
@@ -128,7 +129,32 @@ assert.deepEqual(
     assert.equal(list.style.position, "fixed");
     assert.equal(list.style.left, "40px");
     assert.equal(list.style.top, "82px");
+    assert.equal(list.style.bottom, "auto");
     assert.equal(list.style.width, "180px");
+    assert.equal(list.style.maxHeight, "712px");
+}
+
+{
+    const list = { style: {} };
+    const input = {
+        getBoundingClientRect() { return { left: 40, top: 700, bottom: 732, width: 180 }; }
+    };
+    const select = {
+        closest() {
+            return {
+                querySelector(sel) {
+                    if (sel === "#case-filter-search" || sel === ".case-filter-search") return input;
+                    if (sel === "#case-filter-listbox" || sel === ".case-filter-listbox") return list;
+                    return null;
+                }
+            };
+        },
+        ownerDocument: { defaultView: { innerHeight: 768 }, getElementById() { return null; } }
+    };
+    assert.equal(AnnotationAdapter.positionCaseFilterListbox(select), true);
+    assert.equal(list.style.top, "auto");
+    assert.equal(list.style.bottom, "70px");
+    assert.equal(list.style.maxHeight, "692px");
 }
 
 assert.match(html, /id="case-filter-combobox"/);
@@ -136,9 +162,11 @@ assert.match(html, /id="case-filter-search"/);
 assert.match(html, /id="case-filter-listbox"/);
 assert.match(html, /id="case-filter-select"/);
 assert.match(html, /role="combobox"/);
-assert.match(html, /placeholder="Search cases"/);
-assert.match(html, /Search cases in the upper left/);
-assert.match(html, /annotation-adapter\.js\?v=20260901-qp-window-close/);
+assert.match(html, /placeholder="Search slides\.\.\."/);
+assert.match(html, /Search slides in the upper left/);
+assert.match(html, /annotation-adapter\.js\?v=20260908-analysis-tabs/);
+assert.match(adapterSource, /Search slides in the upper left/);
+assert.match(adapterSource, /No matching slides/);
 assert.doesNotMatch(html, /id="case-selector"/);
 assert.doesNotMatch(html, /id="case-search-input"/);
 assert.doesNotMatch(html, /window\.cachedCaseList/);
@@ -146,7 +174,8 @@ assert.match(adapterSource, /static filterCaseFilterOptions\(/);
 assert.match(adapterSource, /static applyCaseFilterComboboxChoice\(/);
 assert.match(adapterSource, /static bindSearchableCaseFilter\(/);
 assert.match(adapterSource, /static ensureCaseFilterListboxPortal\(/);
-assert.match(adapterSource, /static positionCaseFilterListbox\(/);
+assert.match(html, /max-height:\s*calc\(100vh - 48px\)/);
+assert.match(adapterSource, /list\.style\.maxHeight/);
 assert.match(adapterSource, /overflow-y: hidden/);
 assert.match(adapterSource, /dispatchEvent\(new EventCtor\("change"/);
 assert.doesNotMatch(adapterSource, /window\.cachedCaseList/);

@@ -18,8 +18,13 @@ class FakeInput {
     }
 }
 
-const context = vm.createContext({ console, window: { setTimeout, clearTimeout }, fetch: null,
-    WsiCsrf: { csrfFetch: null } });
+const context = vm.createContext({
+    console,
+    window: { setTimeout, clearTimeout },
+    fetch: null,
+    queueMicrotask,
+    WsiCsrf: { csrfFetch: null }
+});
 for (const file of ["annotation-store.js", "annotation-adapter.js", "annotation-name-editor.js"]) {
     const className = file === "annotation-store.js" ? "AnnotationStore" :
         file === "annotation-adapter.js" ? "AnnotationAdapter" : "AnnotationNameEditor";
@@ -123,6 +128,47 @@ context.WsiCsrf.csrfFetch = async (_url, options) => {
         "width", "height", "rotation", "createdAt", "modifiedAt"]) assert.equal(after[key], original[key], key);
     assert.deepEqual(after.bodies, original.bodies);
     assert.equal(annotator.annotations.length, 2);
+
+    // The editor/labels must use the stored name field, not a type+index stand-in
+    // ("wand1", "line1") that grouped SVG children used to surface.
+    context.AnnotationAdapter.setSavedAnnotations([
+        { id: "wand-id", type: "wand", name: "Tumor margin" },
+        { id: "line-id", type: "line", name: "Scale bar" }
+    ]);
+    assert.equal(context.AnnotationAdapter.resolveAnnotationName("wand-id"), "Tumor margin");
+    assert.equal(context.AnnotationAdapter.resolveAnnotationName("line-id"), "Scale bar");
+    assert.equal(context.AnnotationAdapter.resolveAnnotationName("missing", { id: "missing", type: "wand", name: null }), "");
+    assert.equal(context.AnnotationAdapter.looksLikeGeneratedTypeIndexName("wand1", "wand"), true);
+    assert.equal(context.AnnotationAdapter.looksLikeGeneratedTypeIndexName("Tumor margin", "wand"), false);
+    assert.equal(
+        context.AnnotationAdapter.buildUnifiedAnnotationRecord({ type: "wand", start: {}, current: {} }, "new-wand").name,
+        null
+    );
+
+    const popupInput = new FakeInput();
+    popupInput.disabled = false;
+    const popup = {
+        hidden: true,
+        style: { display: "none" },
+        querySelector: sel => (sel === "#annotation-name-input" ? popupInput : null),
+        removeAttribute() {}
+    };
+    const prevEnsure = context.AnnotationAdapter.ensureAnnotationEditorPopup;
+    const prevPlace = context.AnnotationAdapter._placeAnnotationEditorPopup;
+    const prevFollow = context.AnnotationAdapter.bindAnnotationEditorViewportFollow;
+    context.AnnotationAdapter.ensureAnnotationEditorPopup = () => popup;
+    context.AnnotationAdapter._placeAnnotationEditorPopup = () => true;
+    context.AnnotationAdapter.bindAnnotationEditorViewportFollow = () => true;
+    context.AnnotationAdapter.showAnnotationEditorForShape({
+        id: "wand-id",
+        type: "wand",
+        name: "Tumor margin"
+    });
+    assert.equal(popupInput.value, "Tumor margin",
+        "name popup must show the annotation name field, not wand1/type");
+    context.AnnotationAdapter.ensureAnnotationEditorPopup = prevEnsure;
+    context.AnnotationAdapter._placeAnnotationEditorPopup = prevPlace;
+    context.AnnotationAdapter.bindAnnotationEditorViewportFollow = prevFollow;
 
     console.log("annotation name checks passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

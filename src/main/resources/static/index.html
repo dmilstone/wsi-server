@@ -13,9 +13,9 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260901-qp-window-close"></script>
+    <script src="/annotation-adapter.js?v=20260908-analysis-tabs"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
-    <script src="/annotation-label-layer.js?v=20260822-native-osd-svg"></script>
+    <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
         :root {
             color-scheme: dark;
@@ -340,7 +340,7 @@
             left: 0;
             top: 0;
             z-index: 10050;
-            max-height: 250px;
+            max-height: calc(100vh - 48px);
             margin: 0;
             padding: 4px 0;
             overflow-x: hidden;
@@ -374,9 +374,120 @@
             font-size: 13px;
             font-weight: 600;
         }
-        #images-panel > .image-info {
-            margin: 0 10px 8px;
+        #images-panel > .image-info,
+        #qp-view-image > .image-info {
+            margin: 8px 10px 10px;
+            flex: 1 1 auto;
+            overflow: auto;
+        }
+        .qp-annotation-list-panel {
+            display: flex;
+            flex: 1 1 auto;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .qp-analysis-tabs {
+            display: flex;
             flex: 0 0 auto;
+            margin: 0;
+            padding: 0;
+            border-bottom: 1px solid var(--border);
+            background: #0d141c;
+        }
+        .qp-analysis-tabs [role="tab"] {
+            flex: 1 1 0;
+            min-height: 34px;
+            margin: 0;
+            padding: 6px 8px;
+            border: 0;
+            border-bottom: 2px solid transparent;
+            background: transparent;
+            color: var(--text-secondary);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 750;
+            letter-spacing: .02em;
+            cursor: pointer;
+        }
+        .qp-analysis-tabs [role="tab"]:hover {
+            color: var(--text);
+            background: rgba(255,255,255,.04);
+        }
+        .qp-analysis-tabs [role="tab"][aria-selected="true"] {
+            color: var(--text);
+            border-bottom-color: #7ec8ff;
+            background: rgba(126, 200, 255, .08);
+        }
+        .qp-analysis-view {
+            display: flex;
+            flex: 1 1 auto;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .qp-analysis-view[hidden] { display: none !important; }
+        .qp-annotation-list-header {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 32px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 750;
+            background: rgba(17, 24, 33, .96);
+        }
+        .qp-annotation-list {
+            flex: 1 1 auto;
+            min-height: 0;
+            margin: 0;
+            padding: 4px 0;
+            overflow: auto;
+            list-style: none;
+        }
+        .qp-annotation-list-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 28px;
+            padding: 4px 10px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 650;
+            cursor: pointer;
+        }
+        .qp-annotation-list-item:hover {
+            color: var(--text);
+            background: rgba(255,255,255,.06);
+        }
+        .qp-annotation-list-item.is-selected {
+            color: var(--text);
+            background: rgba(126, 200, 255, .14);
+        }
+        .qp-annotation-list-icon { flex: 0 0 auto; color: #f0d14a; }
+        .qp-annotation-list-name {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .qp-annotation-list-empty {
+            padding: 12px 10px;
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .image-info > h2 {
+            margin: 0;
+            padding: 11px 13px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .06em;
+            text-transform: uppercase;
         }
         .sidebar-browser-toggle {
             width: auto !important;
@@ -432,7 +543,8 @@
             width: var(--sidebar-width);
             max-width: 100%;
         }
-        #images-panel > #image-list {
+        #images-panel > #image-list,
+        #qp-view-slides > #image-list {
             flex: 1 1 auto;
             min-height: 0;
             overflow: auto;
@@ -1668,14 +1780,43 @@
             overflow: visible;
             z-index: 20;
         }
+        /* fill: none unless Shift+F has turned interiors on. A CSS fill here used to
+           paint even when fill-opacity="0", so a click-started rubber-band (or a
+           coordinate-space mismatch) could wash the whole slide pale blue/gold.
+           pointer-events: all keeps unfilled interiors selectable. */
         .osd-annotation-shape {
-            fill: rgba(255, 215, 0, 0.22);
+            fill: none;
             stroke: #FFD700;
             stroke-opacity: 1;
             stroke-width: 2;
             vector-effect: non-scaling-stroke;
-            pointer-events: auto;
+            pointer-events: all;
             cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+        }
+        .osd-annotation-shape:focus,
+        .osd-annotation-shape:focus-visible {
+            outline: none;
+        }
+        .osd-annotation-shape::selection,
+        .osd-svg-overlay::selection {
+            background: transparent !important;
+            color: inherit !important;
+            fill: none !important;
+        }
+        .osd-svg-overlay {
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .osd-annotation-shape[fill-opacity="1"]:not([fill="none"]) {
+            fill: rgba(255, 215, 0, 0.22);
+        }
+        [data-qp-preview] .osd-annotation-shape {
+            fill: none !important;
         }
         /* Single-click selection highlight; distinct from hover/fill so a selected shape
            is visibly identifiable without opening the name popup (that's double-click only). */
@@ -1683,6 +1824,14 @@
             stroke: #ffffff;
             stroke-width: 3;
             stroke-dasharray: 6 4;
+        }
+        /* Invisible fat stroke/point so line, polyline, brush, and points are as
+           easy to click as filled rectangles/ellipses. */
+        .annotation-hit-halo {
+            fill: none;
+            stroke: transparent;
+            opacity: 0;
+            pointer-events: stroke;
         }
         #viewer.annotations-hidden .osd-annotation-shape,
         #viewer.annotations-hidden .osd-svg-overlay {
@@ -1976,6 +2125,26 @@
             display: flex;
             align-items: stretch;
             gap: 8px;
+        }
+        #ai-analytics-panel .ai-detector-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin: 0 0 8px;
+            color: #ffe08a;
+            font-size: 11px;
+            font-weight: 650;
+        }
+        #ai-analytics-panel .ai-detector-row #ai-detector-selector {
+            min-height: 36px;
+            margin: 0;
+            padding: 0 8px;
+            border: 1px solid #2b3948;
+            border-radius: 6px;
+            background: #174b78;
+            color: #f7f2d8;
+            font-size: 12px;
+            font-weight: 650;
         }
         #ai-analytics-panel .ai-plugin-row #plugin-selector {
             flex: 1;
@@ -2642,6 +2811,7 @@
             background: #3a4a5c;
         }
         #floating-channel-palette .fcp-histogram-wrap,
+        #floating-channel-palette .fcp-histogram-meta,
         #floating-channel-palette .fcp-scale,
         #floating-channel-palette .fcp-slider,
         #floating-channel-palette .fcp-actions {
@@ -3090,6 +3260,81 @@
             padding: 0;
             font: inherit;
         }
+        .qp-color-pick-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+            color: #222 !important;
+            -webkit-text-fill-color: #222 !important;
+            font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            cursor: pointer;
+            user-select: none;
+            flex: 1 0 100%;
+        }
+        .qp-color-pick-toggle input {
+            margin: 0;
+            accent-color: #1473e6;
+        }
+        .qp-color-pick-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 0 0 10px;
+            max-width: 228px;
+        }
+        .qp-color-pick-preview {
+            width: 22px;
+            height: 22px;
+            flex: 0 0 22px;
+            border: 1px solid #666;
+            background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 8px 8px;
+            box-sizing: border-box;
+        }
+        .qp-color-pick-hint {
+            color: #333;
+            font-size: 11px;
+            line-height: 1.3;
+            flex: 1 1 140px;
+        }
+        .qp-color-pick-hint code {
+            font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: #111 !important;
+            -webkit-text-fill-color: #111 !important;
+        }
+        .qp-color-pick-screen {
+            flex: 1 0 100%;
+            margin: 0;
+            padding: 4px 8px;
+            font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #1a1a1a !important;
+            -webkit-text-fill-color: #1a1a1a !important;
+            background: #f6f6f6;
+            border: 1px solid #8d8d8d;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .qp-color-pick-loupe {
+            position: fixed;
+            width: 22px;
+            height: 22px;
+            margin: 0;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 0 1px #111, 0 2px 8px rgba(0,0,0,.35);
+            pointer-events: none;
+            z-index: 2147483646;
+            box-sizing: border-box;
+        }
+        html.is-color-picking,
+        html.is-color-picking * {
+            cursor: crosshair !important;
+        }
+        html.is-color-picking #qp-color-chooser,
+        html.is-color-picking #qp-color-chooser * {
+            cursor: default !important;
+        }
         .qp-channel-properties {
             z-index: 10055;
             min-width: 22rem;
@@ -3274,6 +3519,26 @@
             height: 88px;
             background: #000;
         }
+        .fcp-histogram-meta {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin: 4px 2px 0;
+        }
+        .fcp-histogram-log {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #c9d2dc;
+            font-size: 11px;
+            font-weight: 650;
+            cursor: pointer;
+            user-select: none;
+        }
+        .fcp-histogram-log input {
+            margin: 0;
+            accent-color: #3d7ea6;
+        }
         .fcp-scale {
             display: flex;
             justify-content: space-between;
@@ -3434,8 +3699,18 @@
         }
         .wsi-qp-draw-overlay .osd-annotation-shape,
         .osd-svg-overlay .osd-annotation-shape {
-            pointer-events: auto !important;
+            pointer-events: all !important;
             cursor: pointer;
+        }
+        .wsi-qp-draw-overlay .annotation-hit-halo[data-hit-kind="stroke"],
+        .osd-svg-overlay .annotation-hit-halo[data-hit-kind="stroke"] {
+            pointer-events: stroke !important;
+        }
+        .wsi-qp-draw-overlay .annotation-hit-halo[data-hit-kind="area"],
+        .wsi-qp-draw-overlay .annotation-hit-halo[data-hit-kind="point"],
+        .osd-svg-overlay .annotation-hit-halo[data-hit-kind="area"],
+        .osd-svg-overlay .annotation-hit-halo[data-hit-kind="point"] {
+            pointer-events: all !important;
         }
         .toolbar-btn,
         .qp-tool {
@@ -3629,11 +3904,11 @@
                     <button id="toggle-left" class="toolbar-button sidebar-browser-toggle" type="button" aria-pressed="true"
                             title="Show/Hide Image Browser" aria-label="Show/Hide Image Browser">📂</button>
                     <div class="case-filter-combobox" id="case-filter-combobox">
-                        <label class="visually-hidden" for="case-filter-search">Search cases</label>
+                        <label class="visually-hidden" for="case-filter-search">Search slides</label>
                         <input type="text" id="case-filter-search" class="case-filter-search"
                                role="combobox" aria-expanded="false" aria-autocomplete="list"
                                aria-controls="case-filter-listbox" aria-haspopup="listbox"
-                               placeholder="Search cases" autocomplete="off" autocorrect="off"
+                               placeholder="Search slides..." autocomplete="off" autocorrect="off"
                                autocapitalize="off" spellcheck="false">
                         <span class="case-filter-chevron" aria-hidden="true"></span>
                         <select id="case-filter-select" class="case-selector case-filter-native"
@@ -3759,6 +4034,7 @@
                     <div class="toolbar-group ops-display-group" role="group" aria-label="Display adjustments">
                         <button id="reset" class="toolbar-chip action" type="button" disabled>Reset</button>
                         <button id="recompute-auto" class="toolbar-chip action" type="button" disabled>Auto</button>
+                        <button id="delete-selected-annotations-btn" class="toolbar-btn" type="button" data-tooltip="Delete selected annotation(s)&#10;Cannot be undone — you will be asked to confirm" aria-label="Delete selected annotations" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; background: #3a1a1a; color: #ff8888; border: 1px solid #662222; font-weight: bold;">Delete</button>
                         <button id="clear-all-annotations-btn" class="toolbar-btn" type="button" data-tooltip="Delete All Annotations" aria-label="Delete all annotations" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; background: #3a1a1a; color: #ff5555; border: 1px solid #662222; font-weight: bold;">Delete All</button>
                         <button id="clear-detections-only-btn" class="toolbar-btn" type="button" data-tooltip="Clear all detected nuclei/objects&#10;Manual annotations are left untouched" aria-label="Clear detections only" style="padding: 4px 8px; font-size: 0.85rem; cursor: pointer; border-radius: 4px; color: #ffaa55; border: 1px solid #664422; background: #2a1f15; font-weight: bold;">Clear Detections</button>
                         <button id="toggle-ai-labs-palette" class="toolbar-chip" type="button"
@@ -3851,20 +4127,43 @@
 </header>
 <div class="workspace">
     <aside id="images-panel" aria-label="Image browser">
-        <details id="image-info" class="image-info">
-            <summary>Image information</summary>
-            <div class="image-info-body">
-                <dl class="info-grid">
-                    <dt>Name</dt><dd id="info-name">—</dd>
-                    <dt>Dimensions</dt><dd id="info-size">—</dd>
-                    <dt>Channels</dt><dd id="info-channels">—</dd>
-                    <dt>Levels</dt><dd id="info-levels">—</dd>
-                    <dt>Tile size</dt><dd id="info-tile">—</dd>
-                    <dt>Pixel size</dt><dd id="info-pixel-size">—</dd>
-                </dl>
+        <div id="qp-analysis-tabs" class="qp-analysis-tabs" role="tablist" aria-label="Analysis views">
+            <button type="button" role="tab" id="qp-tab-slides" data-qp-view="slides"
+                    aria-controls="qp-view-slides" aria-selected="true">Slides</button>
+            <button type="button" role="tab" id="qp-tab-image" data-qp-view="image"
+                    aria-controls="qp-view-image" aria-selected="false">Image</button>
+            <button type="button" role="tab" id="qp-tab-annotations" data-qp-view="annotations"
+                    aria-controls="qp-view-annotations" aria-selected="false">Annotations</button>
+        </div>
+        <div id="qp-view-slides" class="qp-analysis-view" role="tabpanel" data-qp-view="slides"
+             aria-labelledby="qp-tab-slides">
+            <div id="image-list"></div>
+        </div>
+        <div id="qp-view-image" class="qp-analysis-view" role="tabpanel" data-qp-view="image"
+             aria-labelledby="qp-tab-image" hidden>
+            <section id="image-info" class="image-info" aria-labelledby="image-info-heading">
+                <h2 id="image-info-heading">Image information</h2>
+                <div class="image-info-body">
+                    <dl class="info-grid">
+                        <dt>Name</dt><dd id="info-name">—</dd>
+                        <dt>Dimensions</dt><dd id="info-size">—</dd>
+                        <dt>Channels</dt><dd id="info-channels">—</dd>
+                        <dt>Levels</dt><dd id="info-levels">—</dd>
+                        <dt>Tile size</dt><dd id="info-tile">—</dd>
+                        <dt>Pixel size</dt><dd id="info-pixel-size">—</dd>
+                    </dl>
+                </div>
+            </section>
+        </div>
+        <div id="qp-view-annotations" class="qp-analysis-view" role="tabpanel" data-qp-view="annotations"
+             aria-labelledby="qp-tab-annotations" hidden>
+            <div class="qp-annotation-list-panel">
+                <div class="qp-annotation-list-header">
+                    <span id="qp-annotation-list-title">Annotation list (0)</span>
+                </div>
+                <ul id="qp-annotation-list" class="qp-annotation-list" aria-label="Annotation list"></ul>
             </div>
-        </details>
-        <div id="image-list"></div>
+        </div>
     </aside>
     <div id="left-resizer" class="resize-handle" role="separator" aria-label="Resize image browser"></div>
     <main class="viewer-main" aria-label="Whole-slide image viewer">
@@ -3913,6 +4212,12 @@
                 <div class="fcp-list-splitter" id="fcp-list-splitter" role="separator" aria-orientation="horizontal" aria-label="Adjust channel list height"></div>
                 <div class="fcp-histogram-wrap">
                     <canvas id="floating-channel-histogram" width="340" height="88" aria-label="Channel histogram"></canvas>
+                </div>
+                <div class="fcp-histogram-meta">
+                    <label class="fcp-histogram-log" for="fcp-log-histogram" title="Show counts on a log scale. Intensity stays linear.">
+                        <input id="fcp-log-histogram" type="checkbox" aria-label="Log histogram">
+                        Log histogram
+                    </label>
                 </div>
                 <div class="fcp-scale">
                     <span id="fcp-scale-min">0</span>
@@ -4002,7 +4307,7 @@
             </div>
         </aside>
         <div id="empty-viewport-guidance" role="status" aria-live="polite">
-            <span>Search cases in the upper left, then choose a slide from the list.</span>
+            <span>Search slides in the upper left, then choose a slide from the list.</span>
         </div>
         <div id="measure-dialog" class="measure-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="measure-dialog-title">
             <div class="measure-dialog-panel">
@@ -4107,6 +4412,14 @@
                     <summary>System Diagnostic Disclaimer</summary>
                     <p class="ai-lab-note">Experimental viewport simulation on this browser only. Results are not diagnostic and are not saved to the annotation store.</p>
                 </details>
+                <label class="ai-detector-row" for="ai-detector-selector">
+                    Cell detector
+                    <select id="ai-detector-selector" aria-label="Cell detector">
+                        <option value="stardist-segmentation" selected>StarDist</option>
+                        <option value="cellpose-segmentation">Cellpose</option>
+                        <option value="qupath-cell-detection">QuPath Cell Detection</option>
+                    </select>
+                </label>
                 <button id="ai-segment-nuclei" class="action" type="button">1. Segment Nuclei</button>
                 <div class="ai-plugin-row">
                     <select id="plugin-selector" aria-label="Plugin action">
@@ -4155,7 +4468,7 @@
                                 <output id="ai-nms-threshold-value" for="ai-nms-threshold">0.40</output>
                             </div>
                         </div>
-                        <details id="ai-advanced-stardist-params" class="ai-lab-disclaimer" open>
+                        <details id="ai-advanced-stardist-params" class="ai-lab-disclaimer" data-detector="stardist-segmentation" open>
                             <summary>Advanced StarDist Parameters</summary>
                             <div class="ai-lab-field">
                                 <label for="ai-model-override">Model</label>
@@ -4184,6 +4497,63 @@
                                 <div class="ai-lab-slider-row">
                                     <input id="ai-boundary-tightness" type="range" min="0.4" max="0.98" step="0.02" value="0.82">
                                     <output id="ai-boundary-tightness-value" for="ai-boundary-tightness">0.82</output>
+                                </div>
+                            </div>
+                        </details>
+                        <details id="ai-advanced-cellpose-params" class="ai-lab-disclaimer" data-detector="cellpose-segmentation" hidden>
+                            <summary>Cellpose Parameters</summary>
+                            <div class="ai-lab-field">
+                                <label for="ai-cellpose-model">Model</label>
+                                <select id="ai-cellpose-model" aria-label="Cellpose model">
+                                    <option value="nuclei" selected>nuclei</option>
+                                    <option value="cyto">cyto</option>
+                                    <option value="cyto2">cyto2</option>
+                                    <option value="cyto3">cyto3</option>
+                                </select>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-cellpose-diameter">Expected diameter (px)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-cellpose-diameter" type="range" min="6" max="80" step="1" value="30">
+                                    <output id="ai-cellpose-diameter-value" for="ai-cellpose-diameter">30</output>
+                                </div>
+                            </div>
+                        </details>
+                        <details id="ai-advanced-qupath-params" class="ai-lab-disclaimer" data-detector="qupath-cell-detection" hidden>
+                            <summary>QuPath Cell Detection Parameters</summary>
+                            <div class="ai-lab-field">
+                                <label for="ai-qupath-background-radius">Background radius (px)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-qupath-background-radius" type="range" min="0" max="24" step="1" value="8">
+                                    <output id="ai-qupath-background-radius-value" for="ai-qupath-background-radius">8</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-qupath-sigma">Sigma</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-qupath-sigma" type="range" min="0.5" max="4" step="0.1" value="1.5">
+                                    <output id="ai-qupath-sigma-value" for="ai-qupath-sigma">1.50</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-qupath-min-area">Minimum area (px²)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-qupath-min-area" type="range" min="4" max="200" step="1" value="10">
+                                    <output id="ai-qupath-min-area-value" for="ai-qupath-min-area">10</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-qupath-max-area">Maximum area (px²)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-qupath-max-area" type="range" min="40" max="2000" step="10" value="400">
+                                    <output id="ai-qupath-max-area-value" for="ai-qupath-max-area">400</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-qupath-cell-expansion">Cell expansion (px)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-qupath-cell-expansion" type="range" min="0" max="20" step="1" value="4">
+                                    <output id="ai-qupath-cell-expansion-value" for="ai-qupath-cell-expansion">4</output>
                                 </div>
                             </div>
                         </details>
@@ -4306,12 +4676,13 @@
             <tr><td><b>W</b></td><td>Wand Tool (Local boundary threshold auto-trace)</td></tr>
             <tr><td><b>.</b></td><td>Points Tool (Multi-point structure tabulation)</td></tr>
                 <tr><td><b>S</b></td><td>Selection Mode (Drag shapes, input name labels)</td></tr>
+                <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s) — cannot be undone</td></tr>
                 <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">Ctrl+Shift+T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
                 <tr style="border-top: 1px solid #333;"><td>Vis</td><td>Export Visible Region (native-resolution image download)</td></tr>
                 <tr><td>Ant</td><td>Export Selected Annotation (native-resolution crop; select an annotation first)</td></tr>
                 <tr><td>Ovw</td><td>Toggle Slide Overview Thumbnail Navigator</td></tr>
                 <tr><td>Ctrl+Shift+F</td><td>Open/Close Pilot Feedback Panel</td></tr>
-                <tr><td>Right-click</td><td>Lock/Unlock Position of that one annotation (on a shape)</td></tr>
+                <tr><td>Right-click</td><td>Lock/Unlock Position or Delete the selected annotation(s)</td></tr>
                 <tr><td>–</td><td>Minimize/Expand this window (header only)</td></tr>
         </table>
     </div>
@@ -4327,6 +4698,8 @@
 <div id="annotation-context-menu" style="display: none; position: fixed; z-index: 100020; min-width: 190px; background: #1c1c1c; color: #fff; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.5); overflow: hidden; font-size: 0.85rem;">
     <button type="button" id="annotation-context-menu-lock-toggle"
             style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; color: #fff; cursor: pointer; font: inherit;">🔒 Lock Position</button>
+    <button type="button" id="annotation-context-menu-delete"
+            style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; border-top: 1px solid #333; color: #ff8888; cursor: pointer; font: inherit;">Delete</button>
 </div>
 <div id="channels" hidden></div>
 <footer class="status-bar" aria-live="polite">
@@ -4476,12 +4849,22 @@
     /**
      * Dashboard is visible only when wsi.environment is development, or when the
      * browser holds an authenticated admin token (WSI-ADMIN-TOKEN / wsi.admin.token).
-     * When :8084 is listening, open the absolute loopback URL. When it is down,
-     * send the operator to the same-origin gate with start instructions (daemon
-     * mode) instead of a browser connection-refused page.
+     * When :8084 is listening, open the dashboard on this host (loopback when the
+     * viewer is opened as localhost, otherwise the same hostname on port 8084).
+     * When it is down, send the operator to the same-origin gate with start
+     * instructions (daemon mode) instead of a browser connection-refused page.
      */
     const DASHBOARD_ABSOLUTE_URL = "http://127.0.0.1:8084/";
     const DASHBOARD_GATE_URL = "/local-operations/";
+
+    function dashboardAbsoluteUrl() {
+        const host = String(window.location.hostname || "").toLowerCase();
+        if (!host || host === "127.0.0.1" || host === "localhost") {
+            return DASHBOARD_ABSOLUTE_URL;
+        }
+        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+        return protocol + "//" + window.location.hostname + ":8084/";
+    }
 
     function isDevelopmentEnvironment(environment) {
         const normalized = String(environment || "").trim().toLowerCase();
@@ -4502,7 +4885,7 @@
         link.hidden = false;
         link.removeAttribute("aria-disabled");
         link.removeAttribute("tabindex");
-        link.setAttribute("href", DASHBOARD_ABSOLUTE_URL);
+        link.setAttribute("href", dashboardAbsoluteUrl());
     }
 
     async function localOpsDashboardIsListening() {
@@ -4523,12 +4906,12 @@
         const link = document.getElementById("dashboard-link");
         if (!link || link.dataset.outboundBound === "true") return;
         link.dataset.outboundBound = "true";
-        link.setAttribute("href", DASHBOARD_ABSOLUTE_URL);
+        link.setAttribute("href", dashboardAbsoluteUrl());
         link.addEventListener("click", event => {
             if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
-            window.open(DASHBOARD_ABSOLUTE_URL, "_blank");
+            window.open(dashboardAbsoluteUrl(), "_blank");
         });
     }
 
@@ -4539,7 +4922,6 @@
             bindDashboardOutboundNavigation();
             syncDashboardLinkVisibility(environment);
             await WsiCsrf.initialize();
-            imageInfoElement.open = localStorage.getItem(`${STORAGE_PREFIX}.imageInfoOpen`) !== "closed";
             const result = await request("/api/images");
             const directoryEl = document.getElementById("directory");
             if (directoryEl) directoryEl.textContent = result.directory;
@@ -4674,7 +5056,9 @@
             return 0;
         }
         const expanded = new Set(Array.from(imageListElement.querySelectorAll("details[open] summary"), summary => summary.textContent.replace(/ \(\d+\)$/, "")));
-        const scrollTop = document.getElementById("images-panel").scrollTop;
+        const scrollTop = document.getElementById("image-list")?.scrollTop
+            ?? document.getElementById("images-panel")?.scrollTop
+            ?? 0;
         renderImageList(images);
         for (const details of imageListElement.querySelectorAll("details")) {
             const folder = details.querySelector("summary").textContent.replace(/ \(\d+\)$/, "");
@@ -4689,7 +5073,9 @@
         }
         document.querySelectorAll(".image-button").forEach(button =>
             button.classList.toggle("active", selectedImage && button.dataset.imageId === selectedImage.id));
-        document.getElementById("images-panel").scrollTop = scrollTop;
+        const imageListScroller = document.getElementById("image-list")
+            || document.getElementById("images-panel");
+        if (imageListScroller) imageListScroller.scrollTop = scrollTop;
         return images.filter(image => !previousIds.has(image.id)).length;
     }
 
@@ -6054,10 +6440,6 @@
         headerToggle.setAttribute("aria-label", shortLabel);
         headerToggle.setAttribute("data-tooltip", `${shortLabel}\n${detail}`);
     }
-
-    imageInfoElement.addEventListener("toggle", () => localStorage.setItem(
-        `${STORAGE_PREFIX}.imageInfoOpen`, imageInfoElement.open ? "open" : "closed"
-    ));
 
     document.getElementById("toggle-left")?.addEventListener("click", () => setPanelCollapsed("left", !workspace.classList.contains("left-collapsed")));
     document.getElementById("toggle-right")?.addEventListener("click", () => setPanelCollapsed("right", !workspace.classList.contains("right-collapsed")));

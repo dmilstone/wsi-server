@@ -115,7 +115,11 @@ class AnnotationLabelLayer {
 
     syncAnnotation(annotation) {
         if (!annotation?.id) return;
-        const name = String(this.getName(annotation.id) || "").trim();
+        const name = String(
+            this.getName(annotation.id)
+            || annotation.name
+            || ""
+        ).trim();
         if (!name) {
             this.remove(annotation.id);
             return;

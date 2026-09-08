@@ -151,7 +151,8 @@ assert.match(adapterSource, /static nucleusVertexList\(/);
 assert.match(adapterSource, /static verticesToPointsString\(/);
 assert.match(adapterSource, /static mapPluginNucleiToOverlays\(/);
 assert.match(adapterSource, /fill", "rgba\(0,255,0,\.15\)"/);
-assert.doesNotMatch(adapterSource, /style\.borderRadius = "50%"/);
+assert.match(adapterSource, /createColorPickLoupe[\s\S]{0,500}style\.borderRadius = "50%"/);
+assert.doesNotMatch(adapterSource, /mapPluginNucleiToOverlays[\s\S]{0,1200}style\.borderRadius = "50%"/);
 assert.doesNotMatch(adapterSource, /host\.clearOverlays\(\)/);
 assert.match(adapterSource, /startDisabled:\s*true/);
 assert.match(adapterSource, /static setMeasureTracking\(/);
@@ -259,6 +260,13 @@ assert.match(html, /id="ai-boundary-tightness"/);
 assert.match(html, /id="ai-model-override"/);
 assert.match(html, /Force Fluorescence model/);
 assert.match(html, /Force H&amp;E \/ brightfield model/);
+assert.match(html, /id="ai-detector-selector"/);
+assert.match(html, /value="cellpose-segmentation"/);
+assert.match(html, /value="qupath-cell-detection"/);
+assert.match(html, /id="ai-advanced-cellpose-params"/);
+assert.match(html, /id="ai-advanced-qupath-params"/);
+assert.match(adapterSource, /static normalizeAiDetector\(/);
+assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
 
 (async () => {
     // Regression: the probability/NMS sliders must be read live (not cached) and
@@ -352,6 +360,44 @@ assert.match(html, /Force H&amp;E \/ brightfield model/);
     await AnnotationAdapter.runStarDistSegmentation({ root: defaultChannelRoot, viewer: null });
     assert.equal(capturedBody.channels.join(","), AnnotationAdapter.visiblePluginChannels().join(","),
         "\"Default Viewport\" must keep segmenting on whatever channels are visible in Brightness & Contrast");
+
+    const cellposeRoot = {
+        getElementById: (id) => {
+            if (id === "ai-detector-selector") return { value: "cellpose-segmentation" };
+            if (id === "ai-cellpose-model") return { value: "cyto2" };
+            if (id === "ai-cellpose-diameter") return { value: "28" };
+            if (id === "ai-prob-threshold") return { value: "0.5" };
+            if (id === "ai-nms-threshold") return { value: "0.4" };
+            return null;
+        }
+    };
+    await AnnotationAdapter.runNucleiDetectionPlugin({ root: cellposeRoot, viewer: null });
+    assert.equal(capturedBody.pluginId, "cellpose-segmentation",
+        "the AI Labs detector list must send Cellpose to /api/plugins/execute");
+    assert.equal(capturedBody.modelOverride, "cyto2");
+    assert.equal(capturedBody.diameter, 28);
+
+    const qupathRoot = {
+        getElementById: (id) => {
+            if (id === "ai-detector-selector") return { value: "qupath-cell-detection" };
+            if (id === "ai-qupath-background-radius") return { value: "6" };
+            if (id === "ai-qupath-sigma") return { value: "1.2" };
+            if (id === "ai-qupath-min-area") return { value: "12" };
+            if (id === "ai-qupath-max-area") return { value: "350" };
+            if (id === "ai-qupath-cell-expansion") return { value: "5" };
+            if (id === "ai-prob-threshold") return { value: "0.5" };
+            if (id === "ai-nms-threshold") return { value: "0.4" };
+            return null;
+        }
+    };
+    await AnnotationAdapter.runNucleiDetectionPlugin({ root: qupathRoot, viewer: null });
+    assert.equal(capturedBody.pluginId, "qupath-cell-detection",
+        "the AI Labs detector list must send QuPath Cell Detection to /api/plugins/execute");
+    assert.equal(capturedBody.backgroundRadius, 6);
+    assert.equal(capturedBody.sigma, 1.2);
+    assert.equal(capturedBody.minArea, 12);
+    assert.equal(capturedBody.maxArea, 350);
+    assert.equal(capturedBody.cellExpansion, 5);
 
     // Regression: there was no dedicated Heat Map button — only a dropdown + "Run"
     // combo that silently no-oped without nuclei segmented first, and no way to

@@ -34,20 +34,22 @@ function fakeShape() {
 assert.equal(AnnotationAdapter.annotationFillEnabled, false);
 assert.equal(AnnotationAdapter.detectionFillEnabled, false);
 
-// applyOsdAnnotationStyle: fill-opacity tracks annotationFillEnabled independently of the
-// "fill" color attribute itself (which still tracks the filled/not-fillable distinction).
+// applyOsdAnnotationStyle: interiors stay fill="none" while annotationFillEnabled is
+// false so Chrome cannot paint a pale-blue ::selection over the fill region.
 {
     AnnotationAdapter.annotationFillEnabled = false;
     const node = fakeShape();
     AnnotationAdapter.applyOsdAnnotationStyle(node, { filled: true });
-    assert.equal(node.attrs.fill, AnnotationAdapter.OSD_ANNOTATION_FILL,
-        "fill color must still be set even while fill-opacity is 0");
+    assert.equal(node.attrs.fill, "none",
+        "fillable shapes must use fill=none while annotationFillEnabled is false");
+    assert.equal(node.attrs["data-fillable"], "1");
     assert.equal(node.attrs["fill-opacity"], "0",
         "fill-opacity must be 0 while annotationFillEnabled is false");
 
     AnnotationAdapter.annotationFillEnabled = true;
     const node2 = fakeShape();
     AnnotationAdapter.applyOsdAnnotationStyle(node2, { filled: true });
+    assert.equal(node2.attrs.fill, AnnotationAdapter.OSD_ANNOTATION_FILL);
     assert.equal(node2.attrs["fill-opacity"], "1",
         "fill-opacity must be 1 while annotationFillEnabled is true");
 
@@ -56,6 +58,7 @@ assert.equal(AnnotationAdapter.detectionFillEnabled, false);
     const node3 = fakeShape();
     AnnotationAdapter.applyOsdAnnotationStyle(node3, { filled: false });
     assert.equal(node3.attrs.fill, "none");
+    assert.equal(node3.attrs["data-fillable"], "0");
 
     AnnotationAdapter.annotationFillEnabled = false;
 }
@@ -201,5 +204,11 @@ assert.match(html, /<b>F<\/b><\/td><td>Toggle Detection \(Nuclei\) Interior Fill
 assert.match(html, /<b>Shift\+F<\/b><\/td><td>Toggle Annotation Interior Fill Color/);
 assert.match(html, /<td>Ctrl\+Shift\+F<\/td><td>Open\/Close Pilot Feedback Panel/);
 assert.match(html, /<b style="color:#FFCC00;">Ctrl\+Shift\+T<\/b>/);
+
+assert.match(html, /\.osd-annotation-shape\s*\{[^}]*fill:\s*none/);
+assert.match(html, /\.osd-annotation-shape\[fill-opacity="1"\]:not\(\[fill="none"\]\)/);
+assert.match(html, /pointer-events:\s*all !important/);
+assert.match(html, /-webkit-tap-highlight-color:\s*transparent/);
+assert.match(html, /user-select:\s*none/);
 
 console.log("annotation-fill-toggle.test.js: ok");

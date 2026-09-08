@@ -16,6 +16,10 @@ assert.match(html, /id="floating-channel-palette"/);
 assert.match(html, /id="floating-channel-palette-handle"/);
 assert.match(html, /id="floating-channel-palette-close"/);
 assert.match(html, /id="floating-channel-histogram"/);
+assert.match(html, /id="fcp-log-histogram"/);
+assert.match(html, /Log histogram/);
+assert.match(adapterSource, /static histogramBarHeights\(/);
+assert.match(adapterSource, /Math\.log1p/);
 assert.match(html, /class="bc-channels-grid"/);
 assert.match(html, /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(100px,\s*1fr\)\)/);
 assert.match(html, /overflow-y:\s*auto\s*!important/);
@@ -92,9 +96,10 @@ assert.doesNotMatch(html, /❓ Help/);
 assert.doesNotMatch(html, /💬 Feedback/);
 assert.match(html, /id="help-directory-link"[^>]*>\?</);
 assert.match(html, />Feedback</);
-assert.match(html, />Reset<\/button>[\s\S]*?>Auto<\/button>[\s\S]*?>Delete All<\/button>[\s\S]*?>🔬 AI Labs<\/button>[\s\S]*?>\?<\/button>[\s\S]*?>🛠️ Tools<\/button>[\s\S]*?>Feedback</);
+assert.match(html, />Reset<\/button>[\s\S]*?>Auto<\/button>[\s\S]*?>Delete<\/button>[\s\S]*?>Delete All<\/button>[\s\S]*?>🔬 AI Labs<\/button>[\s\S]*?>\?<\/button>[\s\S]*?>🛠️ Tools<\/button>[\s\S]*?>Feedback</);
 assert.match(html, /id="toggle-annotations-visibility-btn"[^>]*>👁️ Vec</);
 assert.match(html, /id="toggle-labels-visibility-btn"[^>]*>👁️ Lbl</);
+assert.match(html, /id="delete-selected-annotations-btn"[^>]*>Delete</);
 assert.match(html, /id="clear-all-annotations-btn"[^>]*>Delete All</);
 assert.match(html, /id="home-view"[^>]*>🏠[\s\S]*?id="show-advanced-channel-palette"[\s\S]*?id="toggle-annotations-visibility-btn"[\s\S]*?id="toggle-labels-visibility-btn"/);
 assert.match(adapterSource, /static bindLayerVisibilityAndSanitizeControls\(/);
@@ -123,12 +128,18 @@ assert.match(adapterSource, /case "w": \/\/ QuPath: Wand/);
 assert.match(adapterSource, /case "s": \/\/ QuPath: Selection/);
 assert.match(adapterSource, /case "c": \/\/ Brightness & Contrast palette/);
 assert.match(adapterSource, /case "z": \/\/ QuPath: Zoom/);
+assert.match(adapterSource, /case "delete":/);
+assert.match(adapterSource, /case "backspace":/);
+assert.match(adapterSource, /promptDeleteSelectedAnnotations/);
+assert.match(adapterSource, /Delete this annotation\? This cannot be undone\./);
 assert.match(adapterSource, /case "d": \/\/ Toggle detected nuclei\/objects visibility/);
 assert.match(adapterSource, /getElementById\("qp-tool-brush"\)/);
 assert.match(adapterSource, /getElementById\("qp-tool-zoom"\)/);
 assert.match(adapterSource, /window\.currentActiveTool/);
 assert.match(adapterSource, /static activateQuPathTool\(/);
 assert.match(adapterSource, /static onQuPathPointerDown\(/);
+assert.match(adapterSource, /static annotationToolBlocksDragPan\(/);
+assert.match(adapterSource, /addEventListener\("pointerdown"/);
 assert.match(adapterSource, /static finishQuPathClickPath\(/);
 assert.match(adapterSource, /getElementById\("toggle-annotations-visibility-btn"\)/);
 assert.match(adapterSource, /getElementById\("toggle-labels-visibility-btn"\)/);
@@ -294,6 +305,17 @@ assert.doesNotMatch(html, /toolbar-case-cluster/);
 assert.match(html, /ops-display-group/);
 assert.match(html, /toolbar-ops-spacer/);
 assert.match(html, /id="image-info"/);
+assert.match(html, /id="qp-analysis-tabs"/);
+assert.match(html, /id="qp-tab-slides"/);
+assert.match(html, /id="qp-tab-image"/);
+assert.match(html, /id="qp-tab-annotations"/);
+assert.match(html, /id="qp-view-slides"/);
+assert.match(html, /id="qp-view-image"/);
+assert.match(html, /id="qp-view-annotations"/);
+assert.match(html, /id="qp-annotation-list"/);
+assert.match(html, /Image information/);
+assert.match(html, /<h2 id="image-info-heading">Image information<\/h2>/);
+assert.doesNotMatch(html, /<details id="image-info"/);
 assert.match(html, /id="floating-zstack-minimize"/);
 assert.match(html, /\.zstack-minimized/);
 assert.match(adapterSource, /static toggleFloatingZStackMinimized\(/);
@@ -570,6 +592,11 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     const bins = AnnotationAdapter.histogramBinsFromPixelBlock(block, 0, 8);
     assert.equal(bins.length, 8);
     assert.ok(bins.some(count => count > 0));
+    const linear = AnnotationAdapter.histogramBarHeights([1, 1000], false);
+    const logged = AnnotationAdapter.histogramBarHeights([1, 1000], true);
+    assert.equal(linear.values[0] / linear.max, 1 / 1000);
+    assert.equal(logged.values[1], Math.log1p(1000));
+    assert.ok(logged.values[0] / logged.max > linear.values[0] / linear.max);
 }
 
 {
@@ -1103,7 +1130,12 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     assert.equal(AnnotationAdapter.currentActiveTool, "rectangle");
     assert.equal(navEnabled, true);
     assert.equal(AnnotationAdapter.viewer.gestureSettingsMouse.scrollToZoom, true);
+    assert.equal(AnnotationAdapter.viewer.gestureSettingsMouse.dragToPan, false);
+    assert.equal(AnnotationAdapter.annotationToolBlocksDragPan("rectangle"), true);
+    assert.equal(AnnotationAdapter.annotationToolBlocksDragPan("polygon"), true);
+    assert.equal(AnnotationAdapter.activateQuPathTool("move"), true);
     assert.equal(AnnotationAdapter.viewer.gestureSettingsMouse.dragToPan, true);
+    assert.equal(AnnotationAdapter.annotationToolBlocksDragPan("move"), false);
     const squared = AnnotationAdapter.applyQuPathShiftConstraint(
         { overlayX: 10, overlayY: 20, image: { x: 10, y: 20 } },
         { overlayX: 40, overlayY: 30, image: { x: 40, y: 30 } },
@@ -1350,6 +1382,300 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     const click = listeners.find(([type]) => type === "click")?.[1];
     click({ preventDefault() {}, stopPropagation() {} });
     assert.equal(closed, 1);
+}
+
+assert.match(adapterSource, /static isQuPathUiChrome\(/);
+assert.match(adapterSource, /QUPATH_UI_CHROME_SELECTOR/);
+assert.match(adapterSource, /rebuildRows: false/);
+assert.match(adapterSource, /if \(AnnotationAdapter\.isQuPathUiChrome\(event\.target\)\) return;/);
+
+{
+    const chrome = {
+        id: "floating-channel-palette",
+        closest(sel) {
+            return String(sel).includes("#floating-channel-palette") ? this : null;
+        }
+    };
+    const swatch = {
+        className: "fcp-swatch",
+        closest(sel) {
+            if (String(sel).includes("#floating-channel-palette")
+                || String(sel).includes("aside")
+                || String(sel).includes(".fcp-swatch")) {
+                return chrome;
+            }
+            return null;
+        }
+    };
+    const shape = {
+        className: "osd-annotation-shape",
+        closest(sel) {
+            if (String(sel).includes("[data-qp-preview]")) return null;
+            if (String(sel).includes("osd-annotation-shape")) return this;
+            return null;
+        },
+        getAttribute() { return "ann-under-palette"; }
+    };
+    assert.equal(AnnotationAdapter.isQuPathUiChrome(swatch), true);
+    const prevDoc = context.document;
+    context.document = {
+        elementsFromPoint() { return [swatch, chrome, shape]; },
+        getElementById() { return null; },
+        addEventListener() {},
+        querySelectorAll() { return []; }
+    };
+    assert.equal(AnnotationAdapter.annotationShapeFromEvent({
+        target: swatch,
+        clientX: 120,
+        clientY: 160
+    }), null);
+    AnnotationAdapter.currentActiveTool = "selection";
+    assert.equal(AnnotationAdapter.onQuPathPointerDown({
+        target: swatch,
+        clientX: 120,
+        clientY: 160,
+        button: 0,
+        preventDefault() {},
+        stopPropagation() {}
+    }), false);
+    context.document = prevDoc;
+}
+
+{
+    let replaced = 0;
+    const existing = [
+        { classList: { toggle() {} } },
+        { classList: { toggle() {} } }
+    ];
+    const grid = {
+        querySelectorAll() { return existing; },
+        replaceChildren() { replaced += 1; }
+    };
+    const palette = {
+        querySelector(sel) {
+            if (sel === "#floating-channel-palette-rows") return grid;
+            if (sel === "#fcp-min" || sel === "#fcp-max") return { value: "0", max: "" };
+            if (sel === "#fcp-gamma") return { value: "1" };
+            return null;
+        }
+    };
+    AnnotationAdapter.channelPaletteElement = palette;
+    AnnotationAdapter.channelPaletteSelectedIndex = 1;
+    AnnotationAdapter.displayController = {
+        getDisplay() {
+            return {
+                channels: [
+                    { index: 0, name: "A", lut: "CYAN", visible: true, black: 0, white: 255, gamma: 1 },
+                    { index: 1, name: "B", lut: "GREEN", visible: true, black: 0, white: 255, gamma: 1 }
+                ]
+            };
+        }
+    };
+    assert.equal(AnnotationAdapter.syncFloatingChannelPalette(null, { rebuildRows: false }), true);
+    assert.equal(replaced, 0);
+}
+
+assert.match(adapterSource, /static sampleDisplayedColorAtClient\(/);
+assert.match(adapterSource, /static startChannelColorDisplayPick\(/);
+assert.match(adapterSource, /static startScreenWideColorPick\(/);
+assert.match(adapterSource, /static isColorPickerInactiveTarget\(/);
+assert.match(adapterSource, /data-qp-pick-enable/);
+assert.match(adapterSource, />\s*choose color\s*</);
+assert.doesNotMatch(adapterSource, /Pick from display/);
+assert.doesNotMatch(adapterSource, /Inactive over the color grid/);
+assert.match(adapterSource, /startScreenWideColorPick\(index, doc,/);
+assert.doesNotMatch(adapterSource, /Pick from screen/);
+assert.match(html, /qp-color-pick-toggle/);
+assert.match(adapterSource, /static createColorPickLoupe\(/);
+assert.match(adapterSource, /static read2dCanvasPixel\(/);
+assert.match(html, /qp-color-pick-preview/);
+assert.match(html, /qp-color-pick-loupe/);
+assert.doesNotMatch(html, /qp-color-pick-loupe-invert/);
+assert.doesNotMatch(html, /mix-blend-mode:\s*difference/);
+assert.equal(AnnotationAdapter.screenColorPickerAvailable(), false);
+assert.equal(AnnotationAdapter.startScreenWideColorPick(0), false);
+
+{
+    const loupe = { style: {}, hidden: true };
+    const menu = { querySelector() { return null; } };
+    assert.equal(AnnotationAdapter.refreshChannelColorPickPreview(null, menu, loupe, 40, 50), false);
+    assert.equal(loupe.hidden, false);
+    assert.equal(loupe.style.display, "block");
+    assert.equal(loupe.style.left, "54px");
+    AnnotationAdapter.refreshChannelColorPickPreview(null, menu, loupe);
+    assert.equal(loupe.hidden, true);
+    assert.equal(loupe.style.display, "none");
+}
+
+{
+    assert.equal(AnnotationAdapter.parseCssColorToHex("#0af"), "#00aaff");
+    assert.equal(AnnotationAdapter.parseCssColorToHex("rgb(255, 0, 128)"), "#ff0080");
+    assert.equal(AnnotationAdapter.parseCssColorToHex("transparent"), null);
+    const swatch = {
+        dataset: { color: "#12ab34" },
+        style: {},
+        closest(sel) {
+            return String(sel).includes("fcp-swatch") ? this : null;
+        }
+    };
+    assert.equal(AnnotationAdapter.sampleUiColorFromNode(swatch), "#12ab34");
+    const chrome = {
+        closest(sel) {
+            return String(sel).includes("#floating-channel-palette") ? this : null;
+        }
+    };
+    assert.equal(AnnotationAdapter.sampleColorForChannelAssignment({
+        target: chrome,
+        clientX: 101,
+        clientY: 51
+    }), null);
+}
+
+{
+    const pixels = [10, 20, 30, 255];
+    const canvas = {
+        width: 4,
+        height: 4,
+        getBoundingClientRect() { return { left: 100, top: 50, right: 104, bottom: 54, width: 4, height: 4 }; },
+        getContext() {
+            return {
+                getImageData() { return { data: pixels }; }
+            };
+        }
+    };
+    AnnotationAdapter.viewer = {
+        drawer: { canvas },
+        element: canvas
+    };
+    assert.equal(AnnotationAdapter.sampleDisplayedColorAtClient(101, 51), "#0a141e");
+    assert.equal(AnnotationAdapter.sampleDisplayedColorAtClient(10, 10), null);
+}
+
+{
+    const pixels = [9, 8, 7, 255];
+    const canvas = {
+        width: 2,
+        height: 2,
+        tagName: "CANVAS",
+        getBoundingClientRect() { return { left: 0, top: 0, right: 2, bottom: 2, width: 2, height: 2 }; },
+        getContext(type, opts) {
+            if (opts && opts.willReadFrequently) return null;
+            if (type === "2d") return { getImageData() { return { data: pixels }; } };
+            return null;
+        }
+    };
+    AnnotationAdapter.viewer = { drawer: { canvas }, element: canvas };
+    assert.equal(AnnotationAdapter.sampleDisplayedColorAtClient(1, 1), "#090807");
+}
+
+{
+    const applied = [];
+    const channels = [{ index: 0, lut: "CYAN", color: "#00ffff" }];
+    AnnotationAdapter.displayController = {
+        getDisplay() { return { channels }; },
+        syncChannelControls() {},
+        scheduleDisplayUpdate() {}
+    };
+    AnnotationAdapter.channelPaletteElement = { querySelector() { return null; } };
+    const prevApply = AnnotationAdapter.applyChannelPaletteColor;
+    AnnotationAdapter.applyChannelPaletteColor = (index, hex) => {
+        applied.push([index, hex]);
+        return true;
+    };
+    const menu = { querySelector() { return { style: {}, textContent: "" }; } };
+    const listeners = [];
+    const prevDoc = context.document;
+    context.document = {
+        body: { appendChild() {} },
+        documentElement: { classList: { add() {}, remove() {} } },
+        addEventListener(type, fn) { listeners.push([type, fn]); },
+        removeEventListener() {},
+        getElementById() { return null; },
+        createElement() {
+            return {
+                style: {},
+                setAttribute() {},
+                hidden: true,
+                innerHTML: "",
+                querySelector() { return { style: {} }; }
+            };
+        }
+    };
+    assert.equal(AnnotationAdapter.startChannelColorDisplayPick(0, menu), true);
+    const down = listeners.find(([type]) => type === "pointerdown")?.[1];
+    const pixels = [255, 17, 34, 255];
+    const canvas = {
+        width: 2,
+        height: 2,
+        getBoundingClientRect() { return { left: 0, top: 0, right: 2, bottom: 2, width: 2, height: 2 }; },
+        getContext() { return { getImageData() { return { data: pixels }; } }; }
+    };
+    AnnotationAdapter.viewer = { drawer: { canvas }, element: canvas, canvas };
+    down({
+        clientX: 1,
+        clientY: 1,
+        target: { closest() { return null; } },
+        preventDefault() {},
+        stopPropagation() {}
+    });
+    assert.deepEqual(applied, [[0, "#ff1122"]]);
+    const swatch = {
+        dataset: { color: "#aabbcc" },
+        style: {},
+        closest(sel) {
+            if (String(sel).includes("fcp-swatch")) return this;
+            return null;
+        }
+    };
+    assert.equal(AnnotationAdapter.startChannelColorDisplayPick(0, menu), true);
+    const downAgain = listeners.filter(([type]) => type === "pointerdown").at(-1)?.[1];
+    downAgain({
+        clientX: 0,
+        clientY: 0,
+        target: swatch,
+        preventDefault() {},
+        stopPropagation() {}
+    });
+    assert.deepEqual(applied, [[0, "#ff1122"], [0, "#aabbcc"]]);
+    assert.equal(AnnotationAdapter.startChannelColorDisplayPick(0, menu), true);
+    const downGrid = listeners.filter(([type]) => type === "pointerdown").at(-1)?.[1];
+    const beforeGrid = applied.length;
+    downGrid({
+        clientX: 1,
+        clientY: 1,
+        target: {
+            closest(sel) {
+                return String(sel).includes("qp-color-grid") || String(sel).includes("#qp-color-chooser")
+                    ? this
+                    : null;
+            }
+        },
+        preventDefault() {},
+        stopPropagation() {}
+    });
+    assert.equal(applied.length, beforeGrid);
+    assert.equal(AnnotationAdapter.isColorPickerInactiveTarget({
+        closest(sel) { return String(sel).includes("qp-color-grid") ? this : null; }
+    }), true);
+    assert.equal(Boolean(AnnotationAdapter._colorDisplayPick), true);
+    AnnotationAdapter.stopChannelColorDisplayPick();
+    assert.equal(AnnotationAdapter._colorDisplayPick, null);
+    AnnotationAdapter.applyChannelPaletteColor = prevApply;
+    context.document = prevDoc;
+}
+
+{
+    const applied = [];
+    const prevApply = AnnotationAdapter.applyChannelPaletteColor;
+    AnnotationAdapter.applyChannelPaletteColor = (index, hex) => {
+        applied.push([index, hex]);
+        return true;
+    };
+    AnnotationAdapter._eyeDropperGeneration = 7;
+    assert.equal(AnnotationAdapter.consumeEyeDropperResult(0, { sRGBHex: "#112233" }, null, 7), true);
+    assert.deepEqual(applied, [[0, "#112233"]]);
+    assert.equal(AnnotationAdapter.consumeEyeDropperResult(0, { sRGBHex: "#445566" }, null, 7), false);
+    AnnotationAdapter.applyChannelPaletteColor = prevApply;
 }
 
 console.log("floating-channel-palette.test.js: ok");

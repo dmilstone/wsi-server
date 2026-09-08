@@ -78,7 +78,18 @@ names.set("two", "界".repeat(200));
 names.set("blank", "   ");
 layer.beginImage("image-one");
 assert.equal(layer.sync("image-one"), true);
-assert.equal(layer.labels.size, 2);
+assert.equal(layer.labels.size, 2, "blank getName must not invent a type+index label");
+{
+    const fromRecord = shape("rec-name", 90, 100);
+    fromRecord.name = "Tumor margin";
+    fromRecord.type = "wand";
+    annotations.push(fromRecord);
+    layer.sync("image-one");
+    assert.equal(layer.labels.get("rec-name")?.element.textContent, "Tumor margin",
+        "canvas label must use the annotation name field, not wand1");
+    annotations.pop();
+    layer.sync("image-one");
+}
 assert.equal(layer.labels.get("one").element.textContent, "Région 🧬, #2! <b>plain</b>");
 assert.equal(layer.labels.get("one").element.children.length, 0, "name is never parsed as markup");
 assert.equal(layer.labels.get("two").element.title, "界".repeat(200), "full bounded name remains available");
