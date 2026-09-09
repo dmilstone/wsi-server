@@ -44,7 +44,7 @@ final class UserAdministrationGuideContent {
                         "The slide ingestion pipeline is a manual three-click protocol on your local loopback operations panel.",
                         List.of(
                                 new Bullet("The Environment",
-                                        "The local operations dashboard listens on http://127.0.0.1:8084/ by default. Non-loopback clients are rejected unless a CIDR allowlist is configured."),
+                                        "The local operations dashboard listens on https://127.0.0.1:8084/ by default. Non-loopback clients are rejected unless a CIDR allowlist is configured."),
                                 new Bullet("Pre-Ingestion Step",
                                         "Place each complete virtual microscope dataset inside one top-level directory under your local staging path (/Users/dm026/wsi-ingest-staging). Warning: Never move a lone .vsi file without its companion data folder.")
                         ),

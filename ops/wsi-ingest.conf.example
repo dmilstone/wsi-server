@@ -14,7 +14,7 @@ export WSI_INGEST_MIN_QUIET_SECONDS=120
 # these to override them.
 # export WSI_INGEST_DAEMON_POLL_SECONDS=30
 # export WSI_INGEST_DAEMON_INTEGRITY_RETRY_LIMIT=5
-# export WSI_INGEST_DAEMON_REFRESH_URL="http://127.0.0.1:8080"
+# export WSI_INGEST_DAEMON_REFRESH_URL="https://127.0.0.1:8080"
 # export WSI_INGEST_DAEMON_LOG="/path/to/staging/.wsi-ingest-control/daemon/daemon.log.jsonl"
 
 # Optional: sources datasets from a network share instead of (or in addition

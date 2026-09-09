@@ -4903,7 +4903,7 @@
      * When it is down, send the operator to the same-origin gate with start
      * instructions (daemon mode) instead of a browser connection-refused page.
      */
-    const DASHBOARD_ABSOLUTE_URL = "http://127.0.0.1:8084/";
+    const DASHBOARD_ABSOLUTE_URL = "https://127.0.0.1:8084/";
     const DASHBOARD_GATE_URL = "/local-operations/";
 
     function dashboardAbsoluteUrl() {
@@ -4911,8 +4911,7 @@
         if (!host || host === "127.0.0.1" || host === "localhost") {
             return DASHBOARD_ABSOLUTE_URL;
         }
-        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-        return protocol + "//" + window.location.hostname + ":8084/";
+        return "https://" + window.location.hostname + ":8084/";
     }
 
     function isDevelopmentEnvironment(environment) {

@@ -12,9 +12,11 @@ import ipaddress
 import json
 import os
 import secrets
+import ssl
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http import HTTPStatus
@@ -123,6 +125,48 @@ def tls_files():
         return cert, key
     return None
 
+
+PKCS12_KEYSTORE = REPO_ROOT / "src" / "main" / "resources" / "keystore.p12"
+PKCS12_PASSWORD = "changeit"
+
+
+def tls_ssl_context():
+    """TLS 1.3 server context from PEM env files or the PKCS12 keystore."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    try:
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+    except ValueError:
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+    files = tls_files()
+    if files:
+        context.load_cert_chain(files[0], files[1])
+        return context
+    if not PKCS12_KEYSTORE.is_file():
+        raise RuntimeError("PKCS12 keystore is missing")
+    env = os.environ.copy()
+    env["WSI_OPS_KEYSTORE_PASS"] = PKCS12_PASSWORD
+    material = subprocess.run(
+        ["openssl", "pkcs12", "-in", str(PKCS12_KEYSTORE), "-nodes", "-passin", "env:WSI_OPS_KEYSTORE_PASS"],
+        capture_output=True, env=env,
+    )
+    if material.returncode != 0 or not material.stdout:
+        raise RuntimeError("PKCS12 keystore could not be read")
+    fd, pem_path = tempfile.mkstemp(prefix="wsi-tls-", suffix=".pem")
+    try:
+        os.write(fd, material.stdout)
+        os.close(fd)
+        fd = -1
+        os.chmod(pem_path, 0o600)
+        context.load_cert_chain(pem_path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(pem_path)
+        except OSError:
+            pass
+    return context
+
 # Environment/configuration controls (development only for now -- see
 # docs/LOCAL-OPS-DASHBOARD-VALIDATION.md before widening scope to other
 # environments). Kept as plain module constants, overridable per-Dashboard-
@@ -170,6 +214,19 @@ def _load_network_drop():
 
 
 network_drop = _load_network_drop()
+
+
+def _load_wsi_paths():
+    path = HERE / "wsi_paths.py"
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("wsi_paths", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+wsi_paths = _load_wsi_paths()
 
 
 def _load_service_control():
@@ -442,7 +499,7 @@ def native_choose_folder(prompt, start_dir):
     script_parts.append(")")
     script = "".join(script_parts)
     try:
-        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, shell=False)
     except OSError as error:
         return "error", str(error)
     if result.returncode == 0:
@@ -516,7 +573,10 @@ def browse_breadcrumbs(directory):
     /browse dialog -- e.g. Path("/Volumes/SHARE") -> [("/", "/"),
     ("Volumes", "/Volumes"), ("SHARE", "/Volumes/SHARE")]."""
     parts = directory.parts
-    return [(parts[index] if index else "/", str(Path(*parts[:index + 1]))) for index in range(len(parts))]
+    crumbs = []
+    for index in range(len(parts)):
+        crumbs.append((parts[index], str(Path(*parts[:index + 1]))))
+    return crumbs
 
 
 def browse_href(target, current_value):
@@ -768,12 +828,8 @@ class OpsHTTPServer(ThreadingHTTPServer):
         bind = dashboard.bind_address
         port = dashboard.listen_port
         super().__init__((bind, port), handler_class or Handler, bind_and_activate=True)
-        if dashboard.tls_files:
-            import ssl
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
-            context.load_cert_chain(dashboard.tls_files[0], dashboard.tls_files[1])
-            self.socket = context.wrap_socket(self.socket, server_side=True)
+        self.socket = tls_ssl_context().wrap_socket(self.socket, server_side=True)
+        dashboard.secure_cookies = True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -993,17 +1049,36 @@ class Handler(BaseHTTPRequestHandler):
     def resolve_browse_start(self, target, raw_path):
         """The directory /browse should actually display: raw_path (from the
         clicked link/query string) if it is currently real, else the target
-        field's own current value if that is, else /Volumes or / -- always
-        something, since / always exists."""
+        field's own current value if that is, else WSI_HOME / the user home /
+        the host volume root -- always something that exists on this OS."""
         for candidate in (raw_path, self.current_target_value(target)):
             found = _existing_readable_directory(candidate)
             if found is not None:
                 return found
-        for fallback in ("/Volumes", "/"):
-            found = _existing_readable_directory(fallback)
+        fallbacks = []
+        if wsi_paths is not None:
+            try:
+                fallbacks.extend(wsi_paths.browse_fallback_directories())
+            except OSError:
+                pass
+        if os.name == "nt":
+            try:
+                fallbacks.append(Path.home())
+                fallbacks.append(Path(Path.home().anchor))
+            except OSError:
+                pass
+        else:
+            fallbacks.extend((Path("/Volumes"), Path("/")))
+        seen = set()
+        for fallback in fallbacks:
+            key = str(fallback)
+            if key in seen:
+                continue
+            seen.add(key)
+            found = _existing_readable_directory(str(fallback))
             if found is not None:
                 return found
-        return Path("/")
+        return Path.home() if os.name == "nt" else Path("/")
 
     def render_browse(self, target, raw_path, csrf):
         """The click-through directory picker: breadcrumbs back up to /,

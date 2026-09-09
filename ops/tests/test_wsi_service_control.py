@@ -136,7 +136,7 @@ class ServiceControlTests(unittest.TestCase):
 
     def test_viewer_open_url_uses_remote_host(self):
         url = control.viewer_open_url({"remote_url": "http://192.0.2.10:8084"})
-        self.assertEqual(url, "http://192.0.2.10:8080/")
+        self.assertEqual(url, "https://192.0.2.10:8080/")
 
     def test_remote_call_sends_token_and_parses_json(self):
         class FakeResponse:
@@ -171,6 +171,27 @@ class ServiceControlTests(unittest.TestCase):
     def test_normalize_remote_url_rejects_non_http(self):
         with self.assertRaises(control.ServiceError):
             control.normalize_remote_url("file:///etc/passwd")
+
+    def test_runtime_defaults_use_wsi_home_not_hardcoded_macos_user(self):
+        source = (OPS / "wsi_service_control.py").read_text(encoding="utf-8")
+        self.assertNotIn("/Users/dm026", source)
+        retro = (OPS / "retro_build_metadata.py").read_text(encoding="utf-8")
+        self.assertNotIn("/Users/dm026", retro)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "WSI_HOME": tmp,
+                "WSI_IMAGE_DIRECTORY": "",
+                "WSI_PRODUCTION_ROOT": "",
+                "WSIHOME": "",
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                spec = importlib.util.spec_from_file_location("wsi_paths_under_test", OPS / "wsi_paths.py")
+                paths = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(paths)
+                self.assertEqual(paths.wsi_home(), Path(tmp))
+                self.assertEqual(paths.default_production_image_root(), Path(tmp) / "wsi-slides")
+                self.assertEqual(paths.default_production_server_root(), Path(tmp) / "wsi-server-production")
+                self.assertEqual(paths.under_wsi_home("a", "b"), Path(tmp) / "a" / "b")
 
 
 if __name__ == "__main__":

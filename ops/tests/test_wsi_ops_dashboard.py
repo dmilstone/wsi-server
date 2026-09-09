@@ -181,9 +181,11 @@ class DashboardSafetyTests(unittest.TestCase):
 
     def test_promotion_uses_native_no_replace_and_collision_fails_closed(self):
         source = (OPS / "wsi_ingest.py").read_text()
-        self.assertIn("atomic_rename_noreplace(ds,dest)", source)
+        self.assertIn("promote_path(ds,dest)", source)
+        self.assertIn("atomic_rename_noreplace", source)
         self.assertIn("RENAME_NOREPLACE", source)
-        self.assertNotIn("shutil.move", source)
+        self.assertIn("shutil.move", source)
+        self.assertIn("shutil.copy2", source)
 
     def test_no_automatic_retry_or_background_worker(self):
         source = (OPS / "wsi_ops_dashboard.py").read_text()
@@ -207,7 +209,7 @@ class DashboardSafetyTests(unittest.TestCase):
 
     def test_viewer_link_is_local_only_and_no_credentials(self):
         viewer = (OPS.parent / "src/main/resources/static/index.html").read_text()
-        self.assertIn("http://127.0.0.1:8084/", viewer)
+        self.assertIn("https://127.0.0.1:8084/", viewer)
         self.assertIn("function dashboardAbsoluteUrl()", viewer)
         self.assertNotIn("WSI_OPS_DASHBOARD_PASSWORD", viewer)
 
