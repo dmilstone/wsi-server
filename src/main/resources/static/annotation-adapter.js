@@ -294,6 +294,7 @@ class AnnotationAdapter {
 
         const imageInfo = root.getElementById("image-info");
         if (imageInfo) imageInfo.hidden = false;
+        AnnotationAdapter.applyDocumentTitle("", root);
 
         for (const id of [
             "z-controls-card",
@@ -2353,27 +2354,75 @@ class AnnotationAdapter {
         const root = doc || (typeof document !== "undefined" ? document : null);
         if (!root || typeof root.getElementById !== "function") return;
         const identity = AnnotationAdapter.buildHeaderIdentity(image);
+        const hideFolderLine = AnnotationAdapter.headerFolderLineIsPrefixOfSlide(
+            identity.caseId,
+            identity.slideDetail
+        );
         const caseEl = root.getElementById("header-case-id");
         const detailEl = root.getElementById("header-slide-detail");
         const selectedName = root.getElementById("selected-name");
         const currentName = root.getElementById("current-image-name");
-        if (caseEl) caseEl.textContent = identity.caseId || "";
-        if (detailEl) detailEl.textContent = identity.slideDetail || "";
+        if (caseEl) {
+            caseEl.textContent = hideFolderLine ? "" : (identity.caseId || "");
+            caseEl.hidden = hideFolderLine || !caseEl.textContent;
+        }
+        if (detailEl) {
+            detailEl.textContent = identity.slideDetail || "";
+            detailEl.hidden = !identity.slideDetail;
+        }
         if (selectedName) {
-            selectedName.textContent = identity.caseId
-                ? `${identity.caseId}${identity.slideDetail ? " · " + identity.slideDetail : ""}`
-                : (image?.name || "No image selected");
+            selectedName.textContent = hideFolderLine
+                ? identity.slideDetail
+                : (identity.caseId
+                    ? `${identity.caseId}${identity.slideDetail ? " · " + identity.slideDetail : ""}`
+                    : (image?.name || "No image selected"));
         }
         const hasIdentity = Boolean(identity.caseId || identity.slideDetail || image?.name);
         if (currentName) {
             currentName.hidden = !hasIdentity;
+            currentName.classList?.toggle?.("is-single-line", hideFolderLine);
             if (!identity.caseId && !identity.slideDetail && image?.name) {
-                if (caseEl) caseEl.textContent = image.name;
-                if (detailEl) detailEl.textContent = "";
+                if (caseEl) {
+                    caseEl.textContent = image.name;
+                    caseEl.hidden = false;
+                }
+                if (detailEl) {
+                    detailEl.textContent = "";
+                    detailEl.hidden = true;
+                }
+                currentName.classList?.remove?.("is-single-line");
             }
         }
         const legacyBlock = root.getElementById("brand-case-block");
         if (legacyBlock) legacyBlock.hidden = !hasIdentity;
+        const fileDesignation = hideFolderLine
+            ? identity.slideDetail
+            : (identity.slideDetail || identity.caseId || image?.name || "");
+        AnnotationAdapter.applyDocumentTitle(fileDesignation, root);
+    }
+
+    static DOCUMENT_TITLE_BASE = "WSI Viewer";
+
+    /** Browser tab title: "WSI Viewer" plus the on-disk slide designation when one is open. */
+    static applyDocumentTitle(slideDetail, root = null) {
+        const browsing = typeof document !== "undefined" ? document : null;
+        const source = root || browsing;
+        if (!source && !browsing) return "";
+        const titleNode = source?.getElementById?.("wsi-document-title")
+            || browsing?.getElementById?.("wsi-document-title")
+            || source?.querySelector?.("head > title")
+            || browsing?.querySelector?.("head > title");
+        const base = String(titleNode?.dataset?.normalTitle || AnnotationAdapter.DOCUMENT_TITLE_BASE).trim()
+            || AnnotationAdapter.DOCUMENT_TITLE_BASE;
+        const prefix = String(titleNode?.dataset?.titlePrefix || "").trim();
+        const file = String(slideDetail || "").trim();
+        const title = [prefix, base, file].filter(Boolean).join(" ");
+        if (titleNode) titleNode.textContent = title;
+        for (const doc of [source, browsing]) {
+            if (!doc) continue;
+            try { doc.title = title; } catch (_error) { /* ignore */ }
+        }
+        return title;
     }
 
     /**
@@ -3393,6 +3442,19 @@ class AnnotationAdapter {
                 : row.stem;
             return { image: row.image, title, stem: row.stem };
         });
+    }
+
+    /**
+     * True when the slide/file line already starts with the folder/case line, so
+     * the header should show only the slide designation on one line.
+     */
+    static headerFolderLineIsPrefixOfSlide(folderName, slideDetail) {
+        const folder = String(folderName || "").trim();
+        const slide = String(slideDetail || "").trim();
+        if (!folder || !slide) return false;
+        const folderKey = folder.toLocaleUpperCase();
+        const slideKey = slide.toLocaleUpperCase();
+        return slideKey === folderKey || slideKey.startsWith(folderKey);
     }
 
     /** Primary Case ID + secondary on-disk filename for the top header. */

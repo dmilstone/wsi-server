@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title data-normal-title="Fluorescence Sample Viewer">Fluorescence Sample Viewer</title>
+    <title id="wsi-document-title" data-normal-title="WSI Viewer">WSI Viewer</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
-    <script src="/environment-ui.js"></script>
+    <script src="/environment-ui.js?v=20260908-window-title"></script>
     <script src="/csrf.js"></script>
     <script src="/pilot-feedback.js"></script>
     <link rel="stylesheet" href="/pilot-feedback.css">
@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260908-analysis-tabs"></script>
+    <script src="/annotation-adapter.js?v=20260908-window-title2"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
@@ -112,13 +112,46 @@
         }
         .app-header-brand-row {
             display: flex;
-            align-items: flex-start;
+            flex-direction: row;
+            align-items: center;
             gap: 12px;
             width: 100%;
             min-width: 0;
             overflow: visible;
             padding: 0 14px;
             box-sizing: border-box;
+        }
+        .app-header-brand-left {
+            display: flex;
+            flex: 0 1 var(--sidebar-width);
+            align-items: center;
+            min-width: 180px;
+            max-width: var(--sidebar-width);
+        }
+        .app-header-brand-left .case-filter-combobox {
+            flex: 1 1 auto;
+            width: 100%;
+            max-width: 100%;
+            min-width: 140px;
+        }
+        .app-header-brand-left .case-filter-combobox > select.case-filter-native {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            min-width: 0;
+            min-height: 0;
+            max-width: none;
+            flex: none;
+            pointer-events: none;
+        }
+        .app-header-brand-right {
+            display: flex;
+            flex: 1 1 auto;
+            flex-direction: row;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 12px;
+            min-width: 0;
         }
         .brand {
             display: flex;
@@ -142,7 +175,18 @@
             flex: 0 0 auto;
         }
         .brand-copy { min-width: 0; flex: 0 0 auto; }
-        .brand-title { margin: 0; font-size: 1.125rem; line-height: 1.1; letter-spacing: .01em; white-space: nowrap; }
+        .brand-title {
+            margin: 0;
+            padding: 0.35em 0.7em;
+            border-radius: 0.5625rem;
+            background: linear-gradient(145deg, #347fc2, #65a6df);
+            color: white;
+            font-size: 1.125rem;
+            font-weight: 800;
+            letter-spacing: .01em;
+            white-space: nowrap;
+            box-shadow: 0 0.25rem 0.875rem rgba(36, 118, 190, .3);
+        }
         #current-image-name,
         .current-image-name {
             flex-grow: 1;
@@ -179,6 +223,17 @@
             line-height: 1.2;
             overflow-wrap: anywhere;
             word-break: break-word;
+        }
+        #current-image-name.is-single-line .header-case-id { display: none !important; }
+        #current-image-name.is-single-line .header-slide-detail {
+            margin-top: 0;
+            color: inherit;
+            font-size: inherit;
+            font-weight: inherit;
+            line-height: inherit;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            overflow: hidden;
         }
         .brand-current-image {
             display: none;
@@ -1090,9 +1145,9 @@
             flex-direction: row !important;
             align-items: center !important;
             width: auto;
-            padding: 0 8px 0 0;
+            padding: 0;
             box-sizing: border-box;
-            gap: 8px;
+            gap: 4px;
             flex: 0 0 auto;
             background: transparent;
         }
@@ -1107,23 +1162,6 @@
             font-size: 1.1em;
             line-height: 1;
             flex: 0 0 auto;
-        }
-        #sidebar-header-controls .case-filter-combobox {
-            flex: 0 1 220px;
-            width: auto;
-            max-width: 240px;
-            min-width: 140px;
-            min-height: 32px;
-        }
-        #sidebar-header-controls .case-filter-combobox > select.case-filter-native {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            min-width: 0;
-            min-height: 0;
-            max-width: none;
-            flex: none;
-            pointer-events: none;
         }
         .toolbar-docs-row .header-app-nav {
             flex: 1 1 auto;
@@ -1596,6 +1634,14 @@
             margin-left: auto;
             padding-left: 8px;
             border-left: 0;
+        }
+        #primary-unified-toolbar.toolbar-ops-row {
+            justify-content: flex-start;
+            gap: 6px;
+        }
+        #primary-unified-toolbar .primary-left-group + .primary-center-group {
+            margin-left: 4px;
+            padding-left: 4px;
         }
         .toolbar-ops-row a.toolbar-chip {
             text-decoration: none;
@@ -3881,43 +3927,46 @@
 <div id="environment-banner" class="environment-banner" role="status" aria-live="polite" hidden></div>
 <header class="app-header">
     <div class="app-header-brand-row">
-        <div class="brand">
-            <div class="brand-mark" aria-hidden="true">WS</div>
-            <div class="brand-copy">
-                <h1 class="brand-title">WSI Viewer</h1>
-                <div class="brand-current-image" hidden>
-                    <div class="header-label">Current image</div>
-                    <div id="selected-name">No image selected</div>
-                </div>
+        <div class="app-header-brand-left">
+            <div class="case-filter-combobox" id="case-filter-combobox">
+                <label class="visually-hidden" for="case-filter-search">Search slides</label>
+                <input type="text" id="case-filter-search" class="case-filter-search"
+                       role="combobox" aria-expanded="false" aria-autocomplete="list"
+                       aria-controls="case-filter-listbox" aria-haspopup="listbox"
+                       placeholder="Search slides..." autocomplete="off" autocorrect="off"
+                       autocapitalize="off" spellcheck="false">
+                <span class="case-filter-chevron" aria-hidden="true"></span>
+                <select id="case-filter-select" class="case-selector case-filter-native"
+                        tabindex="-1" aria-hidden="true">
+                    <option value="" selected>-- Select Slides --</option>
+                    <option value="__all_slides__">All Slides</option>
+                </select>
+                <ul id="case-filter-listbox" class="case-filter-listbox" role="listbox" hidden></ul>
             </div>
         </div>
-        <div id="current-image-name" class="current-image-name" hidden aria-live="polite">
-            <div id="header-case-id" class="header-case-id"></div>
-            <div id="header-slide-detail" class="header-slide-detail"></div>
+        <div class="app-header-brand-right">
+            <div class="brand">
+                <div class="brand-copy">
+                    <h1 class="brand-title">WSI Viewer</h1>
+                    <div class="brand-current-image" hidden>
+                        <div class="header-label">Current image</div>
+                        <div id="selected-name">No image selected</div>
+                    </div>
+                </div>
+            </div>
+            <div id="current-image-name" class="current-image-name" hidden aria-live="polite">
+                <div id="header-case-id" class="header-case-id"></div>
+                <div id="header-slide-detail" class="header-slide-detail"></div>
+            </div>
         </div>
     </div>
     <div id="primary-unified-toolbar" class="viewer-toolbar toolbar-ops-row toolbar-right-group" role="toolbar" aria-label="Primary viewer tools"
-         style="display: flex; flex-direction: row; align-items: center; width: 100%; min-height: var(--toolbar-height); background: #1a1a1a; padding: 4px 12px; box-sizing: border-box; border-bottom: 1px solid #333;">
+         style="display: flex; flex-direction: row; align-items: center; justify-content: flex-start; width: 100%; min-height: var(--toolbar-height); background: #1a1a1a; padding: 4px 14px; box-sizing: border-box; border-bottom: 1px solid #333;">
         <div class="toolbar-group primary-left-group" role="group" aria-label="Browser and slide selection">
             <div id="toolbar-docs-row" class="toolbar-docs-row">
-                <div id="sidebar-header-controls" style="display: flex !important; flex-direction: row !important; align-items: center !important; width: auto; padding: 0 0.5rem 0 0; box-sizing: border-box; background: transparent;">
+                <div id="sidebar-header-controls" style="display: flex !important; flex-direction: row !important; align-items: center !important; width: auto; padding: 0; box-sizing: border-box; background: transparent;">
                     <button id="toggle-left" class="toolbar-button sidebar-browser-toggle" type="button" aria-pressed="true"
                             title="Show/Hide Image Browser" aria-label="Show/Hide Image Browser">📂</button>
-                    <div class="case-filter-combobox" id="case-filter-combobox">
-                        <label class="visually-hidden" for="case-filter-search">Search slides</label>
-                        <input type="text" id="case-filter-search" class="case-filter-search"
-                               role="combobox" aria-expanded="false" aria-autocomplete="list"
-                               aria-controls="case-filter-listbox" aria-haspopup="listbox"
-                               placeholder="Search slides..." autocomplete="off" autocorrect="off"
-                               autocapitalize="off" spellcheck="false">
-                        <span class="case-filter-chevron" aria-hidden="true"></span>
-                        <select id="case-filter-select" class="case-selector case-filter-native"
-                                tabindex="-1" aria-hidden="true">
-                            <option value="" selected>-- Select Slides --</option>
-                            <option value="__all_slides__">All Slides</option>
-                        </select>
-                        <ul id="case-filter-listbox" class="case-filter-listbox" role="listbox" hidden></ul>
-                    </div>
                     <button id="show-slide-labels" class="toolbar-button sidebar-browser-toggle" type="button" aria-pressed="true"
                             title="Hide Label: hide slide label thumbnails in the slide list, including the rotate and force-scan controls"
                             aria-label="Hide slide label thumbnails">🏷️</button>
@@ -5121,6 +5170,10 @@
             closeImageLightbox(false);
             prepareSlideOverviewForImageChange();
             selectedImage = image;
+            AnnotationAdapter.applyDocumentTitle(
+                AnnotationAdapter.rawImageFileName(image) || image.name || "",
+                document
+            );
             AnnotationAdapter.currentImageId = image.id;
             AnnotationAdapter.setActiveSlideContext(image);
             AnnotationAdapter.onSlideClicked(image, document);
@@ -5183,6 +5236,10 @@
             renderChannels();
             if (generation !== updateSequence || selectedImage?.id !== image.id) return;
             openViewer();
+            AnnotationAdapter.applyDocumentTitle(
+                AnnotationAdapter.rawImageFileName(image) || image.name || "",
+                document
+            );
             statusElement.textContent = `${metadata.width} × ${metadata.height} · ${metadata.channels} channels · series ${currentSeries}`;
         } catch (error) {
             showError(error);

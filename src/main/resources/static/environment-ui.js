@@ -21,10 +21,18 @@
         banner.textContent = configuration.banner;
         banner.hidden = !configuration.banner;
         documentObject.body.classList.toggle("nonproduction-environment", Boolean(configuration.banner));
-        const normalTitle = documentObject.querySelector("title").dataset.normalTitle;
-        documentObject.title = configuration.titlePrefix
+        const titleNode = (typeof documentObject.getElementById === "function"
+                ? documentObject.getElementById("wsi-document-title")
+                : null)
+            || documentObject.querySelector("head > title")
+            || documentObject.querySelector("title");
+        const normalTitle = String(titleNode?.dataset?.normalTitle || "WSI Viewer").trim() || "WSI Viewer";
+        if (titleNode?.dataset) titleNode.dataset.titlePrefix = configuration.titlePrefix || "";
+        const nextTitle = configuration.titlePrefix
             ? `${configuration.titlePrefix} ${normalTitle}`
             : normalTitle;
+        documentObject.title = nextTitle;
+        if (titleNode) titleNode.textContent = nextTitle;
         return configuration;
     }
 

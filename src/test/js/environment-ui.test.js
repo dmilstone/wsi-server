@@ -5,16 +5,22 @@ const environmentUi = require("../../main/resources/static/environment-ui.js");
 
 function fakeDocument() {
     const banner = {textContent: "", hidden: true};
+    const titleNode = {dataset: {normalTitle: "Fluorescence Sample Viewer"}, textContent: "Fluorescence Sample Viewer"};
     const classes = new Set();
     return {
         title: "Fluorescence Sample Viewer",
         body: {classList: {toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); }}},
-        getElementById(id) { assert.equal(id, "environment-banner"); return banner; },
+        getElementById(id) {
+            if (id === "environment-banner") return banner;
+            if (id === "wsi-document-title") return titleNode;
+            return null;
+        },
         querySelector(selector) {
-            assert.equal(selector, "title");
-            return {dataset: {normalTitle: "Fluorescence Sample Viewer"}};
+            if (selector === "title" || selector === "head > title") return titleNode;
+            return null;
         },
         banner,
+        titleNode,
         classes
     };
 }
