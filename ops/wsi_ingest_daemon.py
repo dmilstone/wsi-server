@@ -45,9 +45,10 @@ only decides *when* to run those existing commands, and adds:
     exactly as they do today;
   -   an opt-in (WSI_INGEST_NETWORK_DROP_ROOT) front end, see
     ops/wsi_ingest_network_drop.py, for sourcing datasets from a network
-    share instead of a local drop -- staging and production must stay on the
-    same local filesystem for wsi_ingest.py's atomic promotion to work at
-    all, so this never repoints WSI_INGEST_STAGING_ROOT itself. Instead it
+    share instead of a local drop -- this never repoints
+    WSI_INGEST_STAGING_ROOT itself. Promotion prefers a same-volume atomic
+    no-replace rename and falls back to shutil.move/copy2 across distinct
+    volume shares. The network-drop front end
     tracks per-file size stability directly on the network path (mtime is
     not trustworthy across a network copy), and once a dataset there looks
     completely finished, copies it into a fresh local staging directory,
@@ -81,6 +82,9 @@ wsi_ingest.py, plus:
   WSI_INGEST_DAEMON_LOG                    default <staging>/.wsi-ingest-control/daemon/daemon.log.jsonl
   WSI_INGEST_AUTOBATCH_ENABLED             default off (0/false); see above
   WSI_INGEST_NETWORK_DROP_ROOT             default unset (disabled); see above
+  WSI_INGEST_NETWORK_STABLE_SECONDS        default 2; size must stay static
+                                           over this interval before seal,
+                                           integrity, promote, or sidecar OCR
 
 The sidecar OCR step reuses --refresh-url as retro_build_metadata.py's
 --server-url (same running viewer), and otherwise inherits this process's
@@ -108,6 +112,8 @@ STOP_SENTINEL = "stop"
 DEFAULT_POLL_SECONDS = 30
 DEFAULT_INTEGRITY_RETRY_LIMIT = 5
 DEFAULT_SIDECAR_RETRY_LIMIT = 6
+DEFAULT_NETWORK_STABLE_SECONDS = 2
+_STABILITY_SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", ".localized"}
 SIDECAR_UNRESOLVED_STATUSES = ("pending_epitope", "synchronized_via_retro_sweep")
 TIFF_LIKE_SUFFIXES = (".svs", ".ndpi", ".tif", ".tiff", ".ome.tif", ".ome.tiff")
 OTHER_WSI_SUFFIXES = (".vsi", ".czi", ".lif", ".mrxs")
@@ -163,6 +169,94 @@ def short_hash(name):
     return hashlib.sha256(name.encode()).hexdigest()[:16]
 
 
+def network_stable_wait_interval():
+    raw = os.environ.get("WSI_INGEST_NETWORK_STABLE_SECONDS")
+    if raw is None or str(raw).strip() == "":
+        return DEFAULT_NETWORK_STABLE_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_NETWORK_STABLE_SECONDS
+
+
+def is_network_file_stable(file_path, wait_interval=2):
+    """True when file_path's size is unchanged and non-zero over wait_interval seconds.
+
+    Network copies of giant slides often appear as a complete path while bytes
+    are still arriving; touching the file (integrity, OCR, promote) before the
+    size has settled corrupts or truncates the dataset.
+    """
+    try:
+        initial_size = os.path.getsize(file_path)
+        time.sleep(wait_interval)
+        return initial_size == os.path.getsize(file_path) and initial_size > 0
+    except Exception:
+        return False
+
+
+def _regular_files_under(root):
+    root = Path(root)
+    files = []
+    try:
+        if root.is_symlink():
+            return files
+        if root.is_file():
+            files.append(root)
+            return files
+        if not root.is_dir():
+            return files
+        for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+            for name in filenames:
+                if name in _STABILITY_SKIP_NAMES:
+                    continue
+                path = Path(dirpath) / name
+                try:
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                except OSError:
+                    return []
+                files.append(path)
+    except OSError:
+        return []
+    return files
+
+
+def dataset_is_network_stable(dataset_dir, wait_interval=None):
+    """One size snapshot of every regular file, one sleep, then recheck.
+
+    Uses the same size-must-not-change rule as is_network_file_stable, but
+    sleeps once per dataset rather than once per file so a companion-folder
+    slide does not stall the daemon for minutes.
+    """
+    if wait_interval is None:
+        wait_interval = network_stable_wait_interval()
+    try:
+        files = _regular_files_under(dataset_dir)
+        if not files:
+            return False
+        initial = {str(path): os.path.getsize(path) for path in files}
+        if any(size <= 0 for size in initial.values()):
+            return False
+        time.sleep(wait_interval)
+        current_files = {str(path) for path in _regular_files_under(dataset_dir)}
+        if current_files != set(initial):
+            return False
+        return all(
+            os.path.getsize(path) == size and is_network_file_stable(path, wait_interval=0)
+            for path, size in initial.items()
+        )
+    except Exception:
+        return False
+
+
+def skip_until_network_stable(dataset_dir, key, c):
+    """Return True when the daemon must leave this dataset for a later pass."""
+    if dataset_is_network_stable(dataset_dir):
+        return False
+    log_event(c, "network_file_unstable", dataset=key)
+    return True
+
+
 def daemon_control_dir(c):
     d = c["staging"] / CONTROL_DIRNAME / DAEMON_SUBDIR
     d.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -211,7 +305,7 @@ def run_ingest(args, confirmation=None, timeout=None):
     cmd = [sys.executable, str(HERE / "wsi_ingest.py"), *args]
     return subprocess.run(
         cmd, input=(confirmation + "\n") if confirmation else None,
-        text=True, capture_output=True, timeout=timeout,
+        text=True, capture_output=True, timeout=timeout, shell=False,
     )
 
 
@@ -447,7 +541,7 @@ def run_sidecar_ocr(c, name, server_url, timeout=120):
     if server_url:
         cmd += ["--server-url", server_url]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -469,6 +563,8 @@ def run_pending_sidecar_ocr(c, sidecar_ledger, server_url):
         if dataset_sidecar_resolved(dataset_dir):
             log_event(c, "sidecar_resolved", dataset=key)
             sidecar_ledger.clear(name)
+            continue
+        if skip_until_network_stable(dataset_dir, key, c):
             continue
         if sidecar_ledger.is_escalated(name):
             log_event(c, "sidecar_escalated_skip", dataset=key)
@@ -614,7 +710,7 @@ def merge_promoted_autobatch_dataset(c, merge_ledger, name):
             blocked = True
             log_event(c, "autobatch_merge_collision", dataset=key, origin=short_hash(origin))
             continue
-        engine.atomic_rename_noreplace(item, target)
+        engine.promote_path(item, target)
     if blocked:
         return name
     try:
@@ -706,6 +802,8 @@ def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=Non
         if name in dict(engine.state_records(c)):
             continue
         key = short_hash(name)
+        if skip_until_network_stable(c["staging"] / name, key, c):
+            continue
         result = run_ingest(["seal", name], confirmation="SEAL")
         if result.returncode == 0:
             log_event(c, "sealed", dataset=key)
@@ -722,6 +820,8 @@ def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=Non
             ledger.clear(key)
             continue
         if st.get("invalidated"):
+            if skip_until_network_stable(c["staging"] / name, key, c):
+                continue
             result = run_ingest(["seal", name], confirmation="SEAL")
             log_event(c, "resealed" if result.returncode == 0 else "reseal_failed", dataset=key)
             continue
@@ -732,6 +832,9 @@ def run_pass(c, ledger, refresh_url, sidecar_ledger=None, autobatch_tracking=Non
                 ledger.clear(key)
             else:
                 log_event(c, "recover_failed", dataset=key, category=failure_category(result.stderr))
+            continue
+
+        if skip_until_network_stable(c["staging"] / name, key, c):
             continue
 
         observed = run_ingest(["observe", name])

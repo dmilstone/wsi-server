@@ -36,6 +36,19 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+try:
+    from wsi_paths import default_production_server_root
+except ImportError:
+    def default_production_server_root():
+        configured = os.environ.get("WSI_PRODUCTION_ROOT")
+        if configured:
+            return Path(os.path.expandvars(configured)).expanduser()
+        home = os.environ.get("WSI_HOME") or os.environ.get("USERPROFILE") or os.environ.get("HOME")
+        base = Path(home).expanduser() if home else Path.home()
+        return base / "wsi" / "wsi-server-production"
+
 REPO_ROOT = Path(os.environ.get("WSI_REPO", str(HERE.parent))).resolve()
 VIEWER_PORT = int(os.environ.get("WSI_CONTROL_VIEWER_PORT", "8080"))
 VIEWER_HOST = os.environ.get("WSI_CONTROL_VIEWER_HOST", "127.0.0.1")
@@ -95,6 +108,7 @@ def listener_pids(port):
             ["lsof", f"-tiTCP:{port}", "-sTCP:LISTEN"],
             text=True,
             stderr=subprocess.DEVNULL,
+            shell=False,
         )
     except (OSError, subprocess.CalledProcessError):
         return []
@@ -112,6 +126,7 @@ def _windows_listen_pids(port):
             ["netstat", "-ano", "-p", "tcp"],
             text=True,
             stderr=subprocess.DEVNULL,
+            shell=False,
         )
     except (OSError, subprocess.CalledProcessError):
         return []
@@ -140,6 +155,7 @@ def process_running(pid):
                 ["tasklist", "/FI", f"PID eq {int(pid)}"],
                 text=True,
                 stderr=subprocess.DEVNULL,
+                shell=False,
             )
         except (OSError, subprocess.CalledProcessError):
             return False
@@ -176,6 +192,7 @@ def terminate_pids(pids, wait_seconds=15):
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                shell=False,
             )
         deadline = time.time() + wait_seconds
         while time.time() < deadline and any(process_running(pid) for pid in remaining):
@@ -187,6 +204,7 @@ def terminate_pids(pids, wait_seconds=15):
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                shell=False,
             )
             messages.append(f"forced stop of PID {pid}")
         return messages
@@ -218,6 +236,7 @@ def spawn_detached(command, cwd, env, log_path):
         "stdout": log,
         "stderr": subprocess.STDOUT,
         "stdin": subprocess.DEVNULL,
+        "shell": False,
     }
     if os.name == "nt":
         flags = 0
@@ -246,7 +265,7 @@ def wait_for_port(host, port, seconds):
 def viewer_command(mode=None):
     chosen = (mode or VIEWER_MODE or "maven").lower()
     if chosen == "jar":
-        root = Path(os.environ.get("WSI_PRODUCTION_ROOT", "/Users/dm026/wsi-server-production"))
+        root = default_production_server_root()
         jar = Path(os.environ.get("WSI_CONTROL_JAR", str(root / "app" / "wsi-server.jar")))
         config = Path(os.environ.get("WSI_CONTROL_VIEWER_CONFIG", str(root / "config")))
         if not jar.is_file():
@@ -254,7 +273,7 @@ def viewer_command(mode=None):
         java = os.environ.get("WSI_CONTROL_JAVA", "java")
         args = [java, "-jar", str(jar)]
         if (config / "application.properties").is_file():
-            args.append(f"--spring.config.additional-location=file:{config}/")
+            args.append("--spring.config.additional-location=file:" + config.as_posix().rstrip("/") + "/")
         return args, str(root)
     wrapper = REPO_ROOT / ("mvnw.cmd" if os.name == "nt" else "mvnw")
     if not wrapper.is_file():
@@ -335,6 +354,7 @@ def ingest_pids():
                 ["wmic", "process", "where", "CommandLine like '%wsi_ingest_daemon.py%'", "get", "ProcessId"],
                 text=True,
                 stderr=subprocess.DEVNULL,
+                shell=False,
             )
             for line in output.splitlines():
                 line = line.strip()
@@ -350,6 +370,7 @@ def ingest_pids():
             ["pgrep", "-f", "wsi_ingest_daemon.py"],
             text=True,
             stderr=subprocess.DEVNULL,
+            shell=False,
         )
         for line in output.splitlines():
             if line.strip().isdigit():
@@ -388,14 +409,17 @@ def start_ingest():
     if status["running"]:
         return {**status, "changed": False, "message": "Ingestion engine is already running."}
     script = None
-    for candidate in (
-        HERE / "wsi_ingest_daemon.py",
-        REPO_ROOT / "ops" / "wsi_ingest_daemon.py",
-        Path(os.environ.get("WSI_REPO", "")) / "ops" / "wsi_ingest_daemon.py",
-    ):
-        if candidate and str(candidate) != "/ops/wsi_ingest_daemon.py" and candidate.is_file():
-            script = candidate
-            break
+    repo = os.environ.get("WSI_REPO", "").strip()
+    candidates = [HERE / "wsi_ingest_daemon.py", REPO_ROOT / "ops" / "wsi_ingest_daemon.py"]
+    if repo:
+        candidates.append(Path(repo) / "ops" / "wsi_ingest_daemon.py")
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                script = candidate
+                break
+        except OSError:
+            continue
     if script is None:
         raise ServiceError("ingest daemon script not found (wsi_ingest_daemon.py)")
     env = load_ingest_environment()
