@@ -88,11 +88,29 @@ final class UserAdministrationGuideContent {
                         List.of()
                 ),
                 new Section(
-                        "4. Related viewer help",
-                        "This User Guide covers ingestion, workstation isolation, and the ops LaunchAgent. Viewer controls and the release cycle live in the other two manuals.",
+                        "4. Viewer Multi-view, channel viewer, and shortcuts",
+                        "The viewer View menu and image right-click menu (not annotation right-click) control Multi-view and the channel viewer. Click ? for the live shortcut legend; Shift-click ? for the Help directory.",
+                        List.of(
+                                new Bullet("Multi-view",
+                                        "Set grid size (1x1, 1x2, 2x1, 2x2, 3x3), add or remove a row or column, then click a pane or drag a slide onto it. A new image fits the pane it occupies; changing the grid re-fits open images. Close images in a row or column before removing it."),
+                                new Bullet("Synchronize viewers",
+                                        "Pan and zoom stay locked across panes once two or more panes have images (Ctrl+Shift+S / Cmd+Shift+S / Ctrl+Alt+S). Match viewer resolutions uses each slide's pixel size. Close, detach, or attach applies to the active pane."),
+                                new Bullet("Show channel viewer",
+                                        "Opens a detached window of each visible channel plus Composite, following the cursor by default. Right-click that window to sync to cursor or viewer center, change zoom, or show all channels."),
+                                new Bullet("Scale bars and Z-stack",
+                                        "Each occupied pane shows its own scale bar when calibrated. Alt+wheel or arrow keys change focal plane. Double-click the magnification readout to type an exact value."),
+                                new Bullet("Keyboard shortcuts",
+                                        "A/N/D visibility; F and Shift+F fills; H left browser; M/S/R/O/L/P/V/B/W/./Z/C tools; Enter seals a polygon; Delete removes selected annotations. Full list is on the ? legend.")
+                        ),
+                        null,
+                        List.of()
+                ),
+                new Section(
+                        "5. Related viewer help",
+                        "This User Guide covers ingestion, workstation isolation, the ops LaunchAgent, and the current viewer Multi-view / channel-viewer behavior. The release cycle lives in the Admin & Ops Guide.",
                         List.of(
                                 new Bullet("Viewer Quick Guide",
-                                        "Open /help/viewer-guide.html for pan, zoom, channels, annotations, and export."),
+                                        "Open /help/viewer-guide.html for pan, zoom, Multi-view, channel viewer, annotations, and export."),
                                 new Bullet("Admin & Ops Guide",
                                         "Open /help/admin-ops-guide.html for environments, the monitored release cycle, logs, and rollback.")
                         ),

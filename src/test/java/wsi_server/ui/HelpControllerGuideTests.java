@@ -25,6 +25,9 @@ class HelpControllerGuideTests {
         assertTrue(html.contains("Download PDF"));
         assertTrue(html.contains("/help/viewer-guide.html"));
         assertTrue(html.contains("/help/admin-ops-guide.html"));
+        assertTrue(html.contains("Viewer Multi-view, channel viewer, and shortcuts"));
+        assertTrue(html.contains("Show channel viewer"));
+        assertTrue(html.contains("Synchronize viewers"));
         assertTrue(html.contains("authorized research and image-server administration only"));
         assertTrue(html.contains("Legal disclaimer"));
     }
@@ -38,6 +41,7 @@ class HelpControllerGuideTests {
         String extracted = new String(pdf, StandardCharsets.ISO_8859_1);
         assertTrue(extracted.contains("WSI Comprehensive User"));
         assertTrue(extracted.contains("X-WSI-User"));
+        assertTrue(extracted.contains("Show channel viewer"));
         assertTrue(extracted.contains("LEGAL DISCLAIMER"));
         assertTrue(extracted.contains("authorized research"));
         assertFalse(extracted.contains("**"));
