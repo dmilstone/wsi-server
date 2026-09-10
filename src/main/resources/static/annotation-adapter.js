@@ -773,6 +773,9 @@ class AnnotationAdapter {
         { label: "1 %", downsample: 100 }
     ];
 
+    static CHANNEL_VIEWER_TILE_CACHE_LIMIT = 160;
+    static CHANNEL_VIEWER_FETCH_DEBOUNCE_MS = 40;
+
     static channelViewer = {
         open: false,
         syncType: "cursor",
@@ -783,7 +786,16 @@ class AnnotationAdapter {
         cursorX: null,
         cursorY: null,
         generation: 0,
-        refreshTimer: 0
+        refreshTimer: 0,
+        refreshRaf: 0,
+        fetchTimer: 0,
+        immediateFetch: false,
+        imageId: null,
+        lastLevel: null,
+        lastPrefetchKey: "",
+        tileCache: null,
+        inflight: null,
+        pendingUrls: null
     };
 
     static channelViewerGridSize(cellCount) {
@@ -846,18 +858,24 @@ class AnnotationAdapter {
 
     static channelViewerCropRect(centerX, centerY, cellWidth, cellHeight, downsample, imageWidth, imageHeight) {
         const ds = Number(downsample) > 0 ? Number(downsample) : 1;
-        const width = Math.max(1, Math.round(Number(cellWidth) * ds));
-        const height = Math.max(1, Math.round(Number(cellHeight) * ds));
-        const maxW = Math.max(1, Number(imageWidth) || width);
-        const maxH = Math.max(1, Number(imageHeight) || height);
-        const x = Math.max(0, Math.min(Math.round(Number(centerX) - width / 2), maxW - 1));
-        const y = Math.max(0, Math.min(Math.round(Number(centerY) - height / 2), maxH - 1));
+        const width = Math.max(1, Number(cellWidth) * ds);
+        const height = Math.max(1, Number(cellHeight) * ds);
         return {
-            x,
-            y,
-            width: Math.max(1, Math.min(width, maxW - x)),
-            height: Math.max(1, Math.min(height, maxH - y))
+            x: Number(centerX) - width / 2,
+            y: Number(centerY) - height / 2,
+            width,
+            height,
+            imageWidth: Number(imageWidth) || 0,
+            imageHeight: Number(imageHeight) || 0
         };
+    }
+
+    static channelViewerEffectiveDownsample(viewer) {
+        const relative = Number(AnnotationAdapter.channelViewer.downsample);
+        const factor = Number.isFinite(relative) && relative > 0 ? relative : 1;
+        const imageZoom = AnnotationAdapter.viewerImageZoom(viewer);
+        if (!(Number(imageZoom) > 0)) return factor;
+        return Math.max(1 / 64, Math.min(256, factor / Number(imageZoom)));
     }
 
     static channelViewerLevelForDownsample(metadata, downsample) {
@@ -893,6 +911,7 @@ class AnnotationAdapter {
         }
         AnnotationAdapter.channelViewer.open = false;
         AnnotationAdapter.channelViewer.generation += 1;
+        AnnotationAdapter.cancelChannelViewerRefresh();
         AnnotationAdapter.closeChannelViewerMenu(doc);
         AnnotationAdapter.syncMultiViewMenuState(doc);
         return false;
@@ -907,7 +926,7 @@ class AnnotationAdapter {
         AnnotationAdapter.channelViewer.open = true;
         AnnotationAdapter.bindChannelViewerChrome(doc);
         AnnotationAdapter.rebuildChannelViewerGrid(doc);
-        AnnotationAdapter.scheduleChannelViewerRefresh();
+        AnnotationAdapter.scheduleChannelViewerRefresh({ immediate: true });
         AnnotationAdapter.syncMultiViewMenuState(doc);
         return true;
     }
@@ -929,6 +948,7 @@ class AnnotationAdapter {
                 + `</div><div id="channel-viewer-grid" class="channel-viewer-grid"></div>`;
             doc.body.append(panel);
         }
+        AnnotationAdapter.ensurePaletteResizeHandles(panel);
         if (!doc.getElementById("channel-viewer-menu")) {
             const menu = doc.createElement("div");
             menu.id = "channel-viewer-menu";
@@ -954,7 +974,7 @@ class AnnotationAdapter {
             + `<button type="button" role="menuitemradio" data-cv="sync" data-sync="none">Do not sync</button>`
             + `</div></div>`
             + `<div class="multiview-item">`
-            + `<div class="multiview-submenu-label">Zoom… <span class="multiview-accel">▶</span></div>`
+            + `<div class="multiview-submenu-label">Zoom relative to viewer <span class="multiview-accel">▶</span></div>`
             + `<div class="multiview-submenu" role="menu">${zooms}</div></div>`
             + `<button type="button" role="menuitemcheckbox" data-cv="all">Show all channels</button>`
             + `<button type="button" role="menuitemcheckbox" data-cv="names">Show channel names</button>`
@@ -964,12 +984,15 @@ class AnnotationAdapter {
     static bindChannelViewerChrome(root = null) {
         const doc = root || (typeof document !== "undefined" ? document : null);
         const panel = doc?.getElementById?.("channel-viewer");
-        if (!panel || panel.dataset.channelViewerBound === "1") return false;
+        if (!panel) return false;
+        AnnotationAdapter.bindChannelViewerResize(panel);
+        if (panel.dataset.channelViewerBound === "1") return false;
         doc.getElementById("channel-viewer-close")?.addEventListener("click", () => {
             AnnotationAdapter.closeChannelViewer(doc);
         });
         AnnotationAdapter.bindMultiviewDetachedDrag(panel);
         panel.addEventListener("contextmenu", event => {
+            if (event.target?.closest?.(".palette-resize-handle")) return;
             event.preventDefault();
             event.stopPropagation();
             AnnotationAdapter.openChannelViewerMenu(event, doc);
@@ -1000,7 +1023,7 @@ class AnnotationAdapter {
         if (command === "names") state.showChannelNames = !state.showChannelNames;
         if (command === "cursor") state.showCursor = !state.showCursor;
         AnnotationAdapter.rebuildChannelViewerGrid();
-        AnnotationAdapter.scheduleChannelViewerRefresh();
+        AnnotationAdapter.scheduleChannelViewerRefresh({ immediate: true });
         return true;
     }
 
@@ -1123,19 +1146,93 @@ class AnnotationAdapter {
         return { x: Number(center?.x), y: Number(center?.y) };
     }
 
-    static scheduleChannelViewerRefresh() {
+    static channelViewerActiveZ(pane) {
+        const active = AnnotationAdapter.multiview?.panes?.[AnnotationAdapter.multiview.activeIndex];
+        const useLive = !pane || !active || pane === active || pane.index === active.index;
+        if (useLive) {
+            const live = Number(AnnotationAdapter.currentZ);
+            if (Number.isFinite(live) && live >= 0) return live;
+        }
+        const stored = Number(pane?.currentZ);
+        if (Number.isFinite(stored) && stored >= 0) return stored;
+        return 0;
+    }
+
+    static cancelChannelViewerRefresh() {
+        const state = AnnotationAdapter.channelViewer;
+        if (state.refreshRaf && typeof cancelAnimationFrame === "function") {
+            cancelAnimationFrame(state.refreshRaf);
+        }
+        if (state.refreshTimer) clearTimeout(state.refreshTimer);
+        if (state.fetchTimer) clearTimeout(state.fetchTimer);
+        state.refreshRaf = 0;
+        state.refreshTimer = 0;
+        state.fetchTimer = 0;
+        state.pendingUrls?.clear?.();
+        state.immediateFetch = false;
+    }
+
+    static scheduleChannelViewerRefresh(options = {}) {
         if (!AnnotationAdapter.channelViewer.open) return;
-        if (AnnotationAdapter.channelViewer.refreshTimer) return;
-        const delay = AnnotationAdapter.channelViewer.syncType === "cursor" ? 40 : 80;
+        if (options.immediate) AnnotationAdapter.channelViewer.immediateFetch = true;
+        if (AnnotationAdapter.channelViewer.refreshRaf || AnnotationAdapter.channelViewer.refreshTimer) {
+            return;
+        }
+        if (typeof requestAnimationFrame === "function") {
+            AnnotationAdapter.channelViewer.refreshRaf = requestAnimationFrame(() => {
+                AnnotationAdapter.channelViewer.refreshRaf = 0;
+                AnnotationAdapter.refreshChannelViewer();
+            });
+            return;
+        }
         AnnotationAdapter.channelViewer.refreshTimer = setTimeout(() => {
             AnnotationAdapter.channelViewer.refreshTimer = 0;
             AnnotationAdapter.refreshChannelViewer();
-        }, delay);
+        }, 16);
     }
 
-    static channelViewerTileCover(metadata, rect, downsample) {
+    static channelViewerTileCacheMap() {
+        const state = AnnotationAdapter.channelViewer;
+        if (!state.tileCache) state.tileCache = new Map();
+        if (!state.inflight) state.inflight = new Map();
+        if (!state.pendingUrls) state.pendingUrls = new Set();
+        return state.tileCache;
+    }
+
+    static resetChannelViewerTileCache() {
+        const state = AnnotationAdapter.channelViewer;
+        state.tileCache?.clear?.();
+        state.inflight?.clear?.();
+        state.pendingUrls?.clear?.();
+        state.lastLevel = null;
+        state.lastPrefetchKey = "";
+        state.imageId = null;
+    }
+
+    static evictChannelViewerTileCache() {
+        const cache = AnnotationAdapter.channelViewerTileCacheMap();
+        const limit = AnnotationAdapter.CHANNEL_VIEWER_TILE_CACHE_LIMIT;
+        while (cache.size > limit) {
+            const oldest = cache.keys().next().value;
+            if (oldest == null) break;
+            cache.delete(oldest);
+        }
+    }
+
+    static channelViewerCachedImage(url) {
+        const cache = AnnotationAdapter.channelViewerTileCacheMap();
+        const image = cache.get(url);
+        if (!image) return null;
+        cache.delete(url);
+        cache.set(url, image);
+        return image;
+    }
+
+    static channelViewerTileCover(metadata, rect, downsample, levelOverride) {
         const tileSize = Math.max(32, Number(metadata?.tileSize) || 512);
-        const level = AnnotationAdapter.channelViewerLevelForDownsample(metadata, downsample);
+        const level = Number.isFinite(Number(levelOverride))
+            ? Math.max(0, Number(levelOverride))
+            : AnnotationAdapter.channelViewerLevelForDownsample(metadata, downsample);
         const { scaleByLevel } = AnnotationAdapter.pyramidScaleByLevel(metadata);
         const scale = Number(scaleByLevel.get(level))
             || Math.pow(2, level - Math.max(0, Number(metadata?.resolutionCount) - 1));
@@ -1143,6 +1240,10 @@ class AnnotationAdapter {
         const ly = Number(rect.y) * scale;
         const lw = Math.max(1, Number(rect.width) * scale);
         const lh = Math.max(1, Number(rect.height) * scale);
+        const levelWidth = Math.max(1, Number(rect.imageWidth || metadata?.width) * scale);
+        const levelHeight = Math.max(1, Number(rect.imageHeight || metadata?.height) * scale);
+        const maxTx = Math.max(0, Math.floor((levelWidth - 1) / tileSize));
+        const maxTy = Math.max(0, Math.floor((levelHeight - 1) / tileSize));
         const tx0 = Math.floor(lx / tileSize);
         const ty0 = Math.floor(ly / tileSize);
         const tx1 = Math.floor((lx + lw - 1) / tileSize);
@@ -1150,6 +1251,7 @@ class AnnotationAdapter {
         const tiles = [];
         for (let ty = ty0; ty <= ty1; ty += 1) {
             for (let tx = tx0; tx <= tx1; tx += 1) {
+                if (tx < 0 || ty < 0 || tx > maxTx || ty > maxTy) continue;
                 tiles.push({
                     tx,
                     ty,
@@ -1162,8 +1264,9 @@ class AnnotationAdapter {
     }
 
     static channelViewerTileUrl(imageId, level, tx, ty, options = {}) {
-        const series = Number(options.series) || 0;
-        const z = Number(options.z) || 0;
+        const series = Math.max(0, Number(options.series) || 0);
+        const parsedZ = Number(options.z);
+        const z = Number.isFinite(parsedZ) && parsedZ >= 0 ? parsedZ : 0;
         const revision = Number(options.revision) || 0;
         if (options.composite || !Number.isFinite(Number(options.channelIndex))) {
             return `/tile/${encodeURIComponent(imageId)}/composite/${level}/${tx}/${ty}.png`
@@ -1173,13 +1276,76 @@ class AnnotationAdapter {
             + `?channel=${Number(options.channelIndex)}&revision=${revision}&z=${z}&series=${series}`;
     }
 
-    static loadChannelViewerImage(url) {
-        return new Promise((resolve, reject) => {
+    static loadChannelViewerImage(url, options = {}) {
+        const href = String(url || "");
+        if (!href) return Promise.reject(new Error("channel-viewer-tile"));
+        const cache = AnnotationAdapter.channelViewerTileCacheMap();
+        const cached = cache.get(href);
+        if (cached) return Promise.resolve(cached);
+        const inflight = AnnotationAdapter.channelViewer.inflight;
+        if (inflight.has(href)) return inflight.get(href);
+        const promise = new Promise((resolve, reject) => {
             const image = new Image();
-            image.onload = () => resolve(image);
-            image.onerror = () => reject(new Error("channel-viewer-tile"));
-            image.src = url;
+            image.decoding = "async";
+            image.onload = () => {
+                cache.set(href, image);
+                inflight.delete(href);
+                AnnotationAdapter.evictChannelViewerTileCache();
+                resolve(image);
+            };
+            image.onerror = () => {
+                inflight.delete(href);
+                reject(new Error("channel-viewer-tile"));
+            };
+            image.src = href;
         });
+        inflight.set(href, promise);
+        if (options.refresh !== false) {
+            promise.then(
+                () => AnnotationAdapter.scheduleChannelViewerRefresh(),
+                () => {}
+            );
+        }
+        return promise;
+    }
+
+    static flushChannelViewerTileQueue() {
+        const state = AnnotationAdapter.channelViewer;
+        if (state.fetchTimer) {
+            clearTimeout(state.fetchTimer);
+            state.fetchTimer = 0;
+        }
+        const pending = state.pendingUrls;
+        state.immediateFetch = false;
+        if (!pending?.size) return 0;
+        const urls = [...pending];
+        pending.clear();
+        urls.forEach(url => {
+            AnnotationAdapter.loadChannelViewerImage(url);
+        });
+        return urls.length;
+    }
+
+    static enqueueChannelViewerTiles(urls, options = {}) {
+        if (!urls?.length) return 0;
+        const cache = AnnotationAdapter.channelViewerTileCacheMap();
+        const pending = AnnotationAdapter.channelViewer.pendingUrls;
+        let queued = 0;
+        urls.forEach(url => {
+            if (!url || cache.has(url) || AnnotationAdapter.channelViewer.inflight?.has(url)) return;
+            pending.add(url);
+            queued += 1;
+        });
+        if (!queued && !pending.size) return 0;
+        if (options.immediate || AnnotationAdapter.channelViewer.immediateFetch) {
+            return AnnotationAdapter.flushChannelViewerTileQueue();
+        }
+        if (AnnotationAdapter.channelViewer.fetchTimer) return queued;
+        AnnotationAdapter.channelViewer.fetchTimer = setTimeout(() => {
+            AnnotationAdapter.channelViewer.fetchTimer = 0;
+            AnnotationAdapter.flushChannelViewerTileQueue();
+        }, AnnotationAdapter.CHANNEL_VIEWER_FETCH_DEBOUNCE_MS);
+        return queued;
     }
 
     static applyRgbBandToCanvas(ctx, band) {
@@ -1187,21 +1353,11 @@ class AnnotationAdapter {
         const width = ctx.canvas.width;
         const height = ctx.canvas.height;
         if (!(width > 0 && height > 0)) return;
-        const frame = ctx.getImageData(0, 0, width, height);
-        const pix = frame.data;
-        for (let i = 0; i < pix.length; i += 4) {
-            if (band === "r") {
-                pix[i + 1] = 0;
-                pix[i + 2] = 0;
-            } else if (band === "g") {
-                pix[i] = 0;
-                pix[i + 2] = 0;
-            } else if (band === "b") {
-                pix[i] = 0;
-                pix[i + 1] = 0;
-            }
-        }
-        ctx.putImageData(frame, 0, 0);
+        ctx.save();
+        ctx.globalCompositeOperation = "multiply";
+        ctx.fillStyle = band === "r" ? "#ff0000" : band === "g" ? "#00ff00" : "#0000ff";
+        ctx.fillRect(0, 0, width, height);
+        ctx.restore();
     }
 
     static drawChannelViewerCursor(ctx) {
@@ -1220,55 +1376,123 @@ class AnnotationAdapter {
         ctx.restore();
     }
 
-    static async paintChannelViewerCell(canvas, cell, rect, options = {}) {
-        if (!canvas || !rect || !options.imageId) return false;
-        const cover = AnnotationAdapter.channelViewerTileCover(options.metadata, rect, options.downsample);
-        const width = Math.max(1, Math.round(cover.width));
-        const height = Math.max(1, Math.round(cover.height));
-        const surface = typeof OffscreenCanvas === "function"
-            ? new OffscreenCanvas(width, height)
-            : document.createElement("canvas");
-        surface.width = width;
-        surface.height = height;
-        const ctx = surface.getContext("2d");
-        if (!ctx) return false;
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, width, height);
-        await Promise.all(cover.tiles.map(async tile => {
+    static channelViewerTileOptions(cell, options = {}) {
+        return {
+            composite: Boolean(cell?.composite || cell?.rgbBand),
+            channelIndex: cell?.channelIndex,
+            series: options.series,
+            z: options.z,
+            revision: options.revision
+        };
+    }
+
+    static resolveChannelViewerTiles(cover, cell, options = {}) {
+        const images = [];
+        const missing = [];
+        const urls = [];
+        (cover?.tiles || []).forEach(tile => {
             const url = AnnotationAdapter.channelViewerTileUrl(
                 options.imageId,
                 cover.level,
                 tile.tx,
                 tile.ty,
-                {
-                    composite: Boolean(cell.composite || cell.rgbBand),
-                    channelIndex: cell.channelIndex,
-                    series: options.series,
-                    z: options.z,
-                    revision: options.revision
-                }
+                AnnotationAdapter.channelViewerTileOptions(cell, options)
             );
-            try {
-                const image = await AnnotationAdapter.loadChannelViewerImage(url);
-                ctx.drawImage(image, tile.destX, tile.destY);
-            } catch (_error) {
-                /* missing edge tiles are expected */
-            }
-        }));
-        if (cell.rgbBand) AnnotationAdapter.applyRgbBandToCanvas(ctx, cell.rgbBand);
-        canvas.width = canvas.clientWidth || width;
-        canvas.height = canvas.clientHeight || height;
+            urls.push(url);
+            const image = AnnotationAdapter.channelViewerCachedImage(url);
+            if (image) images.push({ image, tile });
+            else missing.push(url);
+        });
+        return { images, missing, urls };
+    }
+
+    static drawChannelViewerCover(canvas, cell, cover, images, options = {}) {
+        if (!canvas || !cover) return false;
+        const width = Math.max(1, Math.round(canvas.clientWidth || cover.width || 1));
+        const height = Math.max(1, Math.round(canvas.clientHeight || cover.height || 1));
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
         const dest = canvas.getContext("2d");
         if (!dest) return false;
         dest.fillStyle = "#000";
-        dest.fillRect(0, 0, canvas.width, canvas.height);
+        dest.fillRect(0, 0, width, height);
         dest.imageSmoothingEnabled = false;
-        dest.drawImage(surface, 0, 0, canvas.width, canvas.height);
+        const scaleX = width / Math.max(1, cover.width);
+        const scaleY = height / Math.max(1, cover.height);
+        images.forEach(entry => {
+            const tileWidth = entry.image.naturalWidth || entry.image.width || cover.tileSize;
+            const tileHeight = entry.image.naturalHeight || entry.image.height || cover.tileSize;
+            dest.drawImage(
+                entry.image,
+                entry.tile.destX * scaleX,
+                entry.tile.destY * scaleY,
+                tileWidth * scaleX,
+                tileHeight * scaleY
+            );
+        });
+        if (cell?.rgbBand) AnnotationAdapter.applyRgbBandToCanvas(dest, cell.rgbBand);
         if (options.showCursor) AnnotationAdapter.drawChannelViewerCursor(dest);
-        return true;
+        return images.length > 0;
     }
 
-    static async refreshChannelViewer(root = null) {
+    static paintChannelViewerCell(canvas, cell, rect, options = {}) {
+        if (!canvas || !rect || !options.imageId) {
+            return { painted: false, missing: [], urls: [] };
+        }
+        const desired = AnnotationAdapter.channelViewerTileCover(
+            options.metadata,
+            rect,
+            options.downsample
+        );
+        const desiredResolved = AnnotationAdapter.resolveChannelViewerTiles(desired, cell, options);
+        let cover = desired;
+        let resolved = desiredResolved;
+        if (!desiredResolved.images.length && Number.isFinite(Number(AnnotationAdapter.channelViewer.lastLevel))
+            && Number(AnnotationAdapter.channelViewer.lastLevel) !== desired.level) {
+            const fallback = AnnotationAdapter.channelViewerTileCover(
+                options.metadata,
+                rect,
+                options.downsample,
+                AnnotationAdapter.channelViewer.lastLevel
+            );
+            const fallbackResolved = AnnotationAdapter.resolveChannelViewerTiles(fallback, cell, options);
+            if (fallbackResolved.images.length) {
+                cover = fallback;
+                resolved = {
+                    images: fallbackResolved.images,
+                    missing: desiredResolved.missing,
+                    urls: desiredResolved.urls
+                };
+            }
+        }
+        if (resolved.images.length && cover.level === desired.level) {
+            AnnotationAdapter.channelViewer.lastLevel = desired.level;
+        }
+        const painted = AnnotationAdapter.drawChannelViewerCover(
+            canvas,
+            cell,
+            cover,
+            resolved.images,
+            options
+        );
+        return { painted, missing: resolved.missing, urls: resolved.urls, level: desired.level };
+    }
+
+    static prefetchChannelViewerNeighborZ(urls, z, maxZ) {
+        const plane = Math.max(0, Number(z) || 0);
+        const last = Math.max(0, Number(maxZ) || 0);
+        (urls || []).forEach(url => {
+            [plane - 1, plane + 1].forEach(neighbor => {
+                if (neighbor < 0 || neighbor > last) return;
+                AnnotationAdapter.loadChannelViewerImage(
+                    AnnotationAdapter.neighborZTileUrl(url, neighbor),
+                    { refresh: false }
+                );
+            });
+        });
+    }
+
+    static refreshChannelViewer(root = null) {
         if (!AnnotationAdapter.channelViewer.open) return false;
         const doc = root || (typeof document !== "undefined" ? document : null);
         const grid = doc?.getElementById?.("channel-viewer-grid");
@@ -1277,6 +1501,10 @@ class AnnotationAdapter {
         const metadata = pane?.metadata || AnnotationAdapter.imageMetadata;
         const display = pane?.display || AnnotationAdapter.displayController?.getDisplay?.();
         if (!grid || !metadata || !pane?.imageId) return false;
+        if (AnnotationAdapter.channelViewer.imageId !== pane.imageId) {
+            AnnotationAdapter.resetChannelViewerTileCache();
+            AnnotationAdapter.channelViewer.imageId = pane.imageId;
+        }
         const cells = AnnotationAdapter.channelViewerCells(display, metadata, {
             showAllChannels: AnnotationAdapter.channelViewer.showAllChannels,
             series: pane.currentSeries
@@ -1285,9 +1513,14 @@ class AnnotationAdapter {
             AnnotationAdapter.rebuildChannelViewerGrid(doc);
         }
         const center = AnnotationAdapter.channelViewerCenter(viewer, metadata);
-        const generation = AnnotationAdapter.channelViewer.generation + 1;
-        AnnotationAdapter.channelViewer.generation = generation;
-        const jobs = cells.map((cell, index) => {
+        const downsample = AnnotationAdapter.channelViewerEffectiveDownsample(viewer);
+        const z = AnnotationAdapter.channelViewerActiveZ(pane);
+        const maxZ = Math.max(0, AnnotationAdapter.zPlaneCountFromSlide(metadata) - 1);
+        AnnotationAdapter.channelViewer.generation += 1;
+        const missing = [];
+        const paintedUrls = [];
+        let desiredLevel = null;
+        cells.forEach((cell, index) => {
             const node = grid.children[index];
             const canvas = node?.querySelector?.(".channel-viewer-canvas");
             const label = node?.querySelector?.(".channel-viewer-label");
@@ -1302,25 +1535,32 @@ class AnnotationAdapter {
                 center.y,
                 cellWidth,
                 cellHeight,
-                AnnotationAdapter.channelViewer.downsample,
+                downsample,
                 metadata.width,
                 metadata.height
             );
-            return AnnotationAdapter.paintChannelViewerCell(canvas, cell, rect, {
+            const result = AnnotationAdapter.paintChannelViewerCell(canvas, cell, rect, {
                 imageId: pane.imageId,
                 metadata,
-                downsample: AnnotationAdapter.channelViewer.downsample,
+                downsample,
                 series: pane.currentSeries,
-                z: pane.currentZ,
+                z,
                 revision: display?.revision,
                 showCursor: AnnotationAdapter.channelViewer.showCursor
-            }).then(ok => {
-                if (generation !== AnnotationAdapter.channelViewer.generation) return false;
-                return ok;
             });
+            if (Number.isFinite(Number(result?.level))) desiredLevel = Number(result.level);
+            (result?.missing || []).forEach(url => missing.push(url));
+            (result?.urls || []).forEach(url => paintedUrls.push(url));
         });
-        await Promise.all(jobs);
-        return generation === AnnotationAdapter.channelViewer.generation;
+        AnnotationAdapter.enqueueChannelViewerTiles(missing);
+        if (!missing.length && paintedUrls.length) {
+            const prefetchKey = `${pane.imageId}|${z}|${desiredLevel}|${paintedUrls[0]}|${paintedUrls.length}`;
+            if (prefetchKey !== AnnotationAdapter.channelViewer.lastPrefetchKey) {
+                AnnotationAdapter.channelViewer.lastPrefetchKey = prefetchKey;
+                AnnotationAdapter.prefetchChannelViewerNeighborZ(paintedUrls, z, maxZ);
+            }
+        }
+        return true;
     }
 
     static bindMultiviewPaneEvents(root = null) {
@@ -1479,7 +1719,13 @@ class AnnotationAdapter {
 
     static viewerImageZoom(viewer) {
         if (!viewer?.viewport) return null;
-        const zoom = viewer.viewport.getZoom(true);
+        const zoom = typeof viewer.viewport.getZoom === "function"
+            ? viewer.viewport.getZoom(true)
+            : 1;
+        const tiled = viewer.world?.getItemAt?.(0);
+        if (typeof tiled?.viewportToImageZoom === "function") {
+            return tiled.viewportToImageZoom(zoom);
+        }
         if (typeof viewer.viewport.viewportToImageZoom === "function") {
             return viewer.viewport.viewportToImageZoom(zoom);
         }
@@ -1719,6 +1965,8 @@ class AnnotationAdapter {
                 return AnnotationAdapter.toggleSynchronizeViewers();
             case "channel-viewer":
                 return AnnotationAdapter.toggleChannelViewer();
+            case "z-stack-controller":
+                return AnnotationAdapter.openZStackController();
             case "match":
                 return AnnotationAdapter.matchViewerResolutions();
             case "close":
@@ -5771,7 +6019,12 @@ class AnnotationAdapter {
 
     static setCurrentZ(z) {
         const next = Number.parseInt(z, 10);
-        AnnotationAdapter.currentZ = Number.isFinite(next) && next >= 0 ? next : 0;
+        const value = Number.isFinite(next) && next >= 0 ? next : 0;
+        const changed = value !== AnnotationAdapter.currentZ;
+        AnnotationAdapter.currentZ = value;
+        const pane = AnnotationAdapter.multiview?.panes?.[AnnotationAdapter.multiview.activeIndex];
+        if (pane) pane.currentZ = value;
+        if (changed) AnnotationAdapter.scheduleChannelViewerRefresh({ immediate: true });
         return AnnotationAdapter.currentZ;
     }
 
@@ -7622,6 +7875,29 @@ class AnnotationAdapter {
         zStackPalette.style.right = "auto";
         zStackPalette.style.bottom = "auto";
         return true;
+    }
+
+    static isFloatingZStackPaletteOpen(root = null) {
+        const palette = AnnotationAdapter.resolveZStackPaletteNode(root);
+        if (!palette) return false;
+        if (palette.hidden) return false;
+        if (palette.style?.display === "none") return false;
+        return palette.getAttribute?.("aria-hidden") !== "true";
+    }
+
+    static openZStackController(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const palette = AnnotationAdapter.resolveZStackPaletteNode(doc);
+        if (!palette) return false;
+        const alreadyOpen = AnnotationAdapter.isFloatingZStackPaletteOpen(doc);
+        if (!alreadyOpen) {
+            return AnnotationAdapter.setFloatingZStackPaletteVisible(true, doc);
+        }
+        AnnotationAdapter.bindFloatingZStackPalette(doc);
+        AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
+        palette.classList?.remove?.("zstack-minimized");
+        return AnnotationAdapter.syncFloatingZStackMinimizedUi(palette, doc);
     }
 
     static setFloatingZStackPaletteVisible(visible, root = null) {
@@ -10199,18 +10475,56 @@ class AnnotationAdapter {
         return true;
     }
 
+    static PALETTE_RESIZE_EDGES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+
+    static ensurePaletteResizeHandles(panel) {
+        if (!panel || typeof panel.querySelector !== "function") return false;
+        if (panel.querySelector(".palette-resize-handle, .legend-resize-handle")) return true;
+        const doc = panel.ownerDocument || (typeof document !== "undefined" ? document : null);
+        if (!doc?.createElement) return false;
+        AnnotationAdapter.PALETTE_RESIZE_EDGES.forEach(edge => {
+            const handle = doc.createElement("div");
+            handle.className = "palette-resize-handle";
+            handle.setAttribute("data-edge", edge);
+            handle.setAttribute("aria-hidden", "true");
+            panel.append(handle);
+        });
+        return true;
+    }
+
+    static bindChannelViewerResize(panel) {
+        AnnotationAdapter.ensurePaletteResizeHandles(panel);
+        return AnnotationAdapter.bindPaletteEdgeResize(panel, {
+            boundKey: "channelViewerResizeBound",
+            handleSelector: ".palette-resize-handle",
+            minWidth: 180,
+            minHeight: 140,
+            onResize: () => AnnotationAdapter.scheduleChannelViewerRefresh(),
+            onResizeEnd: () => AnnotationAdapter.scheduleChannelViewerRefresh()
+        });
+    }
+
     /**
-     * Custom multi-edge/corner resize for the shortcuts legend, replacing the native
-     * CSS `resize: both` (which only offers a single bottom-right grip and refuses to
-     * shrink below the element's implicit min-content floor). Deliberately does not
-     * clamp position to the viewport, matching the same "let the user drag it wherever,
-     * including partially off-screen" philosophy as bindLiberatedPaletteDrag.
+     * Custom multi-edge/corner resize for floating palettes, replacing native
+     * CSS `resize: both` (single bottom-right grip, implicit min-content floor).
+     * Does not clamp position to the viewport, matching bindLiberatedPaletteDrag.
      */
     static bindFloatingShortcutsLegendResize(palette, options = {}) {
-        if (!palette || palette.dataset?.legendResizeDragBound === "1") return false;
+        return AnnotationAdapter.bindPaletteEdgeResize(palette, {
+            boundKey: "legendResizeDragBound",
+            handleSelector: ".legend-resize-handle",
+            minWidth: 140,
+            minHeight: 50,
+            ...options
+        });
+    }
+
+    static bindPaletteEdgeResize(palette, options = {}) {
+        const boundKey = options.boundKey || "paletteResizeDragBound";
+        if (!palette || palette.dataset?.[boundKey] === "1") return false;
         const MIN_WIDTH = Number(options.minWidth) || 140;
         const MIN_HEIGHT = Number(options.minHeight) || 50;
-        const handles = palette.querySelectorAll?.(".legend-resize-handle") || [];
+        const handles = palette.querySelectorAll?.(options.handleSelector || ".legend-resize-handle, .palette-resize-handle") || [];
         handles.forEach(handle => {
             const edge = String(handle.getAttribute?.("data-edge") || "");
             let start = null;
@@ -10240,6 +10554,7 @@ class AnnotationAdapter {
                 }
                 if (edge.includes("e") || edge.includes("w")) palette.style.width = `${width}px`;
                 if (edge.includes("n") || edge.includes("s")) palette.style.height = `${height}px`;
+                if (typeof options.onResize === "function") options.onResize(width, height);
             };
 
             const onUp = event => {
@@ -10254,6 +10569,7 @@ class AnnotationAdapter {
                 if (typeof handle.releasePointerCapture === "function" && event?.pointerId != null) {
                     try { handle.releasePointerCapture(event.pointerId); } catch (_error) { /* ignore */ }
                 }
+                if (typeof options.onResizeEnd === "function") options.onResizeEnd();
             };
 
             const onDown = event => {
@@ -10282,7 +10598,7 @@ class AnnotationAdapter {
             handle.addEventListener("pointerdown", onDown);
             handle.addEventListener("mousedown", onDown);
         });
-        if (palette.dataset) palette.dataset.legendResizeDragBound = "1";
+        if (palette.dataset) palette.dataset[boundKey] = "1";
         return true;
     }
 

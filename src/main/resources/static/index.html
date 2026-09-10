@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260910-help-fix"></script>
+    <script src="/annotation-adapter.js?v=20260910-zstack-menu"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
@@ -1265,8 +1265,11 @@
             top: 96px;
             width: min(420px, calc(100vw - 32px));
             height: min(420px, calc(100vh - 32px));
+            min-width: 180px;
+            min-height: 140px;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
             background: #000;
             border: 1px solid #5a4a78;
             box-shadow: 0 12px 32px rgba(0,0,0,.55);
@@ -1330,6 +1333,15 @@
             text-overflow: ellipsis;
         }
         .channel-viewer-label[hidden] { display: none !important; }
+        .channel-viewer .palette-resize-handle { position: absolute; z-index: 8; touch-action: none; }
+        .channel-viewer .palette-resize-handle[data-edge="n"] { top: 0; left: 8px; right: 8px; height: 6px; cursor: n-resize; }
+        .channel-viewer .palette-resize-handle[data-edge="s"] { bottom: 0; left: 8px; right: 8px; height: 6px; cursor: s-resize; }
+        .channel-viewer .palette-resize-handle[data-edge="e"] { top: 8px; right: 0; bottom: 8px; width: 6px; cursor: e-resize; }
+        .channel-viewer .palette-resize-handle[data-edge="w"] { top: 8px; left: 0; bottom: 8px; width: 6px; cursor: w-resize; }
+        .channel-viewer .palette-resize-handle[data-edge="ne"] { top: 0; right: 0; width: 10px; height: 10px; cursor: ne-resize; }
+        .channel-viewer .palette-resize-handle[data-edge="nw"] { top: 0; left: 0; width: 10px; height: 10px; cursor: nw-resize; }
+        .channel-viewer .palette-resize-handle[data-edge="se"] { bottom: 0; right: 0; width: 10px; height: 10px; cursor: se-resize; }
+        .channel-viewer .palette-resize-handle[data-edge="sw"] { bottom: 0; left: 0; width: 10px; height: 10px; cursor: sw-resize; }
         #empty-viewport-guidance {
             position: absolute;
             inset: 0;
@@ -4292,7 +4304,7 @@
         <div class="toolbar-group primary-right-group ops-display-group" role="group" aria-label="Utilities">
             <button id="view-menu-button" class="toolbar-chip" type="button"
                     aria-haspopup="true" aria-expanded="false" aria-controls="multiview-menu"
-                    data-tooltip="View ▸ Channel viewer, Multi-view grids, synchronize viewers"
+                    data-tooltip="View ▸ Channel viewer, Z-stack controller, Multi-view grids, synchronize viewers"
                     aria-label="View menu">View</button>
             <button id="primary-help-directory-link" class="toolbar-chip" type="button"
                     aria-label="Help"
@@ -5015,11 +5027,11 @@
             <tr><td><b>Escape</b></td><td>Cancel an unfinished drawing or close a menu</td></tr>
             <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s) — cannot be undone</td></tr>
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">View, channels, and Z</td></tr>
-            <tr><td><b>View</b> menu</td><td>Show channel viewer; Multi-view grid size; add/remove row or column; reset sizes; synchronize; match resolutions; close/detach/attach</td></tr>
+            <tr><td><b>View</b> menu</td><td>Show channel viewer; Open Z-stack controller; Multi-view grid size; add/remove row or column; reset sizes; synchronize; match resolutions; close/detach/attach</td></tr>
             <tr><td><b>Ctrl+Shift+S</b> / <b>⌘⇧S</b> / <b>Ctrl+Alt+S</b></td><td>Synchronize multi-view pan and zoom (on by default once two panes have images)</td></tr>
             <tr><td>Right-click image</td><td>Open View / Multi-view menu (not when the pointer is on an annotation)</td></tr>
             <tr><td>Right-click annotation</td><td>Lock/Unlock Position or Delete the selected annotation(s)</td></tr>
-            <tr><td>Right-click channel viewer</td><td>Sync to cursor/center/off; Zoom; Show all channels; names; cursor</td></tr>
+            <tr><td>Right-click channel viewer</td><td>Sync to cursor/center/off; Zoom relative to the main window; Show all channels; names; cursor</td></tr>
             <tr><td>Drag slide onto a pane</td><td>Open that slide in the target Multi-view pane</td></tr>
             <tr><td><b>Alt+Wheel</b> or <b>↑ / ↓</b></td><td>Change Z-stack focal plane</td></tr>
             <tr><td>Double-click magnification</td><td>Type an exact magnification (for example 10) and press Enter</td></tr>
@@ -5044,6 +5056,9 @@
 <div id="multiview-menu" class="multiview-menu" hidden role="menu" aria-label="View">
     <button type="button" role="menuitemcheckbox" data-mv="channel-viewer" aria-checked="false">
         <span>Show channel viewer</span>
+    </button>
+    <button type="button" role="menuitem" data-mv="z-stack-controller">
+        <span>Open Z-stack controller</span>
     </button>
     <div class="multiview-item">
         <div class="multiview-submenu-label">Set grid size <span class="multiview-accel">▶</span></div>
@@ -5075,6 +5090,14 @@
         <button type="button" id="channel-viewer-close" class="channel-viewer-close" aria-label="Close channel viewer">×</button>
     </div>
     <div id="channel-viewer-grid" class="channel-viewer-grid"></div>
+    <div class="palette-resize-handle" data-edge="n" aria-hidden="true"></div>
+    <div class="palette-resize-handle" data-edge="s" aria-hidden="true"></div>
+    <div class="palette-resize-handle" data-edge="e" aria-hidden="true"></div>
+    <div class="palette-resize-handle" data-edge="w" aria-hidden="true"></div>
+    <div class="palette-resize-handle" data-edge="ne" aria-hidden="true"></div>
+    <div class="palette-resize-handle" data-edge="nw" aria-hidden="true"></div>
+    <div class="palette-resize-handle" data-edge="se" aria-hidden="true"></div>
+    <div class="palette-resize-handle" data-edge="sw" aria-hidden="true"></div>
 </div>
 <div id="annotation-context-menu" style="display: none; position: fixed; z-index: 100020; min-width: 190px; background: #1c1c1c; color: #fff; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.5); overflow: hidden; font-size: 0.85rem;">
     <button type="button" id="annotation-context-menu-lock-toggle"
@@ -6105,6 +6128,9 @@
             updateViewerStatus();
             AnnotationAdapter.scheduleChannelViewerRefresh();
         });
+        created.addHandler("pan", () => {
+            AnnotationAdapter.scheduleChannelViewerRefresh();
+        });
         created.addHandler("open", () => {
             updateViewerStatus();
             AnnotationAdapter.scheduleChannelViewerRefresh();
@@ -6141,7 +6167,7 @@
                 const y = Math.floor(imagePoint.y);
                 xStatus.textContent = x.toLocaleString();
                 yStatus.textContent = y.toLocaleString();
-                AnnotationAdapter.noteChannelViewerCursor(x, y);
+                AnnotationAdapter.noteChannelViewerCursor(imagePoint.x, imagePoint.y);
                 requestPixelSample(x, y);
             } else {
                 clearPixelReadout();
