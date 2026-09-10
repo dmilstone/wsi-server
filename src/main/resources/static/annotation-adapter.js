@@ -121,6 +121,1760 @@ class AnnotationAdapter {
         return false;
     }
 
+    static MULTI_VIEW_MAX = 4;
+    static MULTI_VIEW_MIME = "application/x-wsi-image-id";
+    static multiview = {
+        rows: 1,
+        cols: 1,
+        activeIndex: 0,
+        synchronizeViewers: false,
+        columnFractions: [1],
+        rowFractions: [1],
+        syncing: false,
+        panes: [],
+        hooks: {},
+        bound: false
+    };
+
+    static equalFractions(count) {
+        const n = Math.max(1, Number(count) || 1);
+        return Array.from({ length: n }, () => 1);
+    }
+
+    static clampGridDimension(value) {
+        const n = Math.round(Number(value) || 1);
+        return Math.max(1, Math.min(AnnotationAdapter.MULTI_VIEW_MAX, n));
+    }
+
+    static normalizeGridSize(rows, cols) {
+        return {
+            rows: AnnotationAdapter.clampGridDimension(rows),
+            cols: AnnotationAdapter.clampGridDimension(cols)
+        };
+    }
+
+    static paneIndex(row, col, cols) {
+        return Number(row) * Number(cols) + Number(col);
+    }
+
+    static paneRow(index, cols) {
+        return Math.floor(Number(index) / Math.max(1, Number(cols) || 1));
+    }
+
+    static paneCol(index, cols) {
+        return Number(index) % Math.max(1, Number(cols) || 1);
+    }
+
+    static hostIdForPane(index) {
+        return Number(index) === 0 ? "viewer" : `wsi-viewer-pane-${Number(index)}`;
+    }
+
+    static emptyMultiviewPane(index, rows, cols) {
+        const size = AnnotationAdapter.normalizeGridSize(rows, cols);
+        return {
+            index,
+            row: AnnotationAdapter.paneRow(index, size.cols),
+            col: AnnotationAdapter.paneCol(index, size.cols),
+            hostId: AnnotationAdapter.hostIdForPane(index),
+            viewer: null,
+            image: null,
+            metadata: null,
+            display: null,
+            currentZ: 0,
+            currentSeries: 0,
+            annotationEngine: null,
+            detached: false,
+            imageId: null
+        };
+    }
+
+    static remapMultiviewPanes(previous, rows, cols) {
+        const size = AnnotationAdapter.normalizeGridSize(rows, cols);
+        const prior = Array.isArray(previous) ? previous : [];
+        const next = [];
+        const count = size.rows * size.cols;
+        for (let index = 0; index < count; index += 1) {
+            const existing = prior[index];
+            const pane = existing
+                ? { ...existing, index, row: AnnotationAdapter.paneRow(index, size.cols),
+                    col: AnnotationAdapter.paneCol(index, size.cols),
+                    hostId: existing.hostId || AnnotationAdapter.hostIdForPane(index) }
+                : AnnotationAdapter.emptyMultiviewPane(index, size.rows, size.cols);
+            next.push(pane);
+        }
+        return { ...size, panes: next, discarded: prior.slice(count) };
+    }
+
+    static canRemoveRow(rows) {
+        return AnnotationAdapter.clampGridDimension(rows) > 1;
+    }
+
+    static canRemoveColumn(cols) {
+        return AnnotationAdapter.clampGridDimension(cols) > 1;
+    }
+
+    static rowIsEmpty(panes, row, cols) {
+        return (Array.isArray(panes) ? panes : []).every(pane =>
+            Number(pane.row) !== Number(row) || !pane.imageId);
+    }
+
+    static columnIsEmpty(panes, col) {
+        return (Array.isArray(panes) ? panes : []).every(pane =>
+            Number(pane.col) !== Number(col) || !pane.imageId);
+    }
+
+    static removeRowLayout(state) {
+        const rows = Number(state?.rows) || 1;
+        const cols = Number(state?.cols) || 1;
+        if (!AnnotationAdapter.canRemoveRow(rows)) {
+            return { ok: false, reason: "last-row" };
+        }
+        const activeRow = AnnotationAdapter.paneRow(state.activeIndex, cols);
+        if (!AnnotationAdapter.rowIsEmpty(state.panes, activeRow, cols)) {
+            return { ok: false, reason: "close-first" };
+        }
+        const remaining = (state.panes || []).filter(pane => Number(pane.row) !== activeRow);
+        const remapped = remaining.map((pane, index) => ({
+            ...pane,
+            index,
+            row: AnnotationAdapter.paneRow(index, cols),
+            col: AnnotationAdapter.paneCol(index, cols),
+            hostId: pane.hostId || AnnotationAdapter.hostIdForPane(index)
+        }));
+        return {
+            ok: true,
+            rows: rows - 1,
+            cols,
+            panes: remapped,
+            activeIndex: Math.min(Number(state.activeIndex) || 0, remapped.length - 1)
+        };
+    }
+
+    static removeColumnLayout(state) {
+        const rows = Number(state?.rows) || 1;
+        const cols = Number(state?.cols) || 1;
+        if (!AnnotationAdapter.canRemoveColumn(cols)) {
+            return { ok: false, reason: "last-column" };
+        }
+        const activeCol = AnnotationAdapter.paneCol(state.activeIndex, cols);
+        if (!AnnotationAdapter.columnIsEmpty(state.panes, activeCol)) {
+            return { ok: false, reason: "close-first" };
+        }
+        const kept = [];
+        for (const pane of state.panes || []) {
+            if (Number(pane.col) === activeCol) continue;
+            kept.push(pane);
+        }
+        const nextCols = cols - 1;
+        const remapped = kept.map((pane, index) => ({
+            ...pane,
+            index,
+            row: AnnotationAdapter.paneRow(index, nextCols),
+            col: AnnotationAdapter.paneCol(index, nextCols),
+            hostId: pane.hostId || AnnotationAdapter.hostIdForPane(index)
+        }));
+        return {
+            ok: true,
+            rows,
+            cols: nextCols,
+            panes: remapped,
+            activeIndex: Math.min(Number(state.activeIndex) || 0, remapped.length - 1)
+        };
+    }
+
+    static matchedImageZoom(sourceImageZoom, sourceMpp, targetMpp) {
+        const zoom = Number(sourceImageZoom);
+        if (!Number.isFinite(zoom) || zoom <= 0) return null;
+        const source = Number(sourceMpp);
+        const target = Number(targetMpp);
+        if (!(source > 0) || !(target > 0)) return zoom;
+        return zoom * (source / target);
+    }
+
+    static syncViewportPayload(center, width, height, imageZoom) {
+        const x = Number(center?.x);
+        const y = Number(center?.y);
+        const w = Number(width);
+        const h = Number(height);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !(w > 0) || !(h > 0)) return null;
+        return {
+            fracX: x / w,
+            fracY: y / h,
+            imageZoom: Number(imageZoom)
+        };
+    }
+
+    static applySyncPayload(payload, width, height) {
+        if (!payload) return null;
+        const w = Number(width);
+        const h = Number(height);
+        if (!(w > 0) || !(h > 0)) return null;
+        return {
+            x: Number(payload.fracX) * w,
+            y: Number(payload.fracY) * h,
+            imageZoom: Number(payload.imageZoom)
+        };
+    }
+
+    static multiViewMenuModel(state = AnnotationAdapter.multiview) {
+        const rows = Number(state?.rows) || 1;
+        const cols = Number(state?.cols) || 1;
+        const pane = (state?.panes || [])[Number(state?.activeIndex) || 0] || {};
+        const count = rows * cols;
+        const hasImage = Boolean(pane.imageId);
+        return {
+            rows,
+            cols,
+            synchronizeViewers: Boolean(state?.synchronizeViewers),
+            canAddRow: rows < AnnotationAdapter.MULTI_VIEW_MAX,
+            canAddColumn: cols < AnnotationAdapter.MULTI_VIEW_MAX,
+            canRemoveRow: AnnotationAdapter.canRemoveRow(rows),
+            canRemoveColumn: AnnotationAdapter.canRemoveColumn(cols),
+            canClose: hasImage,
+            canDetach: count > 1 && !pane.detached && hasImage,
+            canAttach: Boolean(pane.detached)
+        };
+    }
+
+    static multiViewAcceleratorLabel() {
+        const platform = String(
+            (typeof navigator !== "undefined" && (navigator.userAgentData?.platform || navigator.platform)) || ""
+        );
+        return /mac/i.test(platform) ? "⌘⇧S" : "Ctrl+Shift+S";
+    }
+
+    static isMultiViewSyncShortcut(event) {
+        if (!event) return false;
+        const key = String(event.key || "").toLowerCase();
+        if (key !== "s") return false;
+        const meta = Boolean(event.metaKey);
+        const ctrl = Boolean(event.ctrlKey);
+        const alt = Boolean(event.altKey);
+        const shift = Boolean(event.shiftKey);
+        if ((meta || ctrl) && shift && !alt) return true;
+        if (ctrl && alt && !meta) return true;
+        return false;
+    }
+
+    static ensureMultiviewState() {
+        const state = AnnotationAdapter.multiview;
+        if (!Array.isArray(state.panes) || state.panes.length === 0) {
+            const mapped = AnnotationAdapter.remapMultiviewPanes([], state.rows || 1, state.cols || 1);
+            state.rows = mapped.rows;
+            state.cols = mapped.cols;
+            state.panes = mapped.panes;
+            state.columnFractions = AnnotationAdapter.equalFractions(state.cols);
+            state.rowFractions = AnnotationAdapter.equalFractions(state.rows);
+        }
+        return state;
+    }
+
+    static listMultiviewViewers() {
+        return (AnnotationAdapter.ensureMultiviewState().panes || [])
+            .map(pane => pane.viewer)
+            .filter(Boolean);
+    }
+
+    static activeMultiviewPane() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        return state.panes[state.activeIndex] || state.panes[0] || null;
+    }
+
+    static storeMultiviewPaneSnapshot(index, snapshot = {}) {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const pane = state.panes[index];
+        if (!pane) return null;
+        if (snapshot.viewer !== undefined) pane.viewer = snapshot.viewer;
+        if (snapshot.selectedImage !== undefined) pane.image = snapshot.selectedImage;
+        if (snapshot.metadata !== undefined) pane.metadata = snapshot.metadata;
+        if (snapshot.display !== undefined) pane.display = snapshot.display;
+        if (snapshot.currentZ !== undefined) pane.currentZ = snapshot.currentZ;
+        if (snapshot.currentSeries !== undefined) pane.currentSeries = snapshot.currentSeries;
+        if (snapshot.annotationEngine !== undefined) pane.annotationEngine = snapshot.annotationEngine;
+        pane.imageId = snapshot.selectedImage?.id || snapshot.imageId || pane.image?.id || null;
+        AnnotationAdapter.enableSynchronizeIfMultipleImages();
+        return pane;
+    }
+
+    static occupiedMultiviewCount(state = AnnotationAdapter.ensureMultiviewState()) {
+        return (state?.panes || []).filter(pane => pane?.imageId).length;
+    }
+
+    static enableSynchronizeIfMultipleImages() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        if (AnnotationAdapter.occupiedMultiviewCount(state) < 2) return false;
+        if (!state.synchronizeViewers) {
+            AnnotationAdapter.setSynchronizeViewers(true);
+        }
+        AnnotationAdapter.propagateMultiviewViewport(state.activeIndex);
+        return true;
+    }
+
+    static resetMultiviewImages() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        for (const pane of state.panes) {
+            if (pane.viewer) {
+                try { pane.viewer.close(); } catch (_error) { /* ignore */ }
+            }
+            pane.image = null;
+            pane.metadata = null;
+            pane.display = null;
+            pane.currentZ = 0;
+            pane.currentSeries = 0;
+            pane.imageId = null;
+            pane.detached = false;
+        }
+        AnnotationAdapter.refreshMultiviewChrome();
+    }
+
+    static gridTemplateFromFractions(fractions) {
+        const values = Array.isArray(fractions) && fractions.length
+            ? fractions
+            : [1];
+        return values.map(value => `${Math.max(0.2, Number(value) || 1)}fr`).join(" ");
+    }
+
+    static applyMultiviewGridStyle(grid) {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        if (!grid?.style) return;
+        grid.style.gridTemplateColumns = AnnotationAdapter.gridTemplateFromFractions(state.columnFractions);
+        grid.style.gridTemplateRows = AnnotationAdapter.gridTemplateFromFractions(state.rowFractions);
+        grid.dataset.rows = String(state.rows);
+        grid.dataset.cols = String(state.cols);
+        grid.classList.toggle("is-single", state.rows * state.cols <= 1);
+    }
+
+    static ensurePaneDecorations(doc, node) {
+        if (!doc || !node) return node;
+        if (!node.querySelector(":scope > .viewer-pane-placeholder")) {
+            const placeholder = doc.createElement("div");
+            placeholder.className = "viewer-pane-placeholder";
+            placeholder.hidden = true;
+            placeholder.textContent = "Select a slide, or drag one here";
+            node.append(placeholder);
+        }
+        if (!node.querySelector(":scope > .viewer-pane-caption")) {
+            const caption = doc.createElement("div");
+            caption.className = "viewer-pane-caption";
+            caption.hidden = true;
+            node.append(caption);
+        }
+        if (!node.querySelector(":scope > .viewer-pane-scalebar")) {
+            const bar = doc.createElement("div");
+            bar.className = "scale-bar viewer-pane-scalebar";
+            bar.hidden = true;
+            bar.setAttribute("aria-label", "Image scale");
+            const label = doc.createElement("span");
+            label.className = "scale-bar-label";
+            const line = doc.createElement("div");
+            line.className = "scale-bar-line";
+            bar.append(label, line);
+            node.append(bar);
+        }
+        return node;
+    }
+
+    static ensureMultiviewDom(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const stage = doc?.getElementById?.("openseadragon-viewer");
+        const viewerEl = doc?.getElementById?.("viewer");
+        if (!stage || !viewerEl) return null;
+        let grid = doc.getElementById("viewer-grid");
+        if (!grid) {
+            grid = doc.createElement("div");
+            grid.id = "viewer-grid";
+            grid.className = "viewer-grid is-single";
+            grid.setAttribute("role", "group");
+            grid.setAttribute("aria-label", "Multi-view grid");
+            const pane = doc.createElement("div");
+            pane.className = "viewer-pane is-active";
+            pane.dataset.paneIndex = "0";
+            pane.dataset.row = "0";
+            pane.dataset.col = "0";
+            viewerEl.classList.add("viewer-pane-osd");
+            pane.append(viewerEl);
+            AnnotationAdapter.ensurePaneDecorations(doc, pane);
+            stage.insertBefore(grid, viewerEl);
+            grid.append(pane);
+        }
+        AnnotationAdapter.ensureMultiviewState();
+        AnnotationAdapter.syncMultiviewPaneElements(doc);
+        return grid;
+    }
+
+    static syncMultiviewPaneElements(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const grid = doc?.getElementById?.("viewer-grid");
+        if (!grid) return;
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const existing = new Map();
+        for (const node of Array.from(grid.querySelectorAll(":scope > .viewer-pane"))) {
+            existing.set(String(node.dataset.paneIndex), node);
+        }
+        for (let index = 0; index < state.panes.length; index += 1) {
+            const pane = state.panes[index];
+            let node = existing.get(String(index));
+            if (!node) {
+                node = doc.createElement("div");
+                node.className = "viewer-pane";
+                const host = doc.createElement("div");
+                host.className = "viewer-pane-osd";
+                host.id = pane.hostId;
+                node.append(host);
+                grid.append(node);
+            }
+            if (node.style) {
+                node.style.removeProperty("width");
+                node.style.removeProperty("height");
+            }
+            AnnotationAdapter.ensurePaneDecorations(doc, node);
+            node.dataset.paneIndex = String(index);
+            node.dataset.row = String(pane.row);
+            node.dataset.col = String(pane.col);
+            node.classList.toggle("is-active", index === state.activeIndex);
+            node.classList.toggle("is-empty", !pane.imageId);
+            node.classList.toggle("is-detached", Boolean(pane.detached));
+            const host = node.querySelector(".viewer-pane-osd");
+            if (host && !host.id) host.id = pane.hostId;
+            const placeholder = node.querySelector(".viewer-pane-placeholder");
+            if (placeholder) placeholder.hidden = Boolean(pane.imageId) || Boolean(pane.detached);
+            const caption = node.querySelector(".viewer-pane-caption");
+            if (caption) {
+                const name = pane.image?.name || pane.imageId || "";
+                caption.textContent = name;
+                caption.hidden = !name;
+            }
+            existing.delete(String(index));
+        }
+        for (const leftover of existing.values()) {
+            const index = Number(leftover.dataset.paneIndex);
+            const pane = state.panes[index];
+            if (pane?.viewer && typeof pane.viewer.destroy === "function") {
+                try { pane.viewer.destroy(); } catch (_error) { /* ignore */ }
+                pane.viewer = null;
+            }
+            leftover.remove();
+        }
+        AnnotationAdapter.applyMultiviewGridStyle(grid);
+        AnnotationAdapter.bindMultiviewPaneEvents(doc);
+        const single = state.rows * state.cols <= 1;
+        for (const pane of state.panes) {
+            const nav = pane.viewer?.navigator?.element;
+            if (nav?.style) {
+                nav.style.visibility = single ? "visible" : "hidden";
+                nav.style.pointerEvents = single ? "" : "none";
+            }
+        }
+        AnnotationAdapter.scheduleMultiviewResize();
+    }
+
+    static refreshMultiviewChrome(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.syncMultiviewPaneElements(doc);
+        AnnotationAdapter.syncMultiViewMenuState(doc);
+    }
+
+    /**
+     * OSD 4.x {@code viewport.resize} takes a size object {@code {x, y}}, not
+     * two pixel numbers. Passing {@code resize(width, height)} sets the
+     * container height to 0 and blanks every pane after a grid split.
+     */
+    static layoutBoxSize(node) {
+        if (!node) return null;
+        const width = Number(node.clientWidth);
+        const height = Number(node.clientHeight);
+        if (width > 1 && height > 1) return { x: width, y: height };
+        if (typeof node.getBoundingClientRect !== "function") return null;
+        const rect = node.getBoundingClientRect();
+        const rectWidth = Number(rect?.width);
+        const rectHeight = Number(rect?.height);
+        if (!(rectWidth > 1 && rectHeight > 1)) return null;
+        return { x: rectWidth, y: rectHeight };
+    }
+
+    static fractionShare(fractions, index) {
+        const values = Array.isArray(fractions) && fractions.length ? fractions : [1];
+        const sum = values.reduce((total, value) => total + Math.max(0.2, Number(value) || 1), 0);
+        const part = Math.max(0.2, Number(values[index]) || 1);
+        return part / (sum || 1);
+    }
+
+    static computedPaneCellSize(paneNode) {
+        const grid = paneNode?.closest?.(".viewer-grid");
+        const gridSize = AnnotationAdapter.layoutBoxSize(grid);
+        if (!gridSize) return null;
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const col = Number(paneNode?.dataset?.col);
+        const row = Number(paneNode?.dataset?.row);
+        const gap = 2;
+        const shareX = AnnotationAdapter.fractionShare(state.columnFractions, Number.isFinite(col) ? col : 0);
+        const shareY = AnnotationAdapter.fractionShare(state.rowFractions, Number.isFinite(row) ? row : 0);
+        return {
+            x: Math.max(2, (gridSize.x - gap * Math.max(0, state.cols - 1)) * shareX),
+            y: Math.max(2, (gridSize.y - gap * Math.max(0, state.rows - 1)) * shareY)
+        };
+    }
+
+    static paneCellSize(paneNode, viewer) {
+        const host = viewer?.element || viewer?.container;
+        const pane = paneNode
+            || host?.closest?.(".viewer-pane");
+        return AnnotationAdapter.layoutBoxSize(pane)
+            || AnnotationAdapter.computedPaneCellSize(pane)
+            || AnnotationAdapter.layoutBoxSize(host)
+            || AnnotationAdapter.layoutBoxSize(viewer?.container);
+    }
+
+    static openSeadragonContainerSize(viewer) {
+        const host = viewer?.element || viewer?.container;
+        return AnnotationAdapter.paneCellSize(host?.closest?.(".viewer-pane"), viewer);
+    }
+
+    static applyViewerHostSize(viewer, size) {
+        if (!size) return false;
+        const host = viewer?.element;
+        if (host?.style) {
+            host.style.width = `${size.x}px`;
+            host.style.height = `${size.y}px`;
+        }
+        return true;
+    }
+
+    static viewportSizeIsDegenerate(viewer) {
+        const current = viewer?.viewport?.getContainerSize?.();
+        const zoom = Number(viewer?.viewport?.getZoom?.(true));
+        return !(Number(current?.x) > 1)
+            || !(Number(current?.y) > 1)
+            || !Number.isFinite(zoom)
+            || zoom <= 0;
+    }
+
+    static resizeOpenSeadragonViewer(viewer, options = {}) {
+        const size = AnnotationAdapter.openSeadragonContainerSize(viewer);
+        if (!size || !viewer?.viewport || typeof viewer.viewport.resize !== "function") {
+            return false;
+        }
+        AnnotationAdapter.applyViewerHostSize(viewer, size);
+        const recoverHome = AnnotationAdapter.viewportSizeIsDegenerate(viewer);
+        const fit = Boolean(options.fit) || recoverHome;
+        try {
+            viewer.viewport.resize(size, !fit);
+        } catch (_error) {
+            try { viewer.forceResize?.(); } catch (_ignored) { /* ignore */ }
+        }
+        if (fit && typeof viewer.viewport.goHome === "function") {
+            try { viewer.viewport.goHome(true); } catch (_error) { /* ignore */ }
+        }
+        try { viewer.drawer?.update?.(); } catch (_error) { /* ignore */ }
+        try { viewer.forceRedraw?.(); } catch (_error) { /* ignore */ }
+        return true;
+    }
+
+    static resizeMultiviewViewers(options = {}) {
+        let resized = 0;
+        for (const viewer of AnnotationAdapter.listMultiviewViewers()) {
+            if (AnnotationAdapter.resizeOpenSeadragonViewer(viewer, options)) resized += 1;
+        }
+        AnnotationAdapter.updateMultiviewScaleBars();
+        return resized;
+    }
+
+    static scheduleMultiviewResize(options = {}) {
+        const run = () => AnnotationAdapter.resizeMultiviewViewers(options);
+        run();
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(() => {
+                run();
+                requestAnimationFrame(run);
+            });
+        }
+        if (typeof setTimeout === "function") {
+            setTimeout(run, 50);
+            setTimeout(run, 200);
+        }
+    }
+
+    static niceScaleLength(targetMicrons) {
+        if (!(Number(targetMicrons) > 0) || !Number.isFinite(Number(targetMicrons))) return null;
+        const exponent = Math.floor(Math.log10(Number(targetMicrons)));
+        const power = 10 ** exponent;
+        const normalized = Number(targetMicrons) / power;
+        const factor = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
+        return factor * power;
+    }
+
+    static scaleBarModel(viewer, metadata) {
+        const micronsPerPixel = Number(metadata?.micronsPerPixelX);
+        if (!viewer?.viewport || !(micronsPerPixel > 0)) return { hidden: true };
+        const count = viewer.world?.getItemCount?.();
+        if (!(count > 0)) return { hidden: true };
+        const tiled = viewer.world.getItemAt?.(0);
+        const zoom = viewer.viewport.getZoom?.(true);
+        const imageZoom = typeof tiled?.viewportToImageZoom === "function"
+            ? tiled.viewportToImageZoom(zoom)
+            : (typeof viewer.viewport.viewportToImageZoom === "function"
+                ? viewer.viewport.viewportToImageZoom(zoom)
+                : zoom);
+        if (!(imageZoom > 0)) return { hidden: true };
+        const micronsPerScreenPixel = micronsPerPixel / imageZoom;
+        const physicalLength = AnnotationAdapter.niceScaleLength(micronsPerScreenPixel * 120);
+        if (!(physicalLength > 0)) return { hidden: true };
+        return {
+            hidden: false,
+            width: Math.max(45, Math.min(180, physicalLength / micronsPerScreenPixel)),
+            label: physicalLength >= 1000
+                ? `${Number((physicalLength / 1000).toPrecision(3))} mm`
+                : `${Number(physicalLength.toPrecision(3))} µm`
+        };
+    }
+
+    static applyScaleBarModel(el, model) {
+        if (!el) return false;
+        if (!model || model.hidden) {
+            el.hidden = true;
+            return false;
+        }
+        const line = el.querySelector?.(".scale-bar-line");
+        const label = el.querySelector?.(".scale-bar-label");
+        if (line?.style) line.style.width = `${model.width}px`;
+        if (label) label.textContent = model.label;
+        el.hidden = false;
+        return true;
+    }
+
+    static updateMultiviewScaleBars(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const state = AnnotationAdapter.ensureMultiviewState();
+        let shown = 0;
+        for (const pane of state.panes || []) {
+            const node = doc?.querySelector?.(`#${pane.hostId}`)?.closest?.(".viewer-pane")
+                || doc?.querySelector?.(`.viewer-pane[data-pane-index="${pane.index}"]`);
+            const bar = node?.querySelector?.(".viewer-pane-scalebar");
+            if (AnnotationAdapter.applyScaleBarModel(
+                bar,
+                AnnotationAdapter.scaleBarModel(pane.viewer, pane.metadata)
+            )) {
+                shown += 1;
+            }
+        }
+        return shown;
+    }
+
+    static CHANNEL_VIEWER_ZOOMS = [
+        { label: "400 %", downsample: 0.25 },
+        { label: "200 %", downsample: 0.5 },
+        { label: "100 %", downsample: 1 },
+        { label: "50 %", downsample: 2 },
+        { label: "25 %", downsample: 4 },
+        { label: "20 %", downsample: 5 },
+        { label: "10 %", downsample: 10 },
+        { label: "5 %", downsample: 20 },
+        { label: "2 %", downsample: 50 },
+        { label: "1 %", downsample: 100 }
+    ];
+
+    static channelViewer = {
+        open: false,
+        syncType: "cursor",
+        downsample: 1,
+        showAllChannels: false,
+        showChannelNames: true,
+        showCursor: true,
+        cursorX: null,
+        cursorY: null,
+        generation: 0,
+        refreshTimer: 0
+    };
+
+    static channelViewerGridSize(cellCount) {
+        const n = Math.max(1, Number(cellCount) || 1);
+        const cols = Math.ceil(Math.sqrt(n));
+        return { cols, rows: Math.ceil(n / cols) };
+    }
+
+    static channelViewerLabel(channel, fallbackIndex = 0) {
+        const index = Number(channel?.index ?? fallbackIndex);
+        const ordinal = (Number.isFinite(index) ? index : fallbackIndex) + 1;
+        const name = AnnotationAdapter.formatChannelPaletteLabel(channel)
+            || String(channel?.name || "").trim()
+            || `Channel ${ordinal}`;
+        if (/\(C\d+\)\s*$/i.test(name)) return name;
+        return `${name} (C${ordinal})`;
+    }
+
+    static channelViewerCells(display, metadata, options = {}) {
+        const showAll = Boolean(options.showAllChannels);
+        const channels = Array.isArray(display?.channels) ? display.channels : [];
+        const rgb = AnnotationAdapter.isRgbSeriesView(metadata, options.series)
+            && channels.length <= 3;
+        const cells = [];
+        if (rgb) {
+            const bands = [
+                { band: "r", name: "Red", color: "#ff3333" },
+                { band: "g", name: "Green", color: "#33cc66" },
+                { band: "b", name: "Blue", color: "#3388ff" }
+            ];
+            bands.forEach((entry, index) => {
+                const channel = channels[index];
+                if (!showAll && channel && channel.visible === false) return;
+                cells.push({
+                    key: `rgb-${entry.band}`,
+                    name: channel
+                        ? AnnotationAdapter.channelViewerLabel(channel, index)
+                        : `${entry.name} (C${index + 1})`,
+                    rgbBand: entry.band,
+                    color: AnnotationAdapter.channelPaletteColor(channel) || entry.color
+                });
+            });
+        } else {
+            channels.forEach((channel, index) => {
+                if (!showAll && channel?.visible === false) return;
+                const channelIndex = Number.isFinite(Number(channel?.index))
+                    ? Number(channel.index)
+                    : index;
+                cells.push({
+                    key: `ch-${channelIndex}`,
+                    name: AnnotationAdapter.channelViewerLabel(channel, channelIndex),
+                    channelIndex,
+                    color: AnnotationAdapter.channelPaletteColor(channel)
+                });
+            });
+        }
+        cells.push({ key: "composite", name: "Composite", composite: true });
+        return cells;
+    }
+
+    static channelViewerCropRect(centerX, centerY, cellWidth, cellHeight, downsample, imageWidth, imageHeight) {
+        const ds = Number(downsample) > 0 ? Number(downsample) : 1;
+        const width = Math.max(1, Math.round(Number(cellWidth) * ds));
+        const height = Math.max(1, Math.round(Number(cellHeight) * ds));
+        const maxW = Math.max(1, Number(imageWidth) || width);
+        const maxH = Math.max(1, Number(imageHeight) || height);
+        const x = Math.max(0, Math.min(Math.round(Number(centerX) - width / 2), maxW - 1));
+        const y = Math.max(0, Math.min(Math.round(Number(centerY) - height / 2), maxH - 1));
+        return {
+            x,
+            y,
+            width: Math.max(1, Math.min(width, maxW - x)),
+            height: Math.max(1, Math.min(height, maxH - y))
+        };
+    }
+
+    static channelViewerLevelForDownsample(metadata, downsample) {
+        const maxLevel = Math.max(0, Number(metadata?.resolutionCount) - 1);
+        const { scaleByLevel } = AnnotationAdapter.pyramidScaleByLevel(metadata);
+        const target = Number(downsample) > 0 ? Number(downsample) : 1;
+        let best = maxLevel;
+        let bestScore = Infinity;
+        for (let level = 0; level <= maxLevel; level += 1) {
+            const scale = Number(scaleByLevel.get(level));
+            const levelDownsample = scale > 0 ? 1 / scale : Math.pow(2, maxLevel - level);
+            const score = Math.abs(Math.log2(levelDownsample / target));
+            if (score < bestScore) {
+                bestScore = score;
+                best = level;
+            }
+        }
+        return best;
+    }
+
+    static toggleChannelViewer(root = null) {
+        return AnnotationAdapter.channelViewer.open
+            ? AnnotationAdapter.closeChannelViewer(root)
+            : AnnotationAdapter.openChannelViewer(root);
+    }
+
+    static closeChannelViewer(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const panel = doc?.getElementById?.("channel-viewer");
+        if (panel) {
+            panel.hidden = true;
+            panel.setAttribute("aria-hidden", "true");
+        }
+        AnnotationAdapter.channelViewer.open = false;
+        AnnotationAdapter.channelViewer.generation += 1;
+        AnnotationAdapter.closeChannelViewerMenu(doc);
+        AnnotationAdapter.syncMultiViewMenuState(doc);
+        return false;
+    }
+
+    static openChannelViewer(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const panel = AnnotationAdapter.ensureChannelViewerDom(doc);
+        if (!panel) return false;
+        panel.hidden = false;
+        panel.setAttribute("aria-hidden", "false");
+        AnnotationAdapter.channelViewer.open = true;
+        AnnotationAdapter.bindChannelViewerChrome(doc);
+        AnnotationAdapter.rebuildChannelViewerGrid(doc);
+        AnnotationAdapter.scheduleChannelViewerRefresh();
+        AnnotationAdapter.syncMultiViewMenuState(doc);
+        return true;
+    }
+
+    static ensureChannelViewerDom(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        if (!doc?.body) return null;
+        let panel = doc.getElementById("channel-viewer");
+        if (!panel) {
+            panel = doc.createElement("div");
+            panel.id = "channel-viewer";
+            panel.className = "channel-viewer";
+            panel.setAttribute("role", "dialog");
+            panel.setAttribute("aria-label", "Channel viewer");
+            panel.hidden = true;
+            panel.innerHTML = `<div class="channel-viewer-titlebar" id="channel-viewer-handle">`
+                + `<span class="channel-viewer-title">Channel viewer</span>`
+                + `<button type="button" id="channel-viewer-close" class="channel-viewer-close" aria-label="Close channel viewer">×</button>`
+                + `</div><div id="channel-viewer-grid" class="channel-viewer-grid"></div>`;
+            doc.body.append(panel);
+        }
+        if (!doc.getElementById("channel-viewer-menu")) {
+            const menu = doc.createElement("div");
+            menu.id = "channel-viewer-menu";
+            menu.className = "multiview-menu channel-viewer-menu";
+            menu.hidden = true;
+            menu.setAttribute("role", "menu");
+            menu.setAttribute("aria-label", "Channel viewer");
+            menu.innerHTML = AnnotationAdapter.channelViewerMenuHtml();
+            doc.body.append(menu);
+        }
+        return panel;
+    }
+
+    static channelViewerMenuHtml() {
+        const zooms = AnnotationAdapter.CHANNEL_VIEWER_ZOOMS.map(item =>
+            `<button type="button" role="menuitemradio" data-cv="zoom" data-downsample="${item.downsample}">${item.label}</button>`
+        ).join("");
+        return `<div class="multiview-item">`
+            + `<div class="multiview-submenu-label">Sync to <span class="multiview-accel">▶</span></div>`
+            + `<div class="multiview-submenu" role="menu">`
+            + `<button type="button" role="menuitemradio" data-cv="sync" data-sync="cursor">Cursor</button>`
+            + `<button type="button" role="menuitemradio" data-cv="sync" data-sync="center">Viewer center</button>`
+            + `<button type="button" role="menuitemradio" data-cv="sync" data-sync="none">Do not sync</button>`
+            + `</div></div>`
+            + `<div class="multiview-item">`
+            + `<div class="multiview-submenu-label">Zoom… <span class="multiview-accel">▶</span></div>`
+            + `<div class="multiview-submenu" role="menu">${zooms}</div></div>`
+            + `<button type="button" role="menuitemcheckbox" data-cv="all">Show all channels</button>`
+            + `<button type="button" role="menuitemcheckbox" data-cv="names">Show channel names</button>`
+            + `<button type="button" role="menuitemcheckbox" data-cv="cursor">Show cursor</button>`;
+    }
+
+    static bindChannelViewerChrome(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const panel = doc?.getElementById?.("channel-viewer");
+        if (!panel || panel.dataset.channelViewerBound === "1") return false;
+        doc.getElementById("channel-viewer-close")?.addEventListener("click", () => {
+            AnnotationAdapter.closeChannelViewer(doc);
+        });
+        AnnotationAdapter.bindMultiviewDetachedDrag(panel);
+        panel.addEventListener("contextmenu", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.openChannelViewerMenu(event, doc);
+        });
+        const menu = doc.getElementById("channel-viewer-menu");
+        menu?.addEventListener("click", event => {
+            const submenuLabel = event.target?.closest?.(".multiview-submenu-label");
+            if (submenuLabel) {
+                event.preventDefault();
+                submenuLabel.parentElement?.classList.toggle("is-open");
+                return;
+            }
+            const item = event.target?.closest?.("[data-cv]");
+            if (!item) return;
+            event.preventDefault();
+            AnnotationAdapter.runChannelViewerCommand(item.getAttribute("data-cv"), item.dataset);
+            AnnotationAdapter.closeChannelViewerMenu(doc);
+        });
+        panel.dataset.channelViewerBound = "1";
+        return true;
+    }
+
+    static runChannelViewerCommand(command, detail = {}) {
+        const state = AnnotationAdapter.channelViewer;
+        if (command === "sync") state.syncType = String(detail.sync || "cursor");
+        if (command === "zoom") state.downsample = Number(detail.downsample) || 1;
+        if (command === "all") state.showAllChannels = !state.showAllChannels;
+        if (command === "names") state.showChannelNames = !state.showChannelNames;
+        if (command === "cursor") state.showCursor = !state.showCursor;
+        AnnotationAdapter.rebuildChannelViewerGrid();
+        AnnotationAdapter.scheduleChannelViewerRefresh();
+        return true;
+    }
+
+    static closeChannelViewerMenu(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("channel-viewer-menu");
+        if (!menu) return false;
+        menu.hidden = true;
+        menu.style.display = "none";
+        menu.querySelectorAll?.(".multiview-item.is-open")?.forEach(item => item.classList.remove("is-open"));
+        return true;
+    }
+
+    static openChannelViewerMenu(event, root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("channel-viewer-menu");
+        if (!menu) return false;
+        AnnotationAdapter.syncChannelViewerMenuState(doc);
+        menu.hidden = false;
+        menu.style.display = "block";
+        const width = menu.offsetWidth || 220;
+        const height = menu.offsetHeight || 240;
+        const x = Math.max(8, Math.min(Number(event?.clientX) || 16, window.innerWidth - width - 8));
+        const y = Math.max(8, Math.min(Number(event?.clientY) || 16, window.innerHeight - height - 8));
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+        return true;
+    }
+
+    static syncChannelViewerMenuState(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("channel-viewer-menu");
+        if (!menu) return false;
+        const state = AnnotationAdapter.channelViewer;
+        menu.querySelectorAll("[data-cv='sync']").forEach(item => {
+            item.setAttribute("aria-checked", String(item.dataset.sync === state.syncType));
+            item.classList.toggle("is-checked", item.dataset.sync === state.syncType);
+        });
+        menu.querySelectorAll("[data-cv='zoom']").forEach(item => {
+            const match = Number(item.dataset.downsample) === Number(state.downsample);
+            item.setAttribute("aria-checked", String(match));
+            item.classList.toggle("is-checked", match);
+        });
+        const toggle = (selector, on) => {
+            const item = menu.querySelector(selector);
+            if (!item) return;
+            item.setAttribute("aria-checked", String(on));
+            item.classList.toggle("is-checked", on);
+        };
+        toggle("[data-cv='all']", state.showAllChannels);
+        toggle("[data-cv='names']", state.showChannelNames);
+        toggle("[data-cv='cursor']", state.showCursor);
+        return true;
+    }
+
+    static rebuildChannelViewerGrid(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const grid = doc?.getElementById?.("channel-viewer-grid");
+        const pane = AnnotationAdapter.activeMultiviewPane();
+        if (!grid) return false;
+        const display = pane?.display || AnnotationAdapter.displayController?.getDisplay?.();
+        const metadata = pane?.metadata || AnnotationAdapter.imageMetadata;
+        const cells = AnnotationAdapter.channelViewerCells(display, metadata, {
+            showAllChannels: AnnotationAdapter.channelViewer.showAllChannels,
+            series: pane?.currentSeries
+        });
+        const layout = AnnotationAdapter.channelViewerGridSize(cells.length);
+        grid.style.gridTemplateColumns = `repeat(${layout.cols}, minmax(0, 1fr))`;
+        grid.style.gridTemplateRows = `repeat(${layout.rows}, minmax(0, 1fr))`;
+        grid.replaceChildren();
+        cells.forEach((cell, index) => {
+            const node = doc.createElement("div");
+            node.className = "channel-viewer-cell";
+            if (cell.composite) node.classList.add("is-composite");
+            const leftover = layout.cols * layout.rows - cells.length;
+            if (cell.composite && leftover > 0 && index === cells.length - 1) {
+                node.style.gridColumn = `span ${leftover + 1}`;
+            }
+            const canvas = doc.createElement("canvas");
+            canvas.className = "channel-viewer-canvas";
+            const label = doc.createElement("div");
+            label.className = "channel-viewer-label";
+            label.textContent = cell.name;
+            label.hidden = !AnnotationAdapter.channelViewer.showChannelNames;
+            node.append(canvas, label);
+            node.dataset.cellKey = cell.key;
+            grid.append(node);
+        });
+        return true;
+    }
+
+    static noteChannelViewerCursor(x, y) {
+        if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return;
+        AnnotationAdapter.channelViewer.cursorX = Number(x);
+        AnnotationAdapter.channelViewer.cursorY = Number(y);
+        if (AnnotationAdapter.channelViewer.open && AnnotationAdapter.channelViewer.syncType === "cursor") {
+            AnnotationAdapter.scheduleChannelViewerRefresh();
+        }
+    }
+
+    static channelViewerCenter(viewer, metadata) {
+        const state = AnnotationAdapter.channelViewer;
+        if (state.syncType === "cursor"
+            && Number.isFinite(state.cursorX)
+            && Number.isFinite(state.cursorY)) {
+            return { x: state.cursorX, y: state.cursorY };
+        }
+        if (state.syncType === "none") {
+            return {
+                x: Number(metadata?.width) / 2,
+                y: Number(metadata?.height) / 2
+            };
+        }
+        if (!viewer?.viewport) {
+            return { x: Number(metadata?.width) / 2, y: Number(metadata?.height) / 2 };
+        }
+        const center = typeof viewer.viewport.viewportToImageCoordinates === "function"
+            ? viewer.viewport.viewportToImageCoordinates(viewer.viewport.getCenter(true))
+            : viewer.viewport.getCenter(true);
+        return { x: Number(center?.x), y: Number(center?.y) };
+    }
+
+    static scheduleChannelViewerRefresh() {
+        if (!AnnotationAdapter.channelViewer.open) return;
+        if (AnnotationAdapter.channelViewer.refreshTimer) return;
+        const delay = AnnotationAdapter.channelViewer.syncType === "cursor" ? 40 : 80;
+        AnnotationAdapter.channelViewer.refreshTimer = setTimeout(() => {
+            AnnotationAdapter.channelViewer.refreshTimer = 0;
+            AnnotationAdapter.refreshChannelViewer();
+        }, delay);
+    }
+
+    static channelViewerTileCover(metadata, rect, downsample) {
+        const tileSize = Math.max(32, Number(metadata?.tileSize) || 512);
+        const level = AnnotationAdapter.channelViewerLevelForDownsample(metadata, downsample);
+        const { scaleByLevel } = AnnotationAdapter.pyramidScaleByLevel(metadata);
+        const scale = Number(scaleByLevel.get(level))
+            || Math.pow(2, level - Math.max(0, Number(metadata?.resolutionCount) - 1));
+        const lx = Number(rect.x) * scale;
+        const ly = Number(rect.y) * scale;
+        const lw = Math.max(1, Number(rect.width) * scale);
+        const lh = Math.max(1, Number(rect.height) * scale);
+        const tx0 = Math.floor(lx / tileSize);
+        const ty0 = Math.floor(ly / tileSize);
+        const tx1 = Math.floor((lx + lw - 1) / tileSize);
+        const ty1 = Math.floor((ly + lh - 1) / tileSize);
+        const tiles = [];
+        for (let ty = ty0; ty <= ty1; ty += 1) {
+            for (let tx = tx0; tx <= tx1; tx += 1) {
+                tiles.push({
+                    tx,
+                    ty,
+                    destX: tx * tileSize - lx,
+                    destY: ty * tileSize - ly
+                });
+            }
+        }
+        return { level, scale, tileSize, tiles, width: lw, height: lh };
+    }
+
+    static channelViewerTileUrl(imageId, level, tx, ty, options = {}) {
+        const series = Number(options.series) || 0;
+        const z = Number(options.z) || 0;
+        const revision = Number(options.revision) || 0;
+        if (options.composite || !Number.isFinite(Number(options.channelIndex))) {
+            return `/tile/${encodeURIComponent(imageId)}/composite/${level}/${tx}/${ty}.png`
+                + `?revision=${revision}&z=${z}&series=${series}`;
+        }
+        return `/tile/${encodeURIComponent(imageId)}/${level}/${tx}/${ty}.png`
+            + `?channel=${Number(options.channelIndex)}&revision=${revision}&z=${z}&series=${series}`;
+    }
+
+    static loadChannelViewerImage(url) {
+        return new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error("channel-viewer-tile"));
+            image.src = url;
+        });
+    }
+
+    static applyRgbBandToCanvas(ctx, band) {
+        if (!ctx || !band) return;
+        const width = ctx.canvas.width;
+        const height = ctx.canvas.height;
+        if (!(width > 0 && height > 0)) return;
+        const frame = ctx.getImageData(0, 0, width, height);
+        const pix = frame.data;
+        for (let i = 0; i < pix.length; i += 4) {
+            if (band === "r") {
+                pix[i + 1] = 0;
+                pix[i + 2] = 0;
+            } else if (band === "g") {
+                pix[i] = 0;
+                pix[i + 2] = 0;
+            } else if (band === "b") {
+                pix[i] = 0;
+                pix[i + 1] = 0;
+            }
+        }
+        ctx.putImageData(frame, 0, 0);
+    }
+
+    static drawChannelViewerCursor(ctx) {
+        if (!ctx) return;
+        const x = ctx.canvas.width / 2;
+        const y = ctx.canvas.height / 2;
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,255,0,.9)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x - 8, y);
+        ctx.lineTo(x + 8, y);
+        ctx.moveTo(x, y - 8);
+        ctx.lineTo(x, y + 8);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    static async paintChannelViewerCell(canvas, cell, rect, options = {}) {
+        if (!canvas || !rect || !options.imageId) return false;
+        const cover = AnnotationAdapter.channelViewerTileCover(options.metadata, rect, options.downsample);
+        const width = Math.max(1, Math.round(cover.width));
+        const height = Math.max(1, Math.round(cover.height));
+        const surface = typeof OffscreenCanvas === "function"
+            ? new OffscreenCanvas(width, height)
+            : document.createElement("canvas");
+        surface.width = width;
+        surface.height = height;
+        const ctx = surface.getContext("2d");
+        if (!ctx) return false;
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, width, height);
+        await Promise.all(cover.tiles.map(async tile => {
+            const url = AnnotationAdapter.channelViewerTileUrl(
+                options.imageId,
+                cover.level,
+                tile.tx,
+                tile.ty,
+                {
+                    composite: Boolean(cell.composite || cell.rgbBand),
+                    channelIndex: cell.channelIndex,
+                    series: options.series,
+                    z: options.z,
+                    revision: options.revision
+                }
+            );
+            try {
+                const image = await AnnotationAdapter.loadChannelViewerImage(url);
+                ctx.drawImage(image, tile.destX, tile.destY);
+            } catch (_error) {
+                /* missing edge tiles are expected */
+            }
+        }));
+        if (cell.rgbBand) AnnotationAdapter.applyRgbBandToCanvas(ctx, cell.rgbBand);
+        canvas.width = canvas.clientWidth || width;
+        canvas.height = canvas.clientHeight || height;
+        const dest = canvas.getContext("2d");
+        if (!dest) return false;
+        dest.fillStyle = "#000";
+        dest.fillRect(0, 0, canvas.width, canvas.height);
+        dest.imageSmoothingEnabled = false;
+        dest.drawImage(surface, 0, 0, canvas.width, canvas.height);
+        if (options.showCursor) AnnotationAdapter.drawChannelViewerCursor(dest);
+        return true;
+    }
+
+    static async refreshChannelViewer(root = null) {
+        if (!AnnotationAdapter.channelViewer.open) return false;
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const grid = doc?.getElementById?.("channel-viewer-grid");
+        const pane = AnnotationAdapter.activeMultiviewPane();
+        const viewer = pane?.viewer || AnnotationAdapter.viewer;
+        const metadata = pane?.metadata || AnnotationAdapter.imageMetadata;
+        const display = pane?.display || AnnotationAdapter.displayController?.getDisplay?.();
+        if (!grid || !metadata || !pane?.imageId) return false;
+        const cells = AnnotationAdapter.channelViewerCells(display, metadata, {
+            showAllChannels: AnnotationAdapter.channelViewer.showAllChannels,
+            series: pane.currentSeries
+        });
+        if (grid.children.length !== cells.length) {
+            AnnotationAdapter.rebuildChannelViewerGrid(doc);
+        }
+        const center = AnnotationAdapter.channelViewerCenter(viewer, metadata);
+        const generation = AnnotationAdapter.channelViewer.generation + 1;
+        AnnotationAdapter.channelViewer.generation = generation;
+        const jobs = cells.map((cell, index) => {
+            const node = grid.children[index];
+            const canvas = node?.querySelector?.(".channel-viewer-canvas");
+            const label = node?.querySelector?.(".channel-viewer-label");
+            if (label) {
+                label.textContent = cell.name;
+                label.hidden = !AnnotationAdapter.channelViewer.showChannelNames;
+            }
+            const cellWidth = canvas?.clientWidth || 160;
+            const cellHeight = canvas?.clientHeight || 160;
+            const rect = AnnotationAdapter.channelViewerCropRect(
+                center.x,
+                center.y,
+                cellWidth,
+                cellHeight,
+                AnnotationAdapter.channelViewer.downsample,
+                metadata.width,
+                metadata.height
+            );
+            return AnnotationAdapter.paintChannelViewerCell(canvas, cell, rect, {
+                imageId: pane.imageId,
+                metadata,
+                downsample: AnnotationAdapter.channelViewer.downsample,
+                series: pane.currentSeries,
+                z: pane.currentZ,
+                revision: display?.revision,
+                showCursor: AnnotationAdapter.channelViewer.showCursor
+            }).then(ok => {
+                if (generation !== AnnotationAdapter.channelViewer.generation) return false;
+                return ok;
+            });
+        });
+        await Promise.all(jobs);
+        return generation === AnnotationAdapter.channelViewer.generation;
+    }
+
+    static bindMultiviewPaneEvents(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const grid = doc?.getElementById?.("viewer-grid");
+        if (!grid || grid.dataset.multiviewPaneBound === "1") return;
+        const activate = event => {
+            const pane = event.target?.closest?.(".viewer-pane");
+            if (!pane || !grid.contains(pane)) return;
+            const index = Number(pane.dataset.paneIndex);
+            if (!Number.isFinite(index)) return;
+            if (index === AnnotationAdapter.multiview.activeIndex) return;
+            AnnotationAdapter.requestMultiviewActivate(index);
+        };
+        grid.addEventListener("pointerdown", activate, true);
+        grid.addEventListener("dragover", event => {
+            if (!event.dataTransfer?.types?.includes?.(AnnotationAdapter.MULTI_VIEW_MIME)
+                && !event.dataTransfer?.types?.includes?.("text/plain")) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+        });
+        grid.addEventListener("contextmenu", event => {
+            if (event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay, #annotation-context-menu")) {
+                return;
+            }
+            event.preventDefault();
+            AnnotationAdapter.openMultiViewMenu(event);
+        });
+        grid.addEventListener("drop", event => {
+            const pane = event.target?.closest?.(".viewer-pane");
+            if (!pane) return;
+            event.preventDefault();
+            const imageId = event.dataTransfer?.getData(AnnotationAdapter.MULTI_VIEW_MIME)
+                || event.dataTransfer?.getData("text/plain");
+            if (!imageId) return;
+            AnnotationAdapter.requestMultiviewActivate(Number(pane.dataset.paneIndex));
+            AnnotationAdapter.multiview.hooks.openImageById?.(imageId);
+        });
+        grid.dataset.multiviewPaneBound = "1";
+    }
+
+    static requestMultiviewActivate(index) {
+        const hook = AnnotationAdapter.multiview.hooks.onActivate;
+        if (typeof hook === "function") hook(Number(index));
+        else AnnotationAdapter.markMultiviewActive(index);
+    }
+
+    static markMultiviewActive(index) {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        if (!state.panes[index]) return;
+        state.activeIndex = index;
+        const doc = typeof document !== "undefined" ? document : null;
+        doc?.querySelectorAll?.(".viewer-pane")?.forEach(node => {
+            node.classList.toggle("is-active", Number(node.dataset.paneIndex) === index);
+        });
+        AnnotationAdapter.syncMultiViewMenuState(doc);
+    }
+
+    static setGridSize(rows, cols) {
+        AnnotationAdapter.multiview.hooks.beforeLayout?.();
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const mapped = AnnotationAdapter.remapMultiviewPanes(state.panes, rows, cols);
+        for (const extra of mapped.discarded) {
+            if (extra?.viewer && typeof extra.viewer.destroy === "function") {
+                try { extra.viewer.destroy(); } catch (_error) { /* ignore */ }
+            }
+        }
+        state.rows = mapped.rows;
+        state.cols = mapped.cols;
+        state.panes = mapped.panes;
+        state.columnFractions = AnnotationAdapter.equalFractions(state.cols);
+        state.rowFractions = AnnotationAdapter.equalFractions(state.rows);
+        state.activeIndex = Math.min(state.activeIndex, state.panes.length - 1);
+        AnnotationAdapter.refreshMultiviewChrome();
+        AnnotationAdapter.scheduleMultiviewResize({ fit: true });
+        AnnotationAdapter.multiview.hooks.onGridChanged?.();
+        return state;
+    }
+
+    static addRow() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        if (state.rows >= AnnotationAdapter.MULTI_VIEW_MAX) return state;
+        return AnnotationAdapter.setGridSize(state.rows + 1, state.cols);
+    }
+
+    static addColumn() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        if (state.cols >= AnnotationAdapter.MULTI_VIEW_MAX) return state;
+        return AnnotationAdapter.setGridSize(state.rows, state.cols + 1);
+    }
+
+    static removeRow() {
+        AnnotationAdapter.multiview.hooks.beforeLayout?.();
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const next = AnnotationAdapter.removeRowLayout(state);
+        if (!next.ok) {
+            AnnotationAdapter.multiview.hooks.status?.(
+                next.reason === "close-first"
+                    ? "Close the image in this row before removing it."
+                    : "The last row cannot be removed."
+            );
+            return next;
+        }
+        state.rows = next.rows;
+        state.cols = next.cols;
+        state.panes = next.panes;
+        state.activeIndex = next.activeIndex;
+        state.rowFractions = AnnotationAdapter.equalFractions(state.rows);
+        AnnotationAdapter.refreshMultiviewChrome();
+        AnnotationAdapter.scheduleMultiviewResize({ fit: true });
+        AnnotationAdapter.multiview.hooks.onGridChanged?.();
+        return next;
+    }
+
+    static removeColumn() {
+        AnnotationAdapter.multiview.hooks.beforeLayout?.();
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const next = AnnotationAdapter.removeColumnLayout(state);
+        if (!next.ok) {
+            AnnotationAdapter.multiview.hooks.status?.(
+                next.reason === "close-first"
+                    ? "Close the image in this column before removing it."
+                    : "The last column cannot be removed."
+            );
+            return next;
+        }
+        state.rows = next.rows;
+        state.cols = next.cols;
+        state.panes = next.panes;
+        state.activeIndex = next.activeIndex;
+        state.columnFractions = AnnotationAdapter.equalFractions(state.cols);
+        AnnotationAdapter.refreshMultiviewChrome();
+        AnnotationAdapter.scheduleMultiviewResize({ fit: true });
+        AnnotationAdapter.multiview.hooks.onGridChanged?.();
+        return next;
+    }
+
+    static resetViewerSizes() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        state.columnFractions = AnnotationAdapter.equalFractions(state.cols);
+        state.rowFractions = AnnotationAdapter.equalFractions(state.rows);
+        AnnotationAdapter.refreshMultiviewChrome();
+        AnnotationAdapter.scheduleMultiviewResize({ fit: true });
+        return state;
+    }
+
+    static setSynchronizeViewers(enabled) {
+        AnnotationAdapter.ensureMultiviewState().synchronizeViewers = Boolean(enabled);
+        AnnotationAdapter.syncMultiViewMenuState();
+        return AnnotationAdapter.multiview.synchronizeViewers;
+    }
+
+    static toggleSynchronizeViewers() {
+        return AnnotationAdapter.setSynchronizeViewers(!AnnotationAdapter.multiview.synchronizeViewers);
+    }
+
+    static viewerImageZoom(viewer) {
+        if (!viewer?.viewport) return null;
+        const zoom = viewer.viewport.getZoom(true);
+        if (typeof viewer.viewport.viewportToImageZoom === "function") {
+            return viewer.viewport.viewportToImageZoom(zoom);
+        }
+        return zoom;
+    }
+
+    static setViewerImageZoom(viewer, imageZoom, refPoint) {
+        if (!viewer?.viewport || !(Number(imageZoom) > 0)) return false;
+        const viewportZoom = typeof viewer.viewport.imageToViewportZoom === "function"
+            ? viewer.viewport.imageToViewportZoom(imageZoom)
+            : imageZoom;
+        viewer.viewport.zoomTo(viewportZoom, refPoint || null, true);
+        return true;
+    }
+
+    static propagateMultiviewViewport(sourceIndex) {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        if (!state.synchronizeViewers || state.syncing) return false;
+        const source = state.panes[sourceIndex];
+        const viewer = source?.viewer;
+        if (!viewer?.viewport || !source.metadata) return false;
+        const center = typeof viewer.viewport.viewportToImageCoordinates === "function"
+            ? viewer.viewport.viewportToImageCoordinates(viewer.viewport.getCenter(true))
+            : viewer.viewport.getCenter(true);
+        const payload = AnnotationAdapter.syncViewportPayload(
+            center,
+            source.metadata.width,
+            source.metadata.height,
+            AnnotationAdapter.viewerImageZoom(viewer)
+        );
+        if (!payload) return false;
+        state.syncing = true;
+        try {
+            for (const pane of state.panes) {
+                if (pane.index === sourceIndex || !pane.viewer?.viewport || !pane.metadata) continue;
+                const applied = AnnotationAdapter.applySyncPayload(
+                    payload, pane.metadata.width, pane.metadata.height
+                );
+                if (!applied) continue;
+                if (typeof pane.viewer.viewport.imageToViewportCoordinates === "function") {
+                    const point = pane.viewer.viewport.imageToViewportCoordinates(applied.x, applied.y);
+                    pane.viewer.viewport.panTo(point, true);
+                }
+                AnnotationAdapter.setViewerImageZoom(pane.viewer, applied.imageZoom);
+            }
+        } finally {
+            state.syncing = false;
+        }
+        return true;
+    }
+
+    static matchViewerResolutions() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const source = state.panes[state.activeIndex];
+        if (!source?.viewer || !source.metadata) return false;
+        const sourceZoom = AnnotationAdapter.viewerImageZoom(source.viewer);
+        const sourceMpp = Number(source.metadata.micronsPerPixelX);
+        state.syncing = true;
+        try {
+            for (const pane of state.panes) {
+                if (pane.index === source.index || !pane.viewer || !pane.metadata) continue;
+                const zoom = AnnotationAdapter.matchedImageZoom(
+                    sourceZoom, sourceMpp, Number(pane.metadata.micronsPerPixelX)
+                );
+                AnnotationAdapter.setViewerImageZoom(pane.viewer, zoom);
+            }
+        } finally {
+            state.syncing = false;
+        }
+        return true;
+    }
+
+    static closeActiveViewer() {
+        const hook = AnnotationAdapter.multiview.hooks.closeActive;
+        if (typeof hook === "function") return hook();
+        const pane = AnnotationAdapter.activeMultiviewPane();
+        if (!pane) return false;
+        if (pane.viewer) {
+            try { pane.viewer.close(); } catch (_error) { /* ignore */ }
+        }
+        pane.image = null;
+        pane.metadata = null;
+        pane.display = null;
+        pane.imageId = null;
+        AnnotationAdapter.refreshMultiviewChrome();
+        return true;
+    }
+
+    static detachActiveViewer() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const pane = state.panes[state.activeIndex];
+        const doc = typeof document !== "undefined" ? document : null;
+        if (!pane || !doc || pane.detached) return false;
+        if (state.rows * state.cols <= 1 || !pane.imageId) return false;
+        const node = doc.querySelector(`.viewer-pane[data-pane-index="${pane.index}"]`);
+        if (!node) return false;
+        let dock = doc.getElementById(`multiview-detached-${pane.index}`);
+        if (!dock) {
+            dock = doc.createElement("div");
+            dock.id = `multiview-detached-${pane.index}`;
+            dock.className = "multiview-detached";
+            dock.innerHTML = `<div class="multiview-detached-titlebar">`
+                + `<span class="multiview-detached-title">Detached viewer</span>`
+                + `<button type="button" class="multiview-detached-attach">Attach viewer to grid</button>`
+                + `<button type="button" class="multiview-detached-close" aria-label="Attach and close window">×</button>`
+                + `</div><div class="multiview-detached-body"></div>`;
+            doc.body.append(dock);
+            dock.querySelector(".multiview-detached-attach")?.addEventListener("click", () => {
+                AnnotationAdapter.requestMultiviewActivate(pane.index);
+                AnnotationAdapter.attachActiveViewer();
+            });
+            dock.querySelector(".multiview-detached-close")?.addEventListener("click", () => {
+                AnnotationAdapter.requestMultiviewActivate(pane.index);
+                AnnotationAdapter.attachActiveViewer();
+            });
+            AnnotationAdapter.bindMultiviewDetachedDrag(dock);
+        }
+        const slot = doc.createElement("div");
+        slot.className = "viewer-pane-slot";
+        slot.dataset.paneIndex = String(pane.index);
+        slot.textContent = "Viewer detached";
+        node.replaceWith(slot);
+        dock.querySelector(".multiview-detached-body")?.append(node);
+        dock.querySelector(".multiview-detached-title").textContent =
+            pane.image?.name || "Detached viewer";
+        dock.hidden = false;
+        pane.detached = true;
+        AnnotationAdapter.resizeMultiviewViewers();
+        AnnotationAdapter.syncMultiViewMenuState(doc);
+        return true;
+    }
+
+    static attachActiveViewer() {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        const pane = state.panes[state.activeIndex];
+        const doc = typeof document !== "undefined" ? document : null;
+        if (!pane?.detached || !doc) return false;
+        const dock = doc.getElementById(`multiview-detached-${pane.index}`);
+        const node = dock?.querySelector(".viewer-pane");
+        const slot = doc.querySelector(`.viewer-pane-slot[data-pane-index="${pane.index}"]`);
+        const grid = doc.getElementById("viewer-grid");
+        if (node && slot) slot.replaceWith(node);
+        else if (node && grid) grid.append(node);
+        if (dock) dock.hidden = true;
+        pane.detached = false;
+        AnnotationAdapter.refreshMultiviewChrome();
+        return true;
+    }
+
+    static bindMultiviewDetachedDrag(dock) {
+        const bar = dock?.querySelector?.(
+            ".multiview-detached-titlebar, .channel-viewer-titlebar, #channel-viewer-handle"
+        );
+        if (!bar || bar.dataset.dragBound === "1") return;
+        let startX = 0;
+        let startY = 0;
+        let origX = 0;
+        let origY = 0;
+        bar.addEventListener("pointerdown", event => {
+            if (event.target?.closest?.("button")) return;
+            startX = event.clientX;
+            startY = event.clientY;
+            const rect = dock.getBoundingClientRect();
+            origX = rect.left;
+            origY = rect.top;
+            const move = ev => {
+                dock.style.left = `${origX + ev.clientX - startX}px`;
+                dock.style.top = `${origY + ev.clientY - startY}px`;
+            };
+            const up = () => {
+                window.removeEventListener("pointermove", move);
+                window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+        });
+        bar.dataset.dragBound = "1";
+    }
+
+    static bindMultiviewSync(viewer, paneIndex) {
+        if (!viewer || typeof viewer.addHandler !== "function" || viewer._wsiMultiviewSyncBound) {
+            return Boolean(viewer?._wsiMultiviewSyncBound);
+        }
+        const emit = () => AnnotationAdapter.propagateMultiviewViewport(paneIndex);
+        viewer.addHandler("pan", emit);
+        viewer.addHandler("zoom", emit);
+        viewer.addHandler("animation", emit);
+        viewer._wsiMultiviewSyncBound = true;
+        return true;
+    }
+
+    static bindViewerMultiViewContextMenu(viewer) {
+        const canvas = viewer?.canvas || viewer?.element;
+        if (!canvas || canvas.dataset?.multiviewContextBound === "1") return false;
+        canvas.addEventListener("contextmenu", event => {
+            if (event.target?.closest?.(".osd-annotation-shape, .annotation-shape-overlay, #annotation-context-menu")) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.openMultiViewMenu(event);
+        });
+        if (canvas.dataset) canvas.dataset.multiviewContextBound = "1";
+        return true;
+    }
+
+    static bindSlideListMultiViewDrag(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const list = doc?.getElementById?.("images") || doc?.getElementById?.("image-list");
+        if (!list || list.dataset.multiviewDragBound === "1") return false;
+        list.addEventListener("dragstart", event => {
+            const button = event.target?.closest?.(".image-button");
+            if (!button?.dataset?.imageId) return;
+            event.dataTransfer?.setData(AnnotationAdapter.MULTI_VIEW_MIME, button.dataset.imageId);
+            event.dataTransfer?.setData("text/plain", button.dataset.imageId);
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+        });
+        list.dataset.multiviewDragBound = "1";
+        return true;
+    }
+
+    static runMultiViewCommand(command, detail = {}) {
+        switch (String(command || "")) {
+            case "grid":
+                return AnnotationAdapter.setGridSize(detail.rows, detail.cols);
+            case "add-row":
+                return AnnotationAdapter.addRow();
+            case "add-column":
+                return AnnotationAdapter.addColumn();
+            case "remove-row":
+                return AnnotationAdapter.removeRow();
+            case "remove-column":
+                return AnnotationAdapter.removeColumn();
+            case "reset-sizes":
+                return AnnotationAdapter.resetViewerSizes();
+            case "sync":
+                return AnnotationAdapter.toggleSynchronizeViewers();
+            case "channel-viewer":
+                return AnnotationAdapter.toggleChannelViewer();
+            case "match":
+                return AnnotationAdapter.matchViewerResolutions();
+            case "close":
+                return AnnotationAdapter.closeActiveViewer();
+            case "detach":
+                return AnnotationAdapter.detachActiveViewer();
+            case "attach":
+                return AnnotationAdapter.attachActiveViewer();
+            default:
+                return false;
+        }
+    }
+
+    static syncMultiViewMenuState(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("multiview-menu");
+        if (!menu) return false;
+        const model = AnnotationAdapter.multiViewMenuModel();
+        menu.querySelectorAll("[data-mv-grid]").forEach(item => {
+            const rows = Number(item.dataset.rows);
+            const cols = Number(item.dataset.cols);
+            item.setAttribute("aria-checked", String(model.rows === rows && model.cols === cols));
+        });
+        const sync = menu.querySelector("[data-mv='sync']");
+        if (sync) {
+            sync.setAttribute("aria-checked", String(model.synchronizeViewers));
+            sync.classList.toggle("is-checked", model.synchronizeViewers);
+        }
+        const channelViewer = menu.querySelector("[data-mv='channel-viewer']");
+        if (channelViewer) {
+            const open = Boolean(AnnotationAdapter.channelViewer.open);
+            channelViewer.setAttribute("aria-checked", String(open));
+            channelViewer.classList.toggle("is-checked", open);
+        }
+        const enable = (selector, on) => {
+            menu.querySelectorAll(selector).forEach(item => {
+                item.disabled = !on;
+                item.setAttribute("aria-disabled", String(!on));
+            });
+        };
+        enable("[data-mv='add-row']", model.canAddRow);
+        enable("[data-mv='add-column']", model.canAddColumn);
+        enable("[data-mv='remove-row']", model.canRemoveRow);
+        enable("[data-mv='remove-column']", model.canRemoveColumn);
+        enable("[data-mv='close']", model.canClose);
+        enable("[data-mv='detach']", model.canDetach);
+        enable("[data-mv='attach']", model.canAttach);
+        const attach = menu.querySelector("[data-mv='attach']");
+        if (attach) attach.hidden = !model.canAttach;
+        return true;
+    }
+
+    static closeMultiViewMenu(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("multiview-menu");
+        if (!menu) return false;
+        menu.hidden = true;
+        menu.style.display = "none";
+        menu.querySelectorAll?.(".multiview-item.is-open")?.forEach(item => {
+            item.classList.remove("is-open");
+        });
+        const button = doc.getElementById("view-menu-button");
+        button?.setAttribute("aria-expanded", "false");
+        return true;
+    }
+
+    static openMultiViewMenu(event, root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("multiview-menu");
+        if (!menu) return false;
+        AnnotationAdapter.syncMultiViewMenuState(doc);
+        menu.hidden = false;
+        menu.style.display = "block";
+        const pad = 8;
+        const width = menu.offsetWidth || 260;
+        const height = menu.offsetHeight || 320;
+        let x = Number(event?.clientX);
+        let y = Number(event?.clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            const button = doc.getElementById("view-menu-button");
+            const rect = button?.getBoundingClientRect?.();
+            x = rect ? rect.left : 16;
+            y = rect ? rect.bottom + 4 : 48;
+        }
+        x = Math.max(pad, Math.min(x, window.innerWidth - width - pad));
+        y = Math.max(pad, Math.min(y, window.innerHeight - height - pad));
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+        doc.getElementById("view-menu-button")?.setAttribute("aria-expanded", "true");
+        return true;
+    }
+
+    static bindMultiView(root = null, hooks = {}) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.multiview.hooks = { ...AnnotationAdapter.multiview.hooks, ...hooks };
+        AnnotationAdapter.ensureMultiviewDom(doc);
+        AnnotationAdapter.bindSlideListMultiViewDrag(doc);
+        const menu = doc?.getElementById?.("multiview-menu");
+        if (menu && menu.dataset.multiviewBound !== "1") {
+            menu.addEventListener("click", event => {
+                const submenuLabel = event.target?.closest?.(".multiview-submenu-label");
+                if (submenuLabel) {
+                    event.preventDefault();
+                    submenuLabel.parentElement?.classList.toggle("is-open");
+                    return;
+                }
+                const item = event.target?.closest?.("[data-mv]");
+                if (!item || item.disabled) return;
+                event.preventDefault();
+                const command = item.getAttribute("data-mv");
+                AnnotationAdapter.runMultiViewCommand(command, {
+                    rows: item.dataset.rows,
+                    cols: item.dataset.cols
+                });
+                AnnotationAdapter.closeMultiViewMenu(doc);
+            });
+            menu.dataset.multiviewBound = "1";
+        }
+        const button = doc?.getElementById?.("view-menu-button");
+        if (button && button.dataset.multiviewBound !== "1") {
+            button.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                const menuEl = doc.getElementById("multiview-menu");
+                if (menuEl && !menuEl.hidden && menuEl.style.display !== "none") {
+                    AnnotationAdapter.closeMultiViewMenu(doc);
+                } else {
+                    AnnotationAdapter.openMultiViewMenu(event, doc);
+                }
+            });
+            button.dataset.multiviewBound = "1";
+        }
+        if (doc && doc.documentElement.dataset.multiviewMenuDismiss !== "1") {
+            doc.addEventListener("click", event => {
+                if (event.target?.closest?.("#multiview-menu, #view-menu-button")) return;
+                AnnotationAdapter.closeMultiViewMenu(doc);
+                if (!event.target?.closest?.("#channel-viewer-menu")) {
+                    AnnotationAdapter.closeChannelViewerMenu(doc);
+                }
+            }, true);
+            doc.addEventListener("keydown", event => {
+                if (event.key === "Escape") AnnotationAdapter.closeMultiViewMenu(doc);
+            });
+            const view = doc.defaultView || (typeof window !== "undefined" ? window : null);
+            if (view && typeof view.addEventListener === "function") {
+                view.addEventListener("resize", () => AnnotationAdapter.scheduleMultiviewResize());
+            }
+            doc.documentElement.dataset.multiviewMenuDismiss = "1";
+        }
+        const accel = doc?.querySelector?.("[data-mv-accel='sync']");
+        if (accel) accel.textContent = AnnotationAdapter.multiViewAcceleratorLabel();
+        AnnotationAdapter.syncMultiViewMenuState(doc);
+        AnnotationAdapter.multiview.bound = true;
+        return true;
+    }
+
     /**
      * Extract the first case / accession id from a path or filename.
      * Returns the matched substring with its original casing, or null.
@@ -252,8 +2006,15 @@ class AnnotationAdapter {
 
         AnnotationAdapter.resetActiveImageTracking();
 
-        const viewer = options.viewer;
-        if (viewer) {
+        const viewers = [options.viewer]
+            .concat(Array.isArray(options.viewers) ? options.viewers : [])
+            .concat(AnnotationAdapter.listMultiviewViewers());
+        const uniqueViewers = [];
+        for (const viewer of viewers) {
+            if (!viewer || uniqueViewers.includes(viewer)) continue;
+            uniqueViewers.push(viewer);
+        }
+        for (const viewer of uniqueViewers) {
             try {
                 // Mandatory: drop all tiles and return the canvas to black.
                 viewer.close();
@@ -270,6 +2031,7 @@ class AnnotationAdapter {
                 try { viewer.clearOverlays(); } catch (_error) { /* ignore */ }
             }
         }
+        AnnotationAdapter.resetMultiviewImages();
 
         // viewer.close()/clearOverlays() above only tear down OSD's own tiles and
         // overlay nodes. The native annotation shapes (see onSlideClicked) live in
@@ -1351,6 +3113,7 @@ class AnnotationAdapter {
         button.dataset.ocrAttempted = image.ocrAttempted ? "1" : "";
         button.dataset.slideLabel = title;
         button.title = image.relativePath || image.name || "";
+        button.draggable = true;
         const info = doc.createElement("div");
         info.className = "slide-info-block";
         const topRow = doc.createElement("div");
@@ -4874,6 +6637,11 @@ class AnnotationAdapter {
         AnnotationAdapter.bindAnnotationContextMenu();
         AnnotationAdapter.bindLayerVisibilityAndSanitizeControls();
         AnnotationAdapter.bindQuPathKeyboardShortcuts();
+        if (AnnotationAdapter.viewer) {
+            const pane = AnnotationAdapter.activeMultiviewPane();
+            AnnotationAdapter.bindViewerMultiViewContextMenu(AnnotationAdapter.viewer);
+            AnnotationAdapter.bindMultiviewSync(AnnotationAdapter.viewer, pane?.index ?? 0);
+        }
         AnnotationAdapter.ensureCurrentActiveTool(AnnotationAdapter.currentActiveTool || "move");
         AnnotationAdapter.installViewerToolAlias();
         AnnotationAdapter.bindGlobalUiTooltip();
@@ -4920,6 +6688,9 @@ class AnnotationAdapter {
         "#secondary-annotation-toolbar",
         "#annotation-editor-popup",
         "#annotation-context-menu",
+        "#multiview-menu",
+        "#view-menu-button",
+        ".multiview-detached",
         "#case-filter-listbox",
         "header",
         "aside",
@@ -8373,8 +10144,8 @@ class AnnotationAdapter {
                 const entry = entries?.[0];
                 const width = entry?.contentRect?.width || palette.clientWidth || baseWidth;
                 const height = entry?.contentRect?.height || palette.clientHeight || baseHeight;
-                const scale = Math.min(width / baseWidth, height / baseHeight);
-                const clamped = Math.max(0.35, Math.min(2.5, scale));
+                const scale = Math.min(1, width / baseWidth);
+                const clamped = Math.max(0.35, Math.min(1, scale));
                 if (body?.style) body.style.fontSize = `${(baseFontRem * clamped).toFixed(3)}rem`;
             });
             observer.observe(palette);
@@ -8515,6 +10286,26 @@ class AnnotationAdapter {
         return true;
     }
 
+    static shortcutsLegendLayout(viewport = {}) {
+        const viewW = Number(viewport.innerWidth);
+        const viewH = Number(viewport.innerHeight);
+        const widthSource = Number.isFinite(viewW) && viewW > 0
+            ? viewW
+            : (typeof window !== "undefined" ? Number(window.innerWidth) : 1200);
+        const heightSource = Number.isFinite(viewH) && viewH > 0
+            ? viewH
+            : (typeof window !== "undefined" ? Number(window.innerHeight) : 800);
+        const left = 16;
+        const top = 12;
+        const bottomGap = 12;
+        return {
+            left,
+            top,
+            width: Math.max(300, Math.min(440, Math.max(160, widthSource - left - 16))),
+            height: Math.max(200, heightSource - top - bottomGap)
+        };
+    }
+
     static openFloatingShortcutsLegend(root = null) {
         const doc = AnnotationAdapter._documentFromRoot(root)
             || (typeof document !== "undefined" ? document : null);
@@ -8528,17 +10319,25 @@ class AnnotationAdapter {
         AnnotationAdapter.applyLiberatedFloatingStyle(palette, {
             minWidth: "160px",
             minHeight: "56px",
-            resize: "none"
+            resize: "none",
+            zIndex: "100015"
         });
-        if (palette.style) palette.style.flexDirection = "column";
-        const cascaded = AnnotationAdapter.getAntiOverlapPosition(100, 100, 340, 420, "floating-shortcuts-legend", doc);
+        const layout = AnnotationAdapter.shortcutsLegendLayout(
+            typeof window !== "undefined" ? window : {}
+        );
         if (palette.style) {
-            palette.style.left = `${cascaded.left}px`;
-            palette.style.top = `${cascaded.top}px`;
+            palette.style.flexDirection = "column";
+            palette.style.left = `${layout.left}px`;
+            palette.style.top = `${layout.top}px`;
             palette.style.right = "auto";
             palette.style.bottom = "auto";
+            palette.style.width = `${layout.width}px`;
+            palette.style.height = `${layout.height}px`;
+            palette.style.maxHeight = `${layout.height}px`;
             palette.style.display = "flex";
         }
+        palette.classList?.remove?.("legend-minimized");
+        AnnotationAdapter.syncFloatingShortcutsLegendMinimizedUi(palette, doc);
         palette.hidden = false;
         palette.removeAttribute?.("hidden");
         palette.setAttribute?.("aria-hidden", "false");
@@ -8584,6 +10383,11 @@ class AnnotationAdapter {
             if (key === "t" && e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey) {
                 e.preventDefault();
                 AnnotationAdapter.toggleDeveloperSandbox();
+                return;
+            }
+            if (AnnotationAdapter.isMultiViewSyncShortcut(e)) {
+                e.preventDefault();
+                AnnotationAdapter.toggleSynchronizeViewers();
                 return;
             }
             if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -10714,9 +12518,14 @@ class AnnotationAdapter {
         outlines.forEach(el => {
             if (el?.style) el.style.opacity = opacity;
         });
-        const viewerEl = doc?.getElementById?.("viewer")
-            || AnnotationAdapter.viewer?.element;
-        viewerEl?.classList?.toggle?.("annotations-hidden", !AnnotationAdapter.vectorOutlinesVisible);
+        const viewerEls = doc?.querySelectorAll?.(".viewer-pane-osd, #viewer") || [];
+        viewerEls.forEach(el => {
+            el.classList?.toggle?.("annotations-hidden", !AnnotationAdapter.vectorOutlinesVisible);
+        });
+        AnnotationAdapter.viewer?.element?.classList?.toggle?.(
+            "annotations-hidden",
+            !AnnotationAdapter.vectorOutlinesVisible
+        );
         const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
         if (engine) engine.annotationsVisible = AnnotationAdapter.vectorOutlinesVisible;
         const btn = doc?.getElementById?.("toggle-annotations-visibility-btn");
@@ -10836,10 +12645,7 @@ class AnnotationAdapter {
     }
 
     static relayoutViewerAfterToolbarChange() {
-        const viewer = AnnotationAdapter.viewer;
-        if (viewer?.viewport && typeof viewer.viewport.resize === "function") {
-            try { viewer.viewport.resize(); } catch (_error) { /* ignore */ }
-        }
+        AnnotationAdapter.scheduleMultiviewResize();
         if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
             try { window.dispatchEvent(new Event("resize")); } catch (_error) { /* ignore */ }
         }

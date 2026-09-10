@@ -119,8 +119,12 @@ const { AnnotationAdapter } = context;
 }
 
 assert.match(adapterSource, /static primaryTiledImage\(/);
-assert.doesNotMatch(adapterSource, /viewport\.viewportToImageCoordinates/);
-assert.doesNotMatch(adapterSource, /viewport\.imageToViewportWidth\(/);
+const nucleiHelpers = adapterSource.slice(
+    adapterSource.indexOf("static imageToViewportWidth"),
+    adapterSource.indexOf("static planNucleusTiles")
+);
+assert.doesNotMatch(nucleiHelpers, /viewport\.viewportToImageCoordinates/);
+assert.doesNotMatch(nucleiHelpers, /viewport\.imageToViewportWidth\(/);
 
 {
     const viewer = {
@@ -171,12 +175,12 @@ assert.equal(AnnotationAdapter.ihcRgbFromNormalized(1), "rgb(128, 0, 0)");
 assert.equal(AnnotationAdapter.isBrightfieldSlide({ modality: "BRIGHTFIELD" }), true);
 assert.equal(AnnotationAdapter.isBrightfieldSlide({ engine: "OPENSLIDE" }), true);
 assert.equal(AnnotationAdapter.isBrightfieldSlide({ modality: "FLUORESCENCE" }), false);
-assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 2), false);
+assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 2), true);
 assert.equal(AnnotationAdapter.isRgbSeriesView({
     modality: "FLUORESCENCE",
     series: 2,
     seriesProfiles: [{ index: 2, rgb: true, isDiagnosticSpecimen: true }]
-}, 2), false);
+}, 2), true);
 assert.equal(AnnotationAdapter.isRgbSeriesView({
     modality: "FLUORESCENCE",
     seriesProfiles: [{ index: 2, rgb: false, isDiagnosticSpecimen: true }]
@@ -187,6 +191,10 @@ assert.equal(AnnotationAdapter.chooseDefaultSeries([
 ]), 2);
 assert.equal(AnnotationAdapter.chooseDefaultSeries([
     { index: 0, width: 9000, height: 7000, rgb: true, isDiagnosticSpecimen: true },
+    { index: 2, width: 8000, height: 6000, rgb: false, isDiagnosticSpecimen: true }
+]), 0);
+assert.equal(AnnotationAdapter.chooseDefaultSeries([
+    { index: 0, width: 1024, height: 768, rgb: true, isDiagnosticSpecimen: true },
     { index: 2, width: 8000, height: 6000, rgb: false, isDiagnosticSpecimen: true }
 ]), 2);
 assert.match(html, /<summary>System Diagnostic Disclaimer<\/summary>/);

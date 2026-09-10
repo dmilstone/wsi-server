@@ -106,6 +106,13 @@ function fakeItem(index, extra = {}) {
 }
 
 {
+    const item = fakeItem(0, { options: { zIndexProperty: 0 } });
+    const viewer = { world: fakeWorld([item]), forceRedraw() {} };
+    AnnotationAdapter.applyZStackLayerOpacities(viewer, 4);
+    assert.equal(item.opacity, 1);
+}
+
+{
     const items = [0, 1, 2, 3].map(index => fakeItem(index));
     const viewer = {
         openCalls: 0,
@@ -381,6 +388,42 @@ assert.match(html, /AnnotationAdapter\.isRgbSeriesView/);
 assert.match(html, /AnnotationAdapter\.chooseDefaultSeries/);
 assert.match(adapterSource, /static isRgbSeriesView\(/);
 assert.match(adapterSource, /static chooseDefaultSeries\(/);
+assert.match(adapterSource, /static buildPyramidTileSource\(/);
+assert.match(adapterSource, /_memoizeLevelScale/);
+assert.match(html, /AnnotationAdapter\.buildPyramidTileSource/);
+
+{
+    // Synthetic 4x Aperio-style pyramid (clinical H&E). OSD 4.1's default
+    // memoizer would treat this as 2x and request 4 coarse tiles instead of 1.
+    const source = AnnotationAdapter.buildPyramidTileSource({
+        width: 16384,
+        height: 8192,
+        tileSize: 512,
+        maxLevel: 3,
+        getTileUrl() { return "/tile"; }
+    }, {
+        width: 16384,
+        height: 8192,
+        resolutionCount: 4,
+        levelDimensions: [
+            { level: 0, width: 256, height: 128 },
+            { level: 1, width: 1024, height: 512 },
+            { level: 2, width: 4096, height: 2048 },
+            { level: 3, width: 16384, height: 8192 }
+        ]
+    });
+    assert.ok(Math.abs(source.getLevelScale(0) - (256 / 16384)) < 1e-9);
+    assert.ok(Math.abs(source.getLevelScale(3) - 1) < 1e-9);
+    const coarse = source.getNumTiles(0);
+    const fine = source.getNumTiles(3);
+    assert.equal(coarse.x, 1);
+    assert.equal(coarse.y, 1);
+    assert.equal(fine.x, 32);
+    assert.equal(fine.y, 16);
+    source._memoizeLevelScale();
+    assert.ok(Math.abs(source.getLevelScale(0) - (256 / 16384)) < 1e-9);
+    assert.equal(source.getNumTiles(0).x, 1);
+}
 assert.doesNotMatch(adapterSource, /index:\s*specs\.length/);
 assert.match(html, /AnnotationAdapter\.bindZStackWheel/);
 assert.match(html, /AnnotationAdapter\.applyZStackLayerOpacities/);

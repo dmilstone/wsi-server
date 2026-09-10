@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260909-vsi-he-rgb"></script>
+    <script src="/annotation-adapter.js?v=20260910-help-fix"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
@@ -271,7 +271,7 @@
             margin-left: 0;
         }
 
-        .workspace { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 0; }
+        .workspace { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100%; min-height: 0; }
         aside { min-width: 0; background: var(--surface); overflow: auto; scrollbar-color: #405064 transparent; }
         #images-panel { border-right: 1px solid var(--border); }
         #channels {
@@ -1067,6 +1067,7 @@
         }
         .image-button:hover { background: var(--surface-hover); transform: translateX(1px); }
         .image-button.active { background: var(--accent-soft); border-color: rgba(77, 148, 216, .48); }
+        .image-button.is-open-elsewhere { border-color: rgba(229, 57, 53, .45); }
         .image-button.active::before { background: var(--accent); }
 
         /* Stage fills the viewer; toolbar lives in the header row above (not over canvas). */
@@ -1075,6 +1076,8 @@
             display: grid;
             grid-template-columns: minmax(0, 1fr);
             grid-template-rows: minmax(0, 1fr);
+            width: 100%;
+            height: 100%;
             min-width: 0;
             min-height: 0;
             background: #000;
@@ -1083,11 +1086,250 @@
             grid-column: 1;
             grid-row: 1;
             position: relative;
+            width: 100%;
+            height: 100%;
             min-width: 0;
             min-height: 0;
             background: #000;
         }
-        #viewer { width: 100%; height: 100%; background: #000; }
+        /* Fill the stage with a real box. Percentage-height wrappers inside an
+           auto-sized stage collapse to 0, so OSD opens a 0×0 canvas and 1×1
+           stays blank. */
+        .viewer-grid {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            width: auto;
+            height: auto;
+            min-width: 0;
+            min-height: 0;
+            gap: 2px;
+            background: #111;
+        }
+        .viewer-pane,
+        .viewer-pane-slot {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+            background: #000;
+            border: 1px solid #222;
+        }
+        /* OSD sets inline position:relative + height:100%. Without a used
+           parent height that collapses to 0×0 and blanks even 1×1. */
+        #viewer,
+        .viewer-pane-osd,
+        .viewer-pane-osd.openseadragon-container {
+            position: absolute !important;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            min-width: 0;
+            min-height: 0;
+            background: #000;
+        }
+        .viewer-pane-placeholder {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+        }
+        .viewer-pane.is-active {
+            outline: 2px solid #e53935;
+            outline-offset: -2px;
+            z-index: 1;
+        }
+        .viewer-pane-placeholder,
+        .viewer-pane-slot {
+            display: grid;
+            place-items: center;
+            color: #9aa4b2;
+            font-size: 13px;
+            text-align: center;
+            padding: 16px;
+            pointer-events: none;
+        }
+        .viewer-pane-placeholder[hidden] { display: none !important; }
+        .viewer-pane-caption {
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            z-index: 4;
+            max-width: calc(100% - 16px);
+            padding: 2px 7px;
+            border-radius: 4px;
+            background: rgba(0,0,0,.62);
+            color: #fff;
+            font-size: 11px;
+            pointer-events: none;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .viewer-pane-caption[hidden] { display: none !important; }
+        .viewer-pane > .viewer-pane-scalebar {
+            left: 10px;
+            bottom: 10px;
+            z-index: 15;
+        }
+        .viewer-stage > #scale-bar { display: none !important; }
+        .multiview-menu {
+            position: fixed;
+            z-index: 100030;
+            min-width: 260px;
+            padding: 4px 0;
+            background: #2b2140;
+            color: #f3e9ff;
+            border: 1px solid #5a4a78;
+            border-radius: 2px;
+            box-shadow: 0 8px 22px rgba(0,0,0,.45);
+            font-size: 13px;
+        }
+        .multiview-menu[hidden] { display: none !important; }
+        .multiview-menu button,
+        .multiview-submenu-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+            width: 100%;
+            padding: 5px 14px;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+        .multiview-menu button:hover,
+        .multiview-item:hover > .multiview-submenu-label,
+        .multiview-menu button.is-checked {
+            background: #5b3d8c;
+        }
+        .multiview-menu button[disabled] {
+            opacity: .45;
+            cursor: default;
+        }
+        .multiview-item {
+            position: relative;
+        }
+        .multiview-submenu {
+            display: none;
+            position: absolute;
+            left: 100%;
+            top: -4px;
+            min-width: 250px;
+            padding: 4px 0;
+            background: #2b2140;
+            border: 1px solid #5a4a78;
+            box-shadow: 0 8px 22px rgba(0,0,0,.45);
+        }
+        .multiview-item:hover > .multiview-submenu,
+        .multiview-item:focus-within > .multiview-submenu,
+        .multiview-item.is-open > .multiview-submenu {
+            display: block;
+        }
+        .multiview-accel { color: #cbb6e8; font-size: 12px; }
+        .multiview-check { width: 14px; display: inline-block; }
+        .multiview-detached {
+            position: fixed;
+            z-index: 100025;
+            left: 80px;
+            top: 80px;
+            width: min(720px, calc(100vw - 32px));
+            height: min(520px, calc(100vh - 32px));
+            display: flex;
+            flex-direction: column;
+            background: #111;
+            border: 1px solid #666;
+            box-shadow: 0 12px 32px rgba(0,0,0,.5);
+        }
+        .multiview-detached[hidden] { display: none !important; }
+        .multiview-detached-titlebar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: #2b2140;
+            color: #fff;
+            cursor: move;
+        }
+        .multiview-detached-title { flex: 1; font-size: 13px; }
+        .multiview-detached-body { flex: 1; min-height: 0; }
+        .multiview-detached-body .viewer-pane { width: 100%; height: 100%; }
+        .channel-viewer {
+            position: fixed;
+            z-index: 100026;
+            left: 72px;
+            top: 96px;
+            width: min(420px, calc(100vw - 32px));
+            height: min(420px, calc(100vh - 32px));
+            display: flex;
+            flex-direction: column;
+            background: #000;
+            border: 1px solid #5a4a78;
+            box-shadow: 0 12px 32px rgba(0,0,0,.55);
+        }
+        .channel-viewer[hidden] { display: none !important; }
+        .channel-viewer-titlebar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: #2b2140;
+            color: #fff;
+            cursor: move;
+        }
+        .channel-viewer-title { flex: 1; font-size: 13px; font-weight: 600; }
+        .channel-viewer-close {
+            width: 22px;
+            height: 22px;
+            border: 0;
+            background: transparent;
+            color: #fff;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        }
+        .channel-viewer-grid {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            gap: 5px;
+            padding: 5px;
+            background: #000;
+        }
+        .channel-viewer-cell {
+            position: relative;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+            background: #000;
+        }
+        .channel-viewer-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: #000;
+        }
+        .channel-viewer-label {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 2;
+            padding: 4px 8px;
+            color: #fff;
+            background: rgba(0, 0, 0, .6);
+            font-size: 12px;
+            text-align: center;
+            pointer-events: none;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .channel-viewer-label[hidden] { display: none !important; }
         #empty-viewport-guidance {
             position: absolute;
             inset: 0;
@@ -1880,7 +2122,9 @@
             pointer-events: stroke;
         }
         #viewer.annotations-hidden .osd-annotation-shape,
-        #viewer.annotations-hidden .osd-svg-overlay {
+        #viewer.annotations-hidden .osd-svg-overlay,
+        .viewer-pane-osd.annotations-hidden .osd-annotation-shape,
+        .viewer-pane-osd.annotations-hidden .osd-svg-overlay {
             visibility: hidden !important;
             pointer-events: none !important;
         }
@@ -2561,7 +2805,9 @@
             background: #1d3a54 !important;
         }
         .viewer-stage.measure-mode-active #viewer,
-        .viewer-stage.measure-mode-active #viewer .openseadragon-canvas {
+        .viewer-stage.measure-mode-active #viewer .openseadragon-canvas,
+        .viewer-stage.measure-mode-active .viewer-pane-osd,
+        .viewer-stage.measure-mode-active .viewer-pane-osd .openseadragon-canvas {
             cursor: crosshair !important;
         }
         /* Tracking SVG is created by AnnotationAdapter on the OSD container. */
@@ -3899,7 +4145,17 @@
         /* Custom multi-edge resize grips for the keyboard shortcuts legend, replacing the
            native single-corner `resize: both` handle (which also refuses to shrink below
            its implicit min-content floor). */
-        #floating-shortcuts-legend { position: relative; }
+        #floating-shortcuts-legend {
+            position: fixed;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 24px);
+        }
+        #floating-shortcuts-legend .legend-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+        }
         #floating-shortcuts-legend .legend-resize-handle { position: absolute; z-index: 5; }
         #floating-shortcuts-legend .legend-resize-handle[data-edge="n"] { top: 0; left: 8px; right: 8px; height: 6px; cursor: n-resize; }
         #floating-shortcuts-legend .legend-resize-handle[data-edge="s"] { bottom: 0; left: 8px; right: 8px; height: 6px; cursor: s-resize; }
@@ -4034,6 +4290,10 @@
             </div>
         <div class="toolbar-ops-spacer" aria-hidden="true"></div>
         <div class="toolbar-group primary-right-group ops-display-group" role="group" aria-label="Utilities">
+            <button id="view-menu-button" class="toolbar-chip" type="button"
+                    aria-haspopup="true" aria-expanded="false" aria-controls="multiview-menu"
+                    data-tooltip="View ▸ Channel viewer, Multi-view grids, synchronize viewers"
+                    aria-label="View menu">View</button>
             <button id="primary-help-directory-link" class="toolbar-chip" type="button"
                     aria-label="Help"
                     data-tooltip="(Click) Open Keyboard Shortcuts Legend | (Shift-Click) Open Overall Help Hub Directory">?</button>
@@ -4241,7 +4501,17 @@
                 </feComponentTransfer>
             </filter>
         </svg>
-        <div id="viewer"></div>
+        <div id="viewer-grid" class="viewer-grid is-single" role="group" aria-label="Multi-view grid" data-rows="1" data-cols="1">
+            <div class="viewer-pane is-active" data-pane-index="0" data-row="0" data-col="0">
+                <div class="viewer-pane-osd" id="viewer"></div>
+                <div class="viewer-pane-placeholder" hidden>Select a slide, or drag one here</div>
+                <div class="viewer-pane-caption" hidden></div>
+                <div class="scale-bar viewer-pane-scalebar" hidden aria-label="Image scale">
+                    <span class="scale-bar-label"></span>
+                    <div class="scale-bar-line"></div>
+                </div>
+            </div>
+        </div>
         <aside id="floating-channel-palette" class="floating-palette floating-channel-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-channel-palette-title">
             <div class="fcp-titlebar" id="floating-channel-palette-handle">
                 <span class="fcp-title" id="floating-channel-palette-title">🎛️ Brightness &amp; Contrast</span>
@@ -4709,7 +4979,7 @@
         </div>
     </div>
 </aside>
-<div id="floating-shortcuts-legend" class="floating-palette" style="display: none; position: fixed; z-index: 100015; width: 340px; height: 420px; min-width: 160px; min-height: 56px; background: #111; color: #fff; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); overflow: hidden;">
+<div id="floating-shortcuts-legend" class="floating-palette" style="display: none; position: fixed; z-index: 100015; width: 400px; height: calc(100vh - 24px); min-width: 160px; min-height: 56px; background: #111; color: #fff; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); overflow: hidden;">
     <div class="legend-header" style="padding: 8px 12px; background: #222; cursor: move; display: flex; align-items: center; border-bottom: 1px solid #333; font-weight: bold; font-size: 0.9rem;">
         <span>⌨️ Keyboard Shortcuts Reference</span>
         <button type="button" id="floating-shortcuts-legend-minimize" class="fcp-close fcp-minimize" aria-label="Minimize keyboard shortcuts legend" title="Minimize"
@@ -4720,12 +4990,16 @@
     <div class="legend-body" style="padding: 12px; overflow-y: auto; font-size: 0.8rem; line-height: 1.5;">
         <table style="width: 100%; text-align: left; border-collapse: collapse;">
             <tr style="border-bottom: 1px solid #222;"><th style="padding:4px 0; color:#00FF00;">Key</th><th style="color:#aaa;">Function Override Action</th></tr>
+            <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Visibility</td></tr>
             <tr><td><b>A</b></td><td>Show/Hide All Vector Annotations</td></tr>
             <tr><td><b>N</b></td><td>Show/Hide All Annotation Name Labels</td></tr>
             <tr><td><b>D</b></td><td>Show/Hide All Automated Cell Detections</td></tr>
             <tr><td><b>F</b></td><td>Toggle Detection (Nuclei) Interior Fill Color</td></tr>
             <tr><td><b>Shift+F</b></td><td>Toggle Annotation Interior Fill Color</td></tr>
+            <tr><td><b>H</b></td><td>Show/Hide Left Image Browser</td></tr>
+            <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Tools</td></tr>
             <tr><td><b>M</b></td><td>Activate Default Move / Navigation Pan Tool</td></tr>
+            <tr><td><b>S</b></td><td>Selection Mode (Drag shapes, input name labels)</td></tr>
             <tr><td><b>R</b></td><td>Rectangle Tool (Hold Shift for Square)</td></tr>
             <tr><td><b>O</b></td><td>Ellipse Tool (Hold Shift for Circle)</td></tr>
             <tr><td><b>L</b></td><td>Line Tool (Straight Metric Ruler Scale)</td></tr>
@@ -4734,15 +5008,28 @@
             <tr><td><b>B</b></td><td>Brush Tool (Freehand canvas painting sketch)</td></tr>
             <tr><td><b>W</b></td><td>Wand Tool (Local boundary threshold auto-trace)</td></tr>
             <tr><td><b>.</b></td><td>Points Tool (Multi-point structure tabulation)</td></tr>
-                <tr><td><b>S</b></td><td>Selection Mode (Drag shapes, input name labels)</td></tr>
-                <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s) — cannot be undone</td></tr>
-                <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">Ctrl+Shift+T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
-                <tr style="border-top: 1px solid #333;"><td>Vis</td><td>Export Visible Region (native-resolution image download)</td></tr>
-                <tr><td>Ant</td><td>Export Selected Annotation (native-resolution crop; select an annotation first)</td></tr>
-                <tr><td>Ovw</td><td>Toggle Slide Overview Thumbnail Navigator</td></tr>
-                <tr><td>Ctrl+Shift+F</td><td>Open/Close Pilot Feedback Panel</td></tr>
-                <tr><td>Right-click</td><td>Lock/Unlock Position or Delete the selected annotation(s)</td></tr>
-                <tr><td>–</td><td>Minimize/Expand this window (header only)</td></tr>
+            <tr><td><b>Z</b></td><td>Zoom Tool (Click to zoom in; Shift-click to zoom out)</td></tr>
+            <tr><td><b>C</b></td><td>Brightness &amp; Contrast Palette</td></tr>
+            <tr><td><b>- / _</b></td><td>Image Browser Tool</td></tr>
+            <tr><td><b>Enter</b></td><td>Seal an in-progress polygon, polyline, or wand</td></tr>
+            <tr><td><b>Escape</b></td><td>Cancel an unfinished drawing or close a menu</td></tr>
+            <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s) — cannot be undone</td></tr>
+            <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">View, channels, and Z</td></tr>
+            <tr><td><b>View</b> menu</td><td>Show channel viewer; Multi-view grid size; add/remove row or column; reset sizes; synchronize; match resolutions; close/detach/attach</td></tr>
+            <tr><td><b>Ctrl+Shift+S</b> / <b>⌘⇧S</b> / <b>Ctrl+Alt+S</b></td><td>Synchronize multi-view pan and zoom (on by default once two panes have images)</td></tr>
+            <tr><td>Right-click image</td><td>Open View / Multi-view menu (not when the pointer is on an annotation)</td></tr>
+            <tr><td>Right-click annotation</td><td>Lock/Unlock Position or Delete the selected annotation(s)</td></tr>
+            <tr><td>Right-click channel viewer</td><td>Sync to cursor/center/off; Zoom; Show all channels; names; cursor</td></tr>
+            <tr><td>Drag slide onto a pane</td><td>Open that slide in the target Multi-view pane</td></tr>
+            <tr><td><b>Alt+Wheel</b> or <b>↑ / ↓</b></td><td>Change Z-stack focal plane</td></tr>
+            <tr><td>Double-click magnification</td><td>Type an exact magnification (for example 10) and press Enter</td></tr>
+            <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">Ctrl+Shift+T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
+            <tr><td>Vis</td><td>Export Visible Region (native-resolution image download)</td></tr>
+            <tr><td>Ant</td><td>Export Selected Annotation (native-resolution crop; select an annotation first)</td></tr>
+            <tr><td>Ovw</td><td>Toggle Slide Overview Thumbnail Navigator</td></tr>
+            <tr><td>Ctrl+Shift+F</td><td>Open/Close Pilot Feedback Panel</td></tr>
+            <tr><td><b>?</b></td><td>Click: this shortcuts legend. Shift-click: Help directory.</td></tr>
+            <tr><td>–</td><td>Minimize/Expand this window (header only)</td></tr>
         </table>
     </div>
     <div class="legend-resize-handle" data-edge="n"></div>
@@ -4753,6 +5040,41 @@
     <div class="legend-resize-handle" data-edge="nw"></div>
     <div class="legend-resize-handle" data-edge="se"></div>
     <div class="legend-resize-handle" data-edge="sw"></div>
+</div>
+<div id="multiview-menu" class="multiview-menu" hidden role="menu" aria-label="View">
+    <button type="button" role="menuitemcheckbox" data-mv="channel-viewer" aria-checked="false">
+        <span>Show channel viewer</span>
+    </button>
+    <div class="multiview-item">
+        <div class="multiview-submenu-label">Set grid size <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Set grid size">
+            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="1" data-cols="1" aria-checked="true">Grid 1 x 1 (single viewer)</button>
+            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="1" data-cols="2" aria-checked="false">Grid 1 x 2 (horizontal)</button>
+            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="2" data-cols="1" aria-checked="false">Grid 2 x 1 (vertical)</button>
+            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="2" data-cols="2" aria-checked="false">Grid 2 x 2</button>
+            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="3" data-cols="3" aria-checked="false">Grid 3 x 3</button>
+            <button type="button" role="menuitem" data-mv="add-row">Add row</button>
+            <button type="button" role="menuitem" data-mv="add-column">Add column</button>
+            <button type="button" role="menuitem" data-mv="remove-row">Remove row</button>
+            <button type="button" role="menuitem" data-mv="remove-column">Remove column</button>
+            <button type="button" role="menuitem" data-mv="reset-sizes">Reset viewer sizes</button>
+        </div>
+    </div>
+    <button type="button" role="menuitemcheckbox" data-mv="sync" aria-checked="false">
+        <span>Synchronize viewers</span>
+        <span class="multiview-accel" data-mv-accel="sync">Ctrl+Shift+S</span>
+    </button>
+    <button type="button" role="menuitem" data-mv="match">Match viewer resolutions</button>
+    <button type="button" role="menuitem" data-mv="close">Close viewer</button>
+    <button type="button" role="menuitem" data-mv="detach">Detach viewer from grid</button>
+    <button type="button" role="menuitem" data-mv="attach" hidden>Attach viewer to grid</button>
+</div>
+<div id="channel-viewer" class="channel-viewer" hidden role="dialog" aria-label="Channel viewer" aria-hidden="true">
+    <div class="channel-viewer-titlebar" id="channel-viewer-handle">
+        <span class="channel-viewer-title">Channel viewer</span>
+        <button type="button" id="channel-viewer-close" class="channel-viewer-close" aria-label="Close channel viewer">×</button>
+    </div>
+    <div id="channel-viewer-grid" class="channel-viewer-grid"></div>
 </div>
 <div id="annotation-context-menu" style="display: none; position: fixed; z-index: 100020; min-width: 190px; background: #1c1c1c; color: #fff; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.5); overflow: hidden; font-size: 0.85rem;">
     <button type="button" id="annotation-context-menu-lock-toggle"
@@ -4818,8 +5140,6 @@
     const yStatus = document.getElementById("status-y");
     const pixelStatus = document.getElementById("status-pixel");
     const scaleBar = document.getElementById("scale-bar");
-    const scaleBarLabel = document.getElementById("scale-bar-label");
-    const scaleBarLine = document.getElementById("scale-bar-line");
     const slideOverviewButton = document.getElementById("slide-overview-button");
     const slideOverview = document.getElementById("slide-overview");
     const slideLabelImage = document.getElementById("slide-label-image");
@@ -5196,9 +5516,7 @@
             );
             clearPixelReadout();
             if (AnnotationAdapter.isMeasurementModeActive) setMeasurementModeActive(false);
-            document.querySelectorAll(".image-button").forEach(button =>
-                button.classList.toggle("active", button.dataset.imageId === image.id)
-            );
+            highlightOpenSlides();
             const catalog = await request(`/api/images/${encodeURIComponent(image.id)}?series=0`);
             if (generation !== updateSequence || selectedImage?.id !== image.id) return;
             const preferredSeries = chooseDefaultSeries(catalog.seriesProfiles);
@@ -5249,6 +5567,8 @@
                 AnnotationAdapter.rawImageFileName(image) || image.name || "",
                 document
             );
+            snapshotActiveMultiViewPane();
+            highlightOpenSlides();
             statusElement.textContent = `${metadata.width} × ${metadata.height} · ${metadata.channels} channels · series ${currentSeries}`;
         } catch (error) {
             showError(error);
@@ -5586,19 +5906,21 @@
     zStackSlider?.addEventListener("input", onZStackSliderInput);
     zStackSlider?.addEventListener("change", onZStackSliderInput);
 
-    function tileSourceForPlane(z, channel) {
-        const imageId = encodeURIComponent(selectedImage.id);
+    function tileSourceForPlane(z, channel, paneState) {
+        const image = paneState?.image || selectedImage;
+        const imageId = encodeURIComponent(image.id);
         const planeZ = Math.max(0, Number(z) || 0);
-        const series = currentSeries;
-        const revision = display?.revision ?? 0;
+        const series = paneState && paneState.currentSeries != null ? paneState.currentSeries : currentSeries;
+        const revision = (paneState?.display || display)?.revision ?? 0;
+        const sourceMetadata = paneState?.metadata || metadata;
         const channelIndex = Number(channel?.index);
-        const rgbView = AnnotationAdapter.isRgbSeriesView(metadata, series);
+        const rgbView = AnnotationAdapter.isRgbSeriesView(sourceMetadata, series);
         const useChannel = !rgbView && Number.isFinite(channelIndex);
-        const maxLevel = metadata.resolutionCount - 1;
+        const maxLevel = sourceMetadata.resolutionCount - 1;
         const source = {
-            width: metadata.width,
-            height: metadata.height,
-            tileSize: metadata.tileSize,
+            width: sourceMetadata.width,
+            height: sourceMetadata.height,
+            tileSize: sourceMetadata.tileSize,
             tileOverlap: 0,
             minLevel: 0,
             maxLevel,
@@ -5616,10 +5938,264 @@
                     + `?revision=${revision}&z=${planeZ}&series=${series}`;
             }
         };
-        return AnnotationAdapter.buildPyramidTileSource(source, metadata);
+        return AnnotationAdapter.buildPyramidTileSource(source, sourceMetadata);
+    }
+
+    function snapshotActiveMultiViewPane() {
+        const pane = AnnotationAdapter.activeMultiviewPane();
+        if (!pane) return null;
+        return AnnotationAdapter.storeMultiviewPaneSnapshot(pane.index, {
+            viewer,
+            selectedImage,
+            metadata,
+            display,
+            currentZ,
+            currentSeries,
+            annotationEngine
+        });
+    }
+
+    function highlightOpenSlides() {
+        const openIds = new Set(
+            (AnnotationAdapter.multiview.panes || [])
+                .map(pane => pane.imageId)
+                .filter(Boolean)
+        );
+        document.querySelectorAll(".image-button").forEach(button => {
+            const id = button.dataset.imageId;
+            button.classList.toggle("active", Boolean(selectedImage && id === selectedImage.id));
+            button.classList.toggle("is-open-elsewhere", Boolean(id && openIds.has(id) && id !== selectedImage?.id));
+        });
+    }
+
+    function activateMultiViewPane(index) {
+        const state = AnnotationAdapter.ensureMultiviewState();
+        if (!state.panes[index]) return;
+        if (state.activeIndex !== index) {
+            snapshotActiveMultiViewPane();
+            const pane = state.panes[index];
+            state.activeIndex = index;
+            viewer = pane.viewer || null;
+            selectedImage = pane.image || undefined;
+            metadata = pane.metadata || null;
+            display = pane.display || null;
+            currentZ = pane.currentZ || 0;
+            currentSeries = pane.currentSeries || 0;
+            annotationEngine = pane.annotationEngine || null;
+            AnnotationAdapter.currentImageId = selectedImage?.id || null;
+            AnnotationAdapter.currentSeries = currentSeries;
+            AnnotationAdapter.currentZ = currentZ;
+            AnnotationAdapter.setImageMetadata(metadata);
+            if (viewer) AnnotationAdapter.setViewer(viewer);
+            if (annotationEngine) {
+                AnnotationAdapter.annotationEngine = annotationEngine;
+                AnnotationAdapter.annotationSpike = annotationEngine;
+            }
+        }
+        AnnotationAdapter.markMultiviewActive(index);
+        highlightOpenSlides();
+        if (selectedImage) {
+            AnnotationAdapter.applyDocumentTitle(
+                AnnotationAdapter.rawImageFileName(selectedImage) || selectedImage.name || "",
+                document
+            );
+            AnnotationAdapter.applyHeaderIdentity(document, selectedImage);
+            AnnotationAdapter.onSlideClicked(selectedImage, document);
+            imageInfoElement.hidden = false;
+            applyMetadataInfoPanel();
+            syncSeriesSelectControl(metadata);
+            syncZStackControl(metadata);
+            resetButton.disabled = false;
+            recomputeAutoButton.disabled = false;
+            slideOverviewButton.disabled = false;
+            if (measureModeButton) measureModeButton.disabled = false;
+            if (!slideOverview.hidden) refreshSlideOverview();
+            renderChannels();
+            AnnotationAdapter.setEmptyViewportGuidanceVisible(document, false);
+            statusElement.textContent = metadata
+                ? `${metadata.width} × ${metadata.height} · ${metadata.channels} channels · series ${currentSeries}`
+                : `Viewer ${index + 1}`;
+            updateViewerStatus();
+        } else {
+            AnnotationAdapter.applyHeaderIdentity(document, null);
+            resetButton.disabled = true;
+            recomputeAutoButton.disabled = true;
+            statusElement.textContent = "Select a slide, or drag one here";
+            AnnotationAdapter.setEmptyViewportGuidanceVisible(
+                document,
+                state.rows * state.cols <= 1
+            );
+        }
+        AnnotationAdapter.refreshMultiviewChrome();
+    }
+
+    function closeActiveMultiViewPane() {
+        const pane = AnnotationAdapter.activeMultiviewPane();
+        if (!pane?.imageId) return false;
+        if (pane.viewer) {
+            try { pane.viewer.close(); } catch (_error) { /* ignore */ }
+            AnnotationAdapter.clearNucleiCircleOverlays(pane.viewer);
+        }
+        pane.image = null;
+        pane.metadata = null;
+        pane.display = null;
+        pane.imageId = null;
+        selectedImage = undefined;
+        metadata = null;
+        display = null;
+        currentZ = 0;
+        AnnotationAdapter.resetActiveImageTracking();
+        AnnotationAdapter.refreshMultiviewChrome();
+        highlightOpenSlides();
+        const anyOpen = AnnotationAdapter.multiview.panes.some(item => item.imageId);
+        if (!anyOpen) {
+            applyBlankWorkspaceState({ skipViewerWipe: true });
+        } else {
+            statusElement.textContent = "Viewer closed.";
+            AnnotationAdapter.setEmptyViewportGuidanceVisible(document, false);
+        }
+        return true;
+    }
+
+    function osdOptionsForHost(hostId, showNavigator) {
+        return AnnotationAdapter.decorateOpenSeadragonOptions({
+            id: hostId,
+            prefixUrl: "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
+            showNavigationControl: false,
+            showNavigator: Boolean(showNavigator),
+            navigatorPosition: "BOTTOM_RIGHT",
+            navigatorHeight: "190px",
+            navigatorWidth: "340px",
+            animationTime: 0,
+            springStiffness: 100,
+            blendTime: 0,
+            constrainDuringPan: true,
+            visibilityRatio: 0.5,
+            minZoomImageRatio: 0.8,
+            maxZoomPixelRatio: 80,
+            maxImageCacheCount: 4000,
+            gestureSettingsMouse: {
+                flickEnabled: false,
+                clickToZoom: false,
+                dblClickToZoom: false,
+                scrollToZoom: true
+            },
+            gestureSettingsTouch: {
+                flickEnabled: false,
+                clickToZoom: false,
+                dblClickToZoom: false,
+                scrollToZoom: false
+            },
+            gestureSettingsPen: {
+                flickEnabled: false,
+                clickToZoom: false,
+                dblClickToZoom: false,
+                scrollToZoom: false
+            }
+        });
+    }
+
+    function bindCreatedViewer(pane, created) {
+        if (created.gestureSettingsMouse) created.gestureSettingsMouse.scrollToZoom = true;
+        created.addHandler("animation", () => {
+            updateViewerStatus();
+            AnnotationAdapter.scheduleChannelViewerRefresh();
+        });
+        created.addHandler("zoom", () => {
+            updateViewerStatus();
+            AnnotationAdapter.scheduleChannelViewerRefresh();
+        });
+        created.addHandler("open", () => {
+            updateViewerStatus();
+            AnnotationAdapter.scheduleChannelViewerRefresh();
+        });
+        bindMeasureMouseTracker(created);
+        AnnotationAdapter.bindZStackWheel(created, {
+            getMaxZ: () => Math.max(0, zPlaneCountFromMetadata(pane.metadata || metadata) - 1),
+            getZ: () => (AnnotationAdapter.multiview.activeIndex === pane.index ? currentZ : pane.currentZ || 0),
+            onZChange: nextZ => {
+                if (AnnotationAdapter.multiview.activeIndex === pane.index) setCurrentZ(nextZ);
+                else pane.currentZ = nextZ;
+            }
+        });
+        AnnotationAdapter.bindViewerMultiViewContextMenu(created);
+        AnnotationAdapter.bindMultiviewSync(created, pane.index);
+        const updatePointerCoordinates = event => {
+            if (AnnotationAdapter.multiview.activeIndex !== pane.index) return;
+            if (!created.world.getItemCount()) return;
+            const rect = created.canvas.getBoundingClientRect();
+            const elementPoint = new OpenSeadragon.Point(
+                event.clientX - rect.left,
+                event.clientY - rect.top
+            );
+            const viewportPoint = created.viewport.pointFromPixel(elementPoint, true);
+            const imagePoint = created.world.getItemAt(0).viewportToImageCoordinates(viewportPoint);
+            if (!Number.isFinite(imagePoint.x) || !Number.isFinite(imagePoint.y)) return;
+            const meta = pane.metadata || metadata;
+            const insideImage = imagePoint.x >= 0
+                && imagePoint.y >= 0
+                && imagePoint.x < meta.width
+                && imagePoint.y < meta.height;
+            if (insideImage) {
+                const x = Math.floor(imagePoint.x);
+                const y = Math.floor(imagePoint.y);
+                xStatus.textContent = x.toLocaleString();
+                yStatus.textContent = y.toLocaleString();
+                AnnotationAdapter.noteChannelViewerCursor(x, y);
+                requestPixelSample(x, y);
+            } else {
+                clearPixelReadout();
+            }
+        };
+        created.canvas.addEventListener("pointermove", updatePointerCoordinates, { passive: true });
+        created.canvas.addEventListener("pointerleave", clearPixelReadout);
+    }
+
+    function installPaneAnnotationEngine(pane) {
+        const annotationModeButton = document.getElementById("annotation-mode");
+        if (annotationModeButton) annotationModeButton.disabled = false;
+        try {
+            AnnotationAdapter.ensureAnnotationEditorPopup(document);
+            pane.annotationEngine = AnnotationAdapter.installNativeOsdAnnotationEngine(pane.viewer, {
+                toggleButton: document.getElementById("annotation-mode"),
+                visibilityButton: annotationVisibilityButton,
+                namesButton: annotationNamesButton,
+                nameInput: document.getElementById("annotation-name-input"),
+                getCurrentImageId: () => pane.image?.id
+                    || (AnnotationAdapter.multiview.activeIndex === pane.index ? selectedImage?.id : null),
+                timingCallbacks: {
+                    open: imageId => markImageSwitchTiming(imageId, "OSD open event"),
+                    annotationsLoaded: imageId => markImageSwitchTiming(imageId, "annotations loaded"),
+                    annotationsRendered: imageId => markImageSwitchTiming(imageId, "annotations shown"),
+                    selectionChanged: updateSelectedAnnotationExportState
+                }
+            });
+            if (AnnotationAdapter.multiview.activeIndex === pane.index) {
+                annotationEngine = pane.annotationEngine;
+            }
+        } catch (error) {
+            pane.annotationEngine = null;
+            if (AnnotationAdapter.multiview.activeIndex === pane.index) {
+                annotationEngine = null;
+                AnnotationAdapter.annotationEngine = null;
+            }
+            console.error("Native OpenSeadragon SVG annotation engine failed to initialize", error);
+        }
     }
 
     function openViewer(preserveViewport = false) {
+        let pane = AnnotationAdapter.activeMultiviewPane();
+        if (selectedImage && pane) {
+            AnnotationAdapter.storeMultiviewPaneSnapshot(pane.index, {
+                selectedImage,
+                metadata,
+                display,
+                currentZ,
+                currentSeries
+            });
+        }
+        AnnotationAdapter.ensureMultiviewDom(document);
+        pane = AnnotationAdapter.activeMultiviewPane();
         AnnotationAdapter.setEmptyViewportGuidanceVisible(document, false);
         let bounds;
         let zoom;
@@ -5628,127 +6204,36 @@
             zoom = viewer.viewport.getZoom();
         }
 
-        if (!viewer) {
-            viewer = OpenSeadragon(AnnotationAdapter.decorateOpenSeadragonOptions({
-                id: "viewer",
-                prefixUrl: "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
-                showNavigationControl: false,
-                showNavigator: true,
-                navigatorPosition: "BOTTOM_RIGHT",
-                // OSD's default navigatorSizeRatio (0.2, applied against the
-                // main viewport's own pixel size) renders a thumbnail too
-                // small to usefully see where the current viewport sits on a
-                // large slide. A fixed size (rather than a bigger ratio) keeps
-                // it a predictable, comfortable size regardless of window
-                // size. Whole slides are almost always noticeably wider than
-                // tall (a mounted tissue section scanned in landscape), so a
-                // square box wastes most of its area on the letterbox bars
-                // above/below the image -- shaping the box itself like a
-                // typical slide (roughly 16:9) keeps the visible minimap
-                // image large, not just the box around it. A differently
-                // shaped slide is still letterboxed to fit, never cropped.
-                navigatorHeight: "190px",
-                navigatorWidth: "340px",
-                animationTime: 0,
-                springStiffness: 100,
-                blendTime: 0,
-                constrainDuringPan: true,
-                visibilityRatio: 0.5,
-                minZoomImageRatio: 0.8,
-                maxZoomPixelRatio: 80,
-                maxImageCacheCount: 4000,
-                gestureSettingsMouse: {
-                    flickEnabled: false,
-                    clickToZoom: false,
-                    dblClickToZoom: false,
-                    scrollToZoom: true
-                },
-                gestureSettingsTouch: {
-                    flickEnabled: false,
-                    clickToZoom: false,
-                    dblClickToZoom: false,
-                    scrollToZoom: false
-                },
-                gestureSettingsPen: {
-                    flickEnabled: false,
-                    clickToZoom: false,
-                    dblClickToZoom: false,
-                    scrollToZoom: false
-                }
-            }));
+        if (!pane) return;
+        const hostId = pane.hostId || "viewer";
+        if (!pane.viewer) {
+            const showNavigator = AnnotationAdapter.multiview.rows * AnnotationAdapter.multiview.cols === 1;
+            pane.viewer = OpenSeadragon(osdOptionsForHost(hostId, showNavigator));
+            viewer = pane.viewer;
+            bindCreatedViewer(pane, viewer);
             AnnotationAdapter.setViewer(viewer);
-            if (viewer.gestureSettingsMouse) viewer.gestureSettingsMouse.scrollToZoom = true;
-            viewer.addHandler("animation", updateViewerStatus);
-            viewer.addHandler("zoom", updateViewerStatus);
-            viewer.addHandler("open", updateViewerStatus);
-            bindMeasureMouseTracker(viewer);
-            AnnotationAdapter.bindZStackWheel(viewer, {
-                getMaxZ: () => Math.max(0, zPlaneCountFromMetadata(metadata) - 1),
-                getZ: () => currentZ,
-                onZChange: nextZ => setCurrentZ(nextZ)
-            });
-            const annotationModeButton = document.getElementById("annotation-mode");
-            if (annotationModeButton) annotationModeButton.disabled = false;
-            try {
-                AnnotationAdapter.ensureAnnotationEditorPopup(document);
-                annotationEngine = AnnotationAdapter.installNativeOsdAnnotationEngine(viewer, {
-                    toggleButton: document.getElementById("annotation-mode"),
-                    visibilityButton: annotationVisibilityButton,
-                    namesButton: annotationNamesButton,
-                    nameInput: document.getElementById("annotation-name-input"),
-                    getCurrentImageId: () => selectedImage?.id,
-                    timingCallbacks: {
-                        open: imageId => markImageSwitchTiming(imageId, "OSD open event"),
-                        annotationsLoaded: imageId => markImageSwitchTiming(imageId, "annotations loaded"),
-                        annotationsRendered: imageId => markImageSwitchTiming(imageId, "annotations shown"),
-                        selectionChanged: updateSelectedAnnotationExportState
-                    }
-                });
-            } catch (error) {
-                annotationEngine = null;
-                AnnotationAdapter.annotationEngine = null;
-                console.error("Native OpenSeadragon SVG annotation engine failed to initialize", error);
+            installPaneAnnotationEngine(pane);
+        } else {
+            viewer = pane.viewer;
+            AnnotationAdapter.setViewer(viewer);
+            if (pane.annotationEngine) {
+                annotationEngine = pane.annotationEngine;
+                AnnotationAdapter.annotationEngine = pane.annotationEngine;
+                AnnotationAdapter.annotationSpike = pane.annotationEngine;
+            } else {
+                installPaneAnnotationEngine(pane);
             }
-            const updatePointerCoordinates = event => {
-                if (!viewer.world.getItemCount()) return;
-
-                const rect = viewer.canvas.getBoundingClientRect();
-                const elementPoint = new OpenSeadragon.Point(
-                    event.clientX - rect.left,
-                    event.clientY - rect.top
-                );
-                const viewportPoint = viewer.viewport.pointFromPixel(elementPoint, true);
-                const imagePoint = viewer.world.getItemAt(0).viewportToImageCoordinates(viewportPoint);
-
-                if (!Number.isFinite(imagePoint.x) || !Number.isFinite(imagePoint.y)) return;
-
-                const insideImage = imagePoint.x >= 0
-                    && imagePoint.y >= 0
-                    && imagePoint.x < metadata.width
-                    && imagePoint.y < metadata.height;
-
-                if (insideImage) {
-                    const x = Math.floor(imagePoint.x);
-                    const y = Math.floor(imagePoint.y);
-                    xStatus.textContent = x.toLocaleString();
-                    yStatus.textContent = y.toLocaleString();
-                    requestPixelSample(x, y);
-                } else {
-                    clearPixelReadout();
-                }
-            };
-
-            viewer.canvas.addEventListener("pointermove", updatePointerCoordinates, { passive: true });
-            viewer.canvas.addEventListener("pointerleave", clearPixelReadout);
         }
 
+        snapshotActiveMultiViewPane();
+        AnnotationAdapter.resizeOpenSeadragonViewer(viewer, { fit: false });
         markImageSwitchTiming(selectedImage.id, "viewer.open called");
         const planeCount = zPlaneCountFromMetadata(metadata);
         const rgbView = AnnotationAdapter.isRgbSeriesView(metadata, currentSeries);
         AnnotationAdapter.openMultiPlaneZStack(viewer, {
             planeCount,
             activeZ: currentZ,
-            tileSourceForPlane,
+            tileSourceForPlane: (z, channel) => tileSourceForPlane(z, channel, pane),
             channels: rgbView
                 ? null
                 : (Array.isArray(display?.channels) && display.channels.length
@@ -5765,9 +6250,11 @@
                     maxZ: Math.max(0, planeCount - 1)
                 });
                 updateViewerStatus();
+                AnnotationAdapter.scheduleMultiviewResize({ fit: !preserveViewport });
             }
         });
         exportVisibleRegionButton.disabled = false;
+        highlightOpenSlides();
     }
 
     const MAX_EXPORT_PIXELS = 16000000;
@@ -6371,6 +6858,12 @@
     AnnotationAdapter.bindAdvancedChannelPalette();
     AnnotationAdapter.bindFloatingAiLabsPalette();
     AnnotationAdapter.bindFloatingAdminPalette();
+    try {
+        if (new URLSearchParams(window.location.search).get("admin") === "1") {
+            AnnotationAdapter.openFloatingAdminPalette(document);
+            window.history.replaceState({}, "", window.location.pathname || "/");
+        }
+    } catch (_error) { /* ignore */ }
     AnnotationAdapter.bindFloatingZStackPalette();
     AnnotationAdapter.bindFloatingMeasurementPalette();
 
@@ -6389,39 +6882,9 @@
         return `${x.toFixed(4)} µm/px`;
     }
 
-    function niceScaleLength(targetMicrons) {
-        if (!(targetMicrons > 0)) return null;
-        const exponent = Math.floor(Math.log10(targetMicrons));
-        const power = 10 ** exponent;
-        const normalized = targetMicrons / power;
-        const factor = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
-        return factor * power;
-    }
-
     function updateScaleBar() {
-        const micronsPerPixel = Number(metadata?.micronsPerPixelX);
-        if (!viewer || !viewer.viewport || !viewer.world.getItemCount() || !(micronsPerPixel > 0)) {
-            scaleBar.hidden = true;
-            return;
-        }
-        const tiledImage = viewer.world.getItemAt(0);
-        const imageZoom = tiledImage.viewportToImageZoom(viewer.viewport.getZoom(true));
-        if (!(imageZoom > 0)) {
-            scaleBar.hidden = true;
-            return;
-        }
-        const micronsPerScreenPixel = micronsPerPixel / imageZoom;
-        const physicalLength = niceScaleLength(micronsPerScreenPixel * 120);
-        if (!(physicalLength > 0)) {
-            scaleBar.hidden = true;
-            return;
-        }
-        const width = Math.max(45, Math.min(180, physicalLength / micronsPerScreenPixel));
-        scaleBarLine.style.width = `${width}px`;
-        scaleBarLabel.textContent = physicalLength >= 1000
-                ? `${Number((physicalLength / 1000).toPrecision(3))} mm`
-                : `${Number(physicalLength.toPrecision(3))} µm`;
-        scaleBar.hidden = false;
+        if (scaleBar) scaleBar.hidden = true;
+        AnnotationAdapter.updateMultiviewScaleBars(document);
     }
 
     function updateViewerStatus() {
@@ -6466,7 +6929,10 @@
                 setPanelWidthVar(side, `${storedWidth}px`);
             }
         }
-        setTimeout(() => viewer?.viewport?.resize(), 0);
+        setTimeout(() => {
+            viewer?.viewport?.resize();
+            AnnotationAdapter.resizeMultiviewViewers();
+        }, 0);
         const headerToggle = document.getElementById(`toggle-${side}`);
         if (!headerToggle) return;
         headerToggle.setAttribute("aria-pressed", String(!collapsed));
@@ -6505,6 +6971,7 @@
                 setPanelWidthVar(side, `${clamped}px`);
                 localStorage.setItem(`${STORAGE_PREFIX}.${side}Width`, String(clamped));
                 viewer?.viewport?.resize();
+                AnnotationAdapter.resizeMultiviewViewers();
             };
             const up = () => {
                 handle.classList.remove("dragging");
@@ -6675,7 +7142,10 @@
         presentationButton.title = `Presentation — ${detail}`;
         presentationButton.setAttribute("aria-label", "Presentation");
         presentationButton.setAttribute("data-tooltip", `Presentation\n${detail}`);
-        setTimeout(() => viewer?.viewport?.resize(), 0);
+        setTimeout(() => {
+            viewer?.viewport?.resize();
+            AnnotationAdapter.resizeMultiviewViewers();
+        }, 0);
     }
     document.getElementById("presentation").addEventListener("click", () => setPresentationMode(!document.body.classList.contains("presentation-mode")));
     document.getElementById("presentation-exit").addEventListener("click", () => setPresentationMode(false));
@@ -6767,6 +7237,23 @@
         }
     });
 
+    AnnotationAdapter.bindMultiView(document, {
+        beforeLayout: snapshotActiveMultiViewPane,
+        onActivate: activateMultiViewPane,
+        openImageById: imageId => {
+            const image = (catalogImages || []).find(item => item.id === imageId);
+            if (image) selectImage(image);
+        },
+        closeActive: closeActiveMultiViewPane,
+        onGridChanged: () => {
+            AnnotationAdapter.setEmptyViewportGuidanceVisible(document, false);
+            AnnotationAdapter.scheduleMultiviewResize({ fit: true });
+            if (viewer?.forceRedraw) viewer.forceRedraw();
+        },
+        status: text => {
+            if (text) statusElement.textContent = text;
+        }
+    });
     initialize();
 </script>
 <div id="annotation-name-portal" aria-hidden="true"></div>
