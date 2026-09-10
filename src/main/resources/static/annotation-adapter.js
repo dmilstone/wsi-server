@@ -77,21 +77,31 @@ class AnnotationAdapter {
     }
 
     /**
-     * Default specimen series. RGB / H&E wins when the container has no
-     * fluorescence series-2 stack; otherwise keep the IF convention (index 2).
+     * Default specimen series. The largest diagnostic scan wins, so Olympus
+     * VSI H&amp;E (often a large RGB series mis-tagged as fluorescence) is
+     * not forced onto the IF series-2 convention. Series 2 is used only when
+     * it is the large non-RGB fluorescence stack.
      */
     static chooseDefaultSeries(profiles) {
         const specimens = AnnotationAdapter.diagnosticSpecimenProfiles(profiles);
         const pool = specimens.length > 0 ? specimens : (Array.isArray(profiles) ? profiles : []);
         if (pool.length === 0) return 0;
         if (pool.length === 1) return Number(pool[0].index) || 0;
-        const rgbSpecimens = pool.filter(profile => profile && profile.rgb === true);
+        const largest = pool.reduce((best, profile) => {
+            const area = Number(profile?.width) * Number(profile?.height);
+            const bestArea = best ? Number(best.width) * Number(best.height) : -1;
+            return !best || area > bestArea ? profile : best;
+        }, null);
+        if (largest && largest.rgb === true) {
+            return Number(largest.index) || 0;
+        }
         const fluorescence = pool.find(profile =>
             Number(profile.index) === 2 && Number(profile.width) >= 512 && profile.rgb !== true);
-        if (rgbSpecimens.length > 0 && !fluorescence) {
+        if (fluorescence) return 2;
+        const rgbSpecimens = pool.filter(profile => profile && profile.rgb === true);
+        if (rgbSpecimens.length > 0) {
             return AnnotationAdapter.largestSeriesIndex(rgbSpecimens);
         }
-        if (fluorescence) return 2;
         const seriesTwo = pool.find(profile =>
             Number(profile.index) === 2 && Number(profile.width) >= 512);
         if (seriesTwo) return Number(seriesTwo.index) || 2;
@@ -100,14 +110,15 @@ class AnnotationAdapter {
 
     /** RGB H&E / IHC series must use composite tiles, not per-channel lighter stacks. */
     static isRgbSeriesView(metadata, series) {
-        const modality = String(metadata?.modality || AnnotationAdapter.currentModality || "").toUpperCase();
-        if (modality === "FLUORESCENCE") return false;
         if (metadata && metadata.rgb === true) return true;
-        if (AnnotationAdapter.isBrightfieldSlide(metadata)) return true;
         const profiles = Array.isArray(metadata?.seriesProfiles) ? metadata.seriesProfiles : [];
         const index = Number.isFinite(Number(series)) ? Number(series) : Number(metadata?.series);
         const current = profiles.find(profile => Number(profile.index) === index);
-        return Boolean(current && current.rgb === true);
+        if (current && current.rgb === true) return true;
+        const modality = String(metadata?.modality || AnnotationAdapter.currentModality || "").toUpperCase();
+        if (modality === "FLUORESCENCE") return false;
+        if (AnnotationAdapter.isBrightfieldSlide(metadata)) return true;
+        return false;
     }
 
     /**
@@ -1733,9 +1744,11 @@ class AnnotationAdapter {
             const item = viewer.world.getItemAt(index);
             if (!item || typeof item.setOpacity !== "function") continue;
             const tagged = AnnotationAdapter.taggedZIndex(item);
-            const isActivePlane = taggedCount > 0 && tagged != null
-                ? tagged === targetZIndex
-                : index === targetZIndex;
+            const isActivePlane = count <= 1
+                ? true
+                : (taggedCount > 0 && tagged != null
+                    ? tagged === targetZIndex
+                    : index === targetZIndex);
             const channelOn = AnnotationAdapter.channelLayerIsVisible(item, visibility);
             const layerOpacity = AnnotationAdapter.channelLayerOpacity(item, opacities);
             if (typeof item.setPreload === "function") {
@@ -1896,6 +1909,86 @@ class AnnotationAdapter {
             }
         }
         return specs;
+    }
+
+    /**
+     * Attach native per-level sizes to an OSD tile source. Aperio SVS (typical
+     * clinical H&amp;E) downsamples ~4x per level; OSD 4.1 then memoizes
+     * {@code getLevelScale} as a pure 2x table and overwrites any custom
+     * function ({@code _memoizeLevelScale}). The low-power grid then requests
+     * tiles that do not exist, so the main view and navigator stay empty while
+     * a 2x research pyramid (PAS / MRXS / NDPI) still paints.
+     */
+    static pyramidScaleByLevel(metadata) {
+        const width = Number(metadata?.width);
+        const height = Number(metadata?.height);
+        const levels = Array.isArray(metadata?.levelDimensions) ? metadata.levelDimensions : [];
+        const scaleByLevel = new Map();
+        const sizeByLevel = new Map();
+        if (width > 0) {
+            for (const entry of levels) {
+                const level = Number(entry?.level);
+                const levelWidth = Number(entry?.width);
+                const levelHeight = Number(entry?.height);
+                if (!Number.isFinite(level) || !(levelWidth > 0)) continue;
+                scaleByLevel.set(level, levelWidth / width);
+                sizeByLevel.set(level, {
+                    width: levelWidth,
+                    height: levelHeight > 0
+                        ? levelHeight
+                        : Math.max(1, Math.round(levelWidth * (height > 0 ? height : 1) / width))
+                });
+            }
+        }
+        return { scaleByLevel, sizeByLevel };
+    }
+
+    static buildPyramidTileSource(base, metadata) {
+        const source = base && typeof base === "object" ? base : {};
+        const maxLevel = Number.isFinite(Number(source.maxLevel))
+            ? Number(source.maxLevel)
+            : Math.max(0, Number(metadata?.resolutionCount) - 1);
+        const { scaleByLevel, sizeByLevel } = AnnotationAdapter.pyramidScaleByLevel(metadata);
+        const fallbackScale = level => Math.pow(2, Number(level) - maxLevel);
+
+        source._memoizeLevelScale = function () {
+            const cache = {};
+            for (let level = 0; level <= maxLevel; level += 1) {
+                const scale = scaleByLevel.get(level);
+                cache[level] = Number.isFinite(scale) && scale > 0 ? scale : fallbackScale(level);
+            }
+            this.getLevelScale = function (level) {
+                const resolved = cache[Number(level)];
+                return Number.isFinite(resolved) && resolved > 0
+                    ? resolved
+                    : fallbackScale(level);
+            };
+        };
+        source._memoizeLevelScale();
+
+        source.getNumTiles = function (level) {
+            const tileWidth = Number(
+                this.getTileWidth?.(level) || this._tileWidth || this.tileSize || source.tileSize || 512
+            );
+            const tileHeight = Number(
+                this.getTileHeight?.(level) || this._tileHeight || this.tileSize || source.tileSize || 512
+            );
+            const size = sizeByLevel.get(Number(level));
+            if (size) {
+                return {
+                    x: Math.max(1, Math.ceil(size.width / Math.max(1, tileWidth))),
+                    y: Math.max(1, Math.ceil(size.height / Math.max(1, tileHeight)))
+                };
+            }
+            const scale = this.getLevelScale(level);
+            const fullWidth = Number(this.dimensions?.x || this.width || source.width) || 0;
+            const fullHeight = Number(this.dimensions?.y || this.height || source.height) || 0;
+            return {
+                x: Math.max(1, Math.ceil(fullWidth * scale / Math.max(1, tileWidth))),
+                y: Math.max(1, Math.ceil(fullHeight * scale / Math.max(1, tileHeight)))
+            };
+        };
+        return source;
     }
 
     static applyBaselinePyramidZoom(viewer, options = {}) {
@@ -5526,9 +5619,14 @@ class AnnotationAdapter {
             if (palette.style) palette.style.display = "none";
             if (palette.parentNode) palette.parentNode.removeChild(palette);
         }
-        AnnotationAdapter.clearViewportTileContrastFilter(
-            AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer
-        );
+        const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        AnnotationAdapter.clearViewportTileContrastFilter(viewer);
+        const metadata = AnnotationAdapter.displayController?.getMetadata?.() || AnnotationAdapter.imageMetadata;
+        const series = AnnotationAdapter.displayController?.getCurrentSeries?.()
+            ?? AnnotationAdapter.currentSeries;
+        if (AnnotationAdapter.isRgbSeriesView(metadata, series)) {
+            AnnotationAdapter.applyViewportRgbChannelFilter(viewer);
+        }
         AnnotationAdapter.restoreChannelPaletteSidebar(doc);
         AnnotationAdapter.syncBrightnessContrastButtons(false, doc);
         return true;
@@ -7551,6 +7649,27 @@ class AnnotationAdapter {
         });
     }
 
+    /**
+     * True when every RGB plane is shown with a 0–255 window and gamma 1.
+     * Default brightfield tiles already look like that, so a CSS
+     * {@code url(#fcp-gamma-filter)} is a no-op that can blank the OSD canvas
+     * when the SVG filter is missing or in a {@code display:none} subtree.
+     */
+    static rgbCompositeMapsAreIdentity(maps) {
+        const list = Array.isArray(maps) && maps.length
+            ? maps
+            : AnnotationAdapter.rgbCompositeChannelMaps();
+        if (list.length < 3) return false;
+        const scale = AnnotationAdapter.BIT8_INTENSITY_SCALE;
+        return list.slice(0, 3).every(map =>
+            map
+            && map.visible !== false
+            && Number(map.lo) === 0
+            && Number(map.range) >= scale
+            && Math.abs((Number(map.exponent) || 1) - 1) < 0.001
+        );
+    }
+
     static applyRgbCompositeWindowProcessor(context, maps) {
         if (!context?.canvas || typeof context.getImageData !== "function") return false;
         const width = Number(context.canvas.width) || 0;
@@ -7634,7 +7753,12 @@ class AnnotationAdapter {
                 gammaFn.setAttribute("offset", "0");
             }
         }
-        if (typeof viewer?.setFilterOptions === "function") {
+        if (AnnotationAdapter.rgbCompositeMapsAreIdentity(maps)) {
+            canvas.style.filter = "";
+            if (typeof viewer?.setFilterOptions === "function") {
+                viewer.setFilterOptions({ filters: { processors: [] } });
+            }
+        } else if (typeof viewer?.setFilterOptions === "function") {
             viewer.setFilterOptions({
                 loadMode: "sync",
                 filters: {

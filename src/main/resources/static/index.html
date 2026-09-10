@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260908-window-title2"></script>
+    <script src="/annotation-adapter.js?v=20260909-vsi-he-rgb"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
@@ -3630,7 +3630,17 @@
             cursor: pointer;
         }
         .fcp-actions button:hover { background: #fff; }
-        .fcp-gamma-svg { position: absolute; width: 0; height: 0; overflow: hidden; }
+        /* Keep this SVG in the rendered tree (never [hidden]/display:none).
+           `filter: url(#fcp-gamma-filter)` on the OSD canvas is invalid in
+           WebKit/Blink when the filter lives in a display:none subtree, which
+           blanks brightfield tiles. */
+        .fcp-gamma-svg {
+            position: absolute;
+            width: 0;
+            height: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
 
         #home-view,
         #show-advanced-channel-palette,
@@ -4217,22 +4227,22 @@
     <div id="left-resizer" class="resize-handle" role="separator" aria-label="Resize image browser"></div>
     <main class="viewer-main" aria-label="Whole-slide image viewer">
         <div class="viewer-stage" id="openseadragon-viewer">
+        <svg id="wsi-viewport-filters" class="fcp-gamma-svg" aria-hidden="true" focusable="false">
+            <filter id="fcp-gamma-filter" color-interpolation-filters="linearRGB">
+                <feComponentTransfer>
+                    <feFuncR id="fcp-window-func-r" type="linear" slope="1" intercept="0"/>
+                    <feFuncG id="fcp-window-func-g" type="linear" slope="1" intercept="0"/>
+                    <feFuncB id="fcp-window-func-b" type="linear" slope="1" intercept="0"/>
+                </feComponentTransfer>
+                <feComponentTransfer>
+                    <feFuncR id="fcp-gamma-func-r" type="gamma" amplitude="1" exponent="1" offset="0"/>
+                    <feFuncG id="fcp-gamma-func-g" type="gamma" amplitude="1" exponent="1" offset="0"/>
+                    <feFuncB id="fcp-gamma-func-b" type="gamma" amplitude="1" exponent="1" offset="0"/>
+                </feComponentTransfer>
+            </filter>
+        </svg>
         <div id="viewer"></div>
         <aside id="floating-channel-palette" class="floating-palette floating-channel-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-channel-palette-title">
-            <svg class="fcp-gamma-svg" aria-hidden="true" focusable="false">
-                <filter id="fcp-gamma-filter" color-interpolation-filters="linearRGB">
-                    <feComponentTransfer>
-                        <feFuncR id="fcp-window-func-r" type="linear" slope="1" intercept="0"/>
-                        <feFuncG id="fcp-window-func-g" type="linear" slope="1" intercept="0"/>
-                        <feFuncB id="fcp-window-func-b" type="linear" slope="1" intercept="0"/>
-                    </feComponentTransfer>
-                    <feComponentTransfer>
-                        <feFuncR id="fcp-gamma-func-r" type="gamma" amplitude="1" exponent="1" offset="0"/>
-                        <feFuncG id="fcp-gamma-func-g" type="gamma" amplitude="1" exponent="1" offset="0"/>
-                        <feFuncB id="fcp-gamma-func-b" type="gamma" amplitude="1" exponent="1" offset="0"/>
-                    </feComponentTransfer>
-                </filter>
-            </svg>
             <div class="fcp-titlebar" id="floating-channel-palette-handle">
                 <span class="fcp-title" id="floating-channel-palette-title">🎛️ Brightness &amp; Contrast</span>
                 <button type="button" id="floating-channel-palette-close" class="fcp-close" aria-label="Close brightness and contrast">×</button>
@@ -5606,29 +5616,7 @@
                     + `?revision=${revision}&z=${planeZ}&series=${series}`;
             }
         };
-        // Whole-slide pyramids routinely downsample by an arbitrary factor per level
-        // (Aperio SVS is commonly 4x per level, not the 2x OpenSeadragon assumes by
-        // default for a plain width/height/maxLevel tile source). Left uncorrected,
-        // OSD computes each level's tile grid from the wrong assumed pixel size and
-        // requests tiles for pixel regions that don't exist at that resolution -- the
-        // server can only answer those with an empty/broken image, so the browser
-        // logs "Image load aborted" and retries indefinitely, which is what made the
-        // low-power view (the levels furthest from this mismatch) feel "extremely
-        // slow". `metadata.levelDimensions` reports the *real* per-level pixel size
-        // straight from the Bio-Formats reader, so override the scale OSD assumes
-        // for every level -- `getLevelScale` is what every other OSD tile-grid
-        // calculation (getNumTiles, getTileBounds, getTileAtPoint) derives from.
-        const levelDimensions = Array.isArray(metadata.levelDimensions) ? metadata.levelDimensions : [];
-        if (levelDimensions.length && metadata.width > 0) {
-            const scaleByLevel = new Map(
-                levelDimensions.map(entry => [entry.level, entry.width / metadata.width])
-            );
-            source.getLevelScale = function (level) {
-                const scale = scaleByLevel.get(level);
-                return Number.isFinite(scale) && scale > 0 ? scale : Math.pow(2, level - maxLevel);
-            };
-        }
-        return source;
+        return AnnotationAdapter.buildPyramidTileSource(source, metadata);
     }
 
     function openViewer(preserveViewport = false) {

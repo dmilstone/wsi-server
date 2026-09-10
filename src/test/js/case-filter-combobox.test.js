@@ -164,7 +164,7 @@ assert.match(html, /id="case-filter-select"/);
 assert.match(html, /role="combobox"/);
 assert.match(html, /placeholder="Search slides\.\.\."/);
 assert.match(html, /Search slides in the upper left/);
-assert.match(html, /annotation-adapter\.js\?v=20260908-window-title2/);
+assert.match(html, /annotation-adapter\.js\?v=20260909-vsi-he-rgb/);
 assert.match(html, /environment-ui\.js\?v=20260908-window-title/);
 assert.match(html, /id="wsi-document-title"/);
 assert.match(html, /app-header-brand-left[\s\S]*id="case-filter-combobox"/);

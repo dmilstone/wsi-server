@@ -514,7 +514,8 @@ assert.equal(AnnotationAdapter.channelLevelScale({
     modality: "FLUORESCENCE",
     seriesProfiles: [{ index: 0, rgb: false }]
 }), 65535);
-assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 0), false);
+assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: true, modality: "FLUORESCENCE" }, 0), true);
+assert.equal(AnnotationAdapter.isRgbSeriesView({ rgb: false, modality: "FLUORESCENCE" }, 0), false);
 assert.equal(AnnotationAdapter.placeholderPaletteChannels().length, 3);
 assert.equal(AnnotationAdapter.placeholderPaletteChannels()[0].lut, "CYAN");
 assert.equal(AnnotationAdapter.placeholderPaletteChannels()[1].lut, "GREEN");
@@ -584,6 +585,53 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     AnnotationAdapter.clearViewportTileContrastFilter({ drawer: { canvas } });
     assert.equal(canvas.style.filter, "");
 }
+
+{
+    const identityMaps = AnnotationAdapter.rgbCompositeChannelMaps([
+        { index: 0, visible: true, black: 0, white: 255, gamma: 1 },
+        { index: 1, visible: true, black: 0, white: 255, gamma: 1 },
+        { index: 2, visible: true, black: 0, white: 255, gamma: 1 }
+    ]);
+    assert.equal(AnnotationAdapter.rgbCompositeMapsAreIdentity(identityMaps), true);
+    const windowedMaps = AnnotationAdapter.rgbCompositeChannelMaps([
+        { index: 0, visible: true, black: 0, white: 255, gamma: 1 },
+        { index: 1, visible: false, black: 0, white: 255, gamma: 1 },
+        { index: 2, visible: true, black: 10, white: 210, gamma: 1 }
+    ]);
+    assert.equal(AnnotationAdapter.rgbCompositeMapsAreIdentity(windowedMaps), false);
+
+    const previousController = AnnotationAdapter.displayController;
+    AnnotationAdapter.displayController = {
+        getDisplay: () => ({
+            channels: [
+                { index: 0, visible: true, black: 0, white: 255, gamma: 1 },
+                { index: 1, visible: true, black: 0, white: 255, gamma: 1 },
+                { index: 2, visible: true, black: 0, white: 255, gamma: 1 }
+            ]
+        })
+    };
+    const identityCanvas = { style: { filter: "url(#fcp-gamma-filter)" } };
+    assert.equal(AnnotationAdapter.applyViewportRgbChannelFilter({ drawer: { canvas: identityCanvas } }), true);
+    assert.equal(identityCanvas.style.filter, "");
+
+    AnnotationAdapter.displayController = {
+        getDisplay: () => ({
+            channels: [
+                { index: 0, visible: true, black: 0, white: 200, gamma: 1 },
+                { index: 1, visible: true, black: 0, white: 255, gamma: 1 },
+                { index: 2, visible: true, black: 0, white: 255, gamma: 1 }
+            ]
+        })
+    };
+    const windowedCanvas = { style: { filter: "" } };
+    assert.equal(AnnotationAdapter.applyViewportRgbChannelFilter({ drawer: { canvas: windowedCanvas } }), true);
+    assert.match(windowedCanvas.style.filter, /url\(#fcp-gamma-filter\)/);
+    AnnotationAdapter.displayController = previousController;
+}
+
+assert.match(html, /id="wsi-viewport-filters"/);
+assert.match(html, /id="wsi-viewport-filters"[\s\S]*id="fcp-gamma-filter"[\s\S]*id="floating-channel-palette"/);
+assert.doesNotMatch(html, /id="floating-channel-palette"[\s\S]{0,400}id="fcp-gamma-filter"/);
 
 {
     const block = {
