@@ -131,7 +131,8 @@ public final class WsiCatalogScanner {
         }
         SidecarMetadata data = sidecar == null ? SidecarMetadata.empty() : sidecar;
         if (sidecarPresent && data.lacksFluorescentArrays() && looksBrightfield(data)) {
-            return new SlideInspection(MODALITY_BRIGHTFIELD, ENGINE_OPENSLIDE);
+            // VSI / TIFF H&E is Bio-Formats; OpenSlide does not handle those containers.
+            return new SlideInspection(MODALITY_BRIGHTFIELD, ENGINE_BIOFORMATS);
         }
         return new SlideInspection(MODALITY_FLUORESCENCE, ENGINE_BIOFORMATS);
     }

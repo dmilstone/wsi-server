@@ -27,8 +27,7 @@ public class WsiReaderEngineFactory {
         try {
             WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(entry.path());
             LOGGER.info("Routing slide {} as {} via {}", entry.name(), inspection.modality(), inspection.engine());
-            if (WsiCatalogScanner.ENGINE_OPENSLIDE.equals(inspection.engine())
-                    || WsiCatalogScanner.MODALITY_BRIGHTFIELD.equals(inspection.modality())) {
+            if (WsiCatalogScanner.ENGINE_OPENSLIDE.equals(inspection.engine())) {
                 return new OpenSlideEngine(entry);
             }
             return new BioFormatsEngine(entry);

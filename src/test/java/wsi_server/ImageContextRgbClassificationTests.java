@@ -9,10 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class ImageContextRgbClassificationTests {
 
     @Test
-    void fluorescenceIsNeverClassifiedAsRgbEvenWhenReaderReportsJpegRgb() {
+    void mrxsFluorescencePreviewIsNeverRgbButVsiHePlanarRgbIs() {
         assertEquals(false, ImageContext.classifyRgb(true, FormatTools.UINT8, true, 3));
         assertEquals(true, ImageContext.classifyRgb(false, FormatTools.UINT8, true, 3));
+        assertEquals(true, ImageContext.classifyRgb(false, FormatTools.UINT8, false, 3),
+                "Olympus VSI H&E is often planar UINT8 R/G/B, not packed reader RGB");
         assertEquals(false, ImageContext.classifyRgb(false, FormatTools.UINT16, true, 3));
+        assertEquals(false, ImageContext.classifyRgb(false, FormatTools.UINT8, false, 1));
     }
 
     @Test

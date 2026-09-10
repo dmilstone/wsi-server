@@ -130,7 +130,19 @@ class WsiCatalogScannerTests {
                 """);
         WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(slide);
         assertEquals(WsiCatalogScanner.MODALITY_BRIGHTFIELD, inspection.modality());
-        assertEquals(WsiCatalogScanner.ENGINE_OPENSLIDE, inspection.engine());
+        assertEquals(WsiCatalogScanner.ENGINE_BIOFORMATS, inspection.engine());
+    }
+
+    @Test
+    void vsiBrightfieldSidecarStaysOnBioFormats() throws Exception {
+        Path slide = dir.resolve("he.vsi");
+        Files.writeString(slide, "x");
+        Files.writeString(dir.resolve("he.metadata.json"), """
+                {"modality":"brightfield","channels":3,"rgb":true}
+                """);
+        WsiCatalogScanner.SlideInspection inspection = WsiCatalogScanner.inspect(slide);
+        assertEquals(WsiCatalogScanner.MODALITY_BRIGHTFIELD, inspection.modality());
+        assertEquals(WsiCatalogScanner.ENGINE_BIOFORMATS, inspection.engine());
     }
 
     @Test

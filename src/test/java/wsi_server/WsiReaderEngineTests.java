@@ -32,6 +32,32 @@ class WsiReaderEngineTests {
     }
 
     @Test
+    void factoryRoutesBrightfieldVsiToBioFormats(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Files.writeString(dir.resolve("he.vsi"), "x");
+        java.nio.file.Files.writeString(dir.resolve("he.metadata.json"), """
+                {"modality":"brightfield","channels":3,"rgb":true}
+                """);
+        ImageRegistry.ImageEntry entry = new ImageRegistry.ImageEntry(
+                "id",
+                "he.vsi",
+                "he.vsi",
+                "",
+                dir.resolve("he.vsi"),
+                "",
+                0,
+                0,
+                0,
+                WsiCatalogScanner.MODALITY_BRIGHTFIELD,
+                WsiCatalogScanner.ENGINE_BIOFORMATS,
+                false
+        );
+        WsiReaderEngine engine = new WsiReaderEngineFactory().open(entry);
+        assertEquals(WsiCatalogScanner.ENGINE_BIOFORMATS, engine.getMetadata().engine());
+        assertEquals(WsiCatalogScanner.MODALITY_BRIGHTFIELD, engine.getMetadata().modality());
+    }
+
+    @Test
     void bioFormatsEngineReportsBioFormatsMetadata() {
         ImageRegistry.ImageEntry entry = new ImageRegistry.ImageEntry(
                 "id",

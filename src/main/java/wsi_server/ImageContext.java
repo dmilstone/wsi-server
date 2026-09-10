@@ -61,9 +61,10 @@ final class ImageContext implements AutoCloseable {
             }
             timing.measureVoid("metadata", "series_select", imageId, () -> reader.setSeries(series));
             reader.setResolution(0);
+            boolean mrxsFluorescence = MrxsSlideInfo.isFluorescence(entry.path());
             boolean fluorescence = WsiCatalogScanner.MODALITY_FLUORESCENCE.equalsIgnoreCase(entry.modality())
-                    || MrxsSlideInfo.isFluorescence(entry.path());
-            this.rgb = classifyRgb(fluorescence, reader.getPixelType(), reader.isRGB(), reader.getSizeC());
+                    || mrxsFluorescence;
+            this.rgb = classifyRgb(mrxsFluorescence, reader.getPixelType(), reader.isRGB(), reader.getSizeC());
             this.eightBit = reader.getPixelType() == FormatTools.UINT8;
             this.packedRgbFluorescence = !this.rgb && MrxsSlideInfo.isFluorescence(entry.path())
                     && reader.isRGB() && reader.getSizeC() >= 3;
@@ -161,11 +162,12 @@ final class ImageContext implements AutoCloseable {
     int intensityMax() { return rgb || eightBit ? 255 : 65535; }
 
     /**
-     * H&E / IHC 8-bit RGB only. Catalogued fluorescence is never RGB, even when
-     * Bio-Formats opened a JPEG preview ({@code .mrxs} files are often JFIF).
+     * 8-bit RGB or planar R/G/B (typical Olympus VSI H&amp;E). 3DHistech
+     * fluorescence {@code .mrxs} is often a JPEG preview that Bio-Formats
+     * reports as RGB; that packed preview must stay non-RGB.
      */
-    static boolean classifyRgb(boolean fluorescence, int pixelType, boolean readerRgb, int sizeC) {
-        if (fluorescence) return false;
+    static boolean classifyRgb(boolean mrxsFluorescence, int pixelType, boolean readerRgb, int sizeC) {
+        if (mrxsFluorescence) return false;
         return pixelType == FormatTools.UINT8 && (readerRgb || sizeC >= 3);
     }
 
