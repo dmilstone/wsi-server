@@ -34,6 +34,7 @@ PYTHONPYCACHEPREFIX="$TEST_ROOT/pycache" \
     python3 -m py_compile "$OPS_DIR/render_cheatsheet.py" "$OPS_DIR/retro_build_metadata.py" "$OPS_DIR/tests/test_renderer.py" "$OPS_DIR/tests/test_retro_metadata.py" \
         "$OPS_DIR/wsi_ingest.py" "$OPS_DIR/wsi_ops_dashboard.py" "$OPS_DIR/wsi_ingest_daemon.py" "$OPS_DIR/wsi_ingest_autobatch.py" \
         "$OPS_DIR/wsi_ingest_network_drop.py" "$OPS_DIR/wsi_service_control.py" "$OPS_DIR/wsi_control_app.py" \
+        "$OPS_DIR/wsi_paths.py" \
         "$OPS_DIR/tests/test_wsi_ingest.py" "$OPS_DIR/tests/test_wsi_ops_dashboard.py" "$OPS_DIR/tests/test_wsi_ingest_daemon.py" \
         "$OPS_DIR/tests/test_wsi_ingest_autobatch.py" "$OPS_DIR/tests/test_wsi_ingest_network_drop.py" \
         "$OPS_DIR/tests/test_wsi_service_control.py"

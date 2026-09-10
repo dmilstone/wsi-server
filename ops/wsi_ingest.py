@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, ctypes, errno, hashlib, json, os, platform, secrets, stat, sys, tempfile, time
+import argparse, ctypes, errno, hashlib, json, os, platform, secrets, shutil, stat, sys, tempfile, time
 from pathlib import Path
 # fcntl/msvcrt are both stdlib but each only exists on its own platform family;
 # importing the wrong one unconditionally would break the module at import time.
@@ -45,7 +45,6 @@ def prod_marker_ok(p):
 def roots_ok(c,exist=True):
     if exist and (not c['staging'].is_dir() or not c['production'].is_dir()): raise Fail('configuration','configured roots must exist')
     if c['staging']==c['production'] or str(c['staging']).startswith(str(c['production'])+os.sep) or str(c['production']).startswith(str(c['staging'])+os.sep): raise Fail('configuration','roots must be disjoint')
-    if exist and not same_dev(c['staging'],c['production']): raise Fail('filesystem','staging and production must be on same filesystem')
     if exist and not prod_marker_ok(c['production']): raise Fail('environment','production marker must be exactly present')
 
 def entry(path, base):
@@ -222,6 +221,7 @@ def atomic_rename_noreplace(src,dst):
         if not ok:
             err=ctypes.get_last_error()
             if err in (183, 80): raise Fail('collision','destination already exists')#ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS
+            if err == 17: raise Fail('filesystem','cross-device link')#ERROR_NOT_SAME_DEVICE
             raise Fail('filesystem', ctypes.FormatError(err))
         return
     else:
@@ -230,6 +230,59 @@ def atomic_rename_noreplace(src,dst):
         e=ctypes.get_errno()
         if e in (errno.EEXIST, errno.ENOTEMPTY): raise Fail('collision','destination already exists')
         raise Fail('filesystem',os.strerror(e))
+
+def manifest_copy_identity(entries):
+    """Fields that must survive a cross-volume copy (inode/dev will not)."""
+    return [{'path':e['path'],'type':e['type'],'size':e.get('size')} for e in entries]
+
+def _is_cross_device_fail(error):
+    if isinstance(error, Fail):
+        if error.cat != 'filesystem':
+            return False
+        msg = str(error).lower()
+        return any(token in msg for token in ('cross-device', 'different disk', 'not same device', 'exdev'))
+    errno_val = getattr(error, 'errno', None)
+    if errno_val == getattr(errno, 'EXDEV', 18):
+        return True
+    return getattr(error, 'winerror', None) == 17
+
+def _cross_volume_relocate(src, dst):
+    """shutil.move across volume shares, with copy2+unlink fallback for files."""
+    src_p, dst_p = Path(src), Path(dst)
+    if dst_p.exists():
+        raise Fail('collision','destination already exists')
+    try:
+        shutil.move(str(src_p), str(dst_p))
+        return
+    except OSError as error:
+        if src_p.is_file() and not src_p.is_symlink():
+            try:
+                shutil.copy2(str(src_p), str(dst_p))
+                src_p.unlink()
+                return
+            except OSError as copy_error:
+                raise Fail('filesystem', str(copy_error))
+        raise Fail('filesystem', str(error))
+
+def promote_path(src, dst):
+    """Atomic no-replace rename on the same volume; shutil.move/copy2 across volumes.
+
+    Returns True when the native rename was used, False after a cross-volume copy.
+    """
+    src_p, dst_p = Path(src), Path(dst)
+    if dst_p.exists():
+        raise Fail('collision','destination already exists')
+    try:
+        atomic_rename_noreplace(src_p, dst_p)
+        return True
+    except Fail as error:
+        if not _is_cross_device_fail(error):
+            raise
+    except OSError as error:
+        if not _is_cross_device_fail(error):
+            raise
+    _cross_volume_relocate(src_p, dst_p)
+    return False
 
 def close_lock(lf):
     try:
@@ -247,9 +300,12 @@ def cmd_promote(a):
         if input('Type PROMOTE: ')!='PROMOTE': raise Fail('confirmation','wrong confirmation token')
         st,m,ds,dest,ag=recheck(c,n); readiness(c,st,ag); journal(c,n,'prepared')
         if dest.exists(): raise Fail('collision','destination already exists')
-        atomic_rename_noreplace(ds,dest); fsync_path(c['staging']); fsync_path(c['production']); journal(c,n,'moved')
+        same_volume=promote_path(ds,dest); fsync_path(c['staging']); fsync_path(c['production']); journal(c,n,'moved')
         cur,dig,ag2=manifest(dest)
-        if cur!=m: raise Fail('manifest','destination differs after rename')
+        if same_volume:
+            if cur!=m: raise Fail('manifest','destination differs after rename')
+        elif manifest_copy_identity(cur)!=manifest_copy_identity(m):
+            raise Fail('manifest','destination differs after rename')
         journal(c,n,'verified'); receipt(c,n,st); print('promoted transaction:',st['transaction_id'])
     finally:
         close_lock(lf)

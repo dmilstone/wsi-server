@@ -329,7 +329,7 @@ export WSI_OPS_DASHBOARD_PASSWORD='choose a local password'
 ./ops/wsi-ops-dashboard
 ```
 
-Browse locally to `http://127.0.0.1:8084/`, or to the LAN URL after the remote
+Browse locally to `https://127.0.0.1:8084/`, or to the LAN URL after the remote
 bind in `ops/README.md`. Do not proxy this service. It is not part of
 production startup, deployment, or release automation.
 
@@ -356,18 +356,18 @@ The tradeoff is exactly the "known limitation" above: this installed copy has
 no access back into the repository, so it cannot be used to recycle
 development. It also does not update itself -- there is no automatic sync
 between the repository and the installed copy. After changing this script (or
-`wsi_ingest.py`, `wsi_ingest_network_drop.py`, `wsi_service_control.py`, or the cheat sheets), redeploy
+`wsi_ingest.py`, `wsi_ingest_network_drop.py`, `wsi_service_control.py`, `wsi_paths.py`, or the cheat sheets), redeploy
 manually:
 
 ```bash
 SUPPORT="/Users/dm026/Library/Application Support/com.wsi.ops-dashboard"
-cp ops/wsi_ops_dashboard.py ops/wsi_ingest.py ops/wsi_ingest_network_drop.py ops/wsi_service_control.py "$SUPPORT/runtime/"
+cp ops/wsi_ops_dashboard.py ops/wsi_ingest.py ops/wsi_ingest_network_drop.py ops/wsi_service_control.py ops/wsi_paths.py "$SUPPORT/runtime/"
 cp ops/RELEASE-CHEATSHEET.html ops/WSI-Release-Cheat-Sheet.pdf "$SUPPORT/runtime/"
 launchctl kickstart -k "gui/$(id -u)/com.wsi.ops-dashboard"
 ```
 
 Service start/stop for the image server and ingestion daemon is at
-`http://127.0.0.1:8084/services`. The installed launchd copy may be blocked by
+`https://127.0.0.1:8084/services`. The installed launchd copy may be blocked by
 macOS TCC from starting Maven under `~/Downloads`; use the standalone
 `WSI Control` app in that case. The `/services` page still reports status and
 can stop the ingest daemon via its sentinel files.

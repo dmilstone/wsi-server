@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>URL</key>
-  <string>http://127.0.0.1:8084/services</string>
+  <string>https://127.0.0.1:8084/services</string>
 </dict>
 </plist>

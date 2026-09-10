@@ -217,7 +217,7 @@ export WSI_OPS_DASHBOARD_PASSWORD='enter a local password interactively'
 ./ops/wsi-ops-dashboard
 ```
 
-Then open `http://127.0.0.1:8084/` in a browser running on the image-server
+Then open `https://127.0.0.1:8084/` in a browser running on the image-server
 host. Stop it with Ctrl-C.
 
 ## Launch / quit without a terminal
@@ -230,7 +230,7 @@ remote mode is configured.
 
 Web (dashboard, already running as `com.wsi.ops-dashboard` on this host):
 
-- `http://127.0.0.1:8084/services` on the image-server host
+- `https://127.0.0.1:8084/services` on the image-server host
 - `http://<image-server-host>:8084/services` after the remote bind below
 
 Standalone app:
@@ -268,7 +268,7 @@ that script.
 That home page is the daily dashboard: network drop root, ingestion staging
 root, and (flagged as not part of the usual workflow) the development image
 directory. Seal/observe/promote, status, and cheat sheets remain at
-`http://127.0.0.1:8084/ingest-tools` — in-depth ingest controls useful while
+`https://127.0.0.1:8084/ingest-tools` — in-depth ingest controls useful while
 developing the pipeline, linked from the dashboard as such.
 
 Each of those three directory fields also has a "Browse…" link that pops a real native
@@ -361,7 +361,7 @@ python3 ops/retro_build_metadata.py --slides-dir /Users/dm026/wsi-slides
 
 Existing real `if.<epitope>` tokens are kept. `if.Pending` is treated as empty.
 Pass `--force` to re-OCR. The script form-logs into the running viewer
-(`http://127.0.0.1:8080` by default) and OCRs `/api/images/{id}/label.png` with
+(`https://127.0.0.1:8080` by default) and OCRs `/api/images/{id}/label.png` with
 the `tesseract` CLI (90° first). Browser Scan remains only for rows still empty
 after this sweep. Refresh the catalog after the sweep. Do not put the password
 in the repository, shell history, process arguments, or logs. Use `WSI_PASSWORD`
@@ -390,7 +390,7 @@ WSI_OPS_CONTROL_TOKEN='a long random token'
 
 Startup fails closed if the bind is not loopback and CIDR or extra Host values
 are missing. Binding a single LAN address does not also listen on localhost;
-use all IPv4 interfaces plus CIDR if you still want `http://127.0.0.1:8084/`
+use all IPv4 interfaces plus CIDR if you still want `https://127.0.0.1:8084/`
 on the server itself. Proxy headers such as `X-Forwarded-For` are still
 ignored; only the TCP peer is checked. Optional TLS:
 

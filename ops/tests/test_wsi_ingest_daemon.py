@@ -47,6 +47,7 @@ class DaemonTests(unittest.TestCase):
             WSI_INGEST_STAGING_ROOT=str(self.st), WSI_INGEST_PRODUCTION_ROOT=str(self.pr),
             WSI_INGEST_REQUIRED_OBSERVATIONS='3', WSI_INGEST_OBSERVATION_INTERVAL_SECONDS='10',
             WSI_INGEST_MIN_QUIET_SECONDS='20',
+            WSI_INGEST_NETWORK_STABLE_SECONDS='0',
         )
         self.env_patch = mock.patch.dict(os.environ, self.env, clear=True)
         self.env_patch.start()
@@ -87,6 +88,7 @@ class DaemonTests(unittest.TestCase):
 
     def test_unsupported_dataset_is_silently_retried(self):
         d = self.st / 'still-arriving'; d.mkdir()
+        (d / 'notes.txt').write_text('not a slide')
         c = engine.cfg()
         fake = fake_run_ingest({'seal': fail_result('unsupported')})
         with mock.patch('wsi_ingest_daemon.run_ingest', fake):
@@ -119,11 +121,11 @@ class DaemonTests(unittest.TestCase):
         refreshed = []
         with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
              mock.patch('wsi_ingest_daemon.notify_server_refresh', side_effect=lambda url, **k: refreshed.append(url) or None):
-            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), 'http://127.0.0.1:8080')
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), 'https://127.0.0.1:8080')
         actions = [action_of(args) for args, _ in fake.calls]
         self.assertEqual(actions, ['observe', 'promote-dry-run', 'promote-step'])
         self.assertEqual(fake.calls[-1][1], 'PROMOTE')
-        self.assertEqual(refreshed, ['http://127.0.0.1:8080'])
+        self.assertEqual(refreshed, ['https://127.0.0.1:8080'])
         events = [e['event'] for e in self.log_lines(c)]
         self.assertEqual(events, ['observed', 'promoted'])
 
@@ -286,15 +288,18 @@ class DaemonTests(unittest.TestCase):
 
         def fake_subprocess_run(cmd, **kwargs):
             captured['cmd'] = cmd
+            captured['kwargs'] = kwargs
             return Result(0, 'ok')
 
         with mock.patch('wsi_ingest_daemon.subprocess.run', side_effect=fake_subprocess_run):
-            wd.run_sidecar_ocr(c, 'case', 'http://127.0.0.1:8080')
+            wd.run_sidecar_ocr(c, 'case', 'https://127.0.0.1:8080')
         cmd = captured['cmd']
         self.assertIn('--only-dir', cmd)
         self.assertEqual(cmd[cmd.index('--only-dir') + 1], str(c['production'] / 'case'))
         self.assertIn('--server-url', cmd)
-        self.assertEqual(cmd[cmd.index('--server-url') + 1], 'http://127.0.0.1:8080')
+        self.assertEqual(cmd[cmd.index('--server-url') + 1], 'https://127.0.0.1:8080')
+        self.assertIsInstance(cmd, list)
+        self.assertFalse(captured['kwargs'].get('shell', True))
 
     def test_pending_sidecar_ocr_resolves_and_clears_ledger(self):
         d = self.pr / 'case'; d.mkdir()
@@ -309,7 +314,7 @@ class DaemonTests(unittest.TestCase):
             return Result(0, 'ok')
 
         with mock.patch('wsi_ingest_daemon.run_sidecar_ocr', side_effect=fake_ocr):
-            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'https://127.0.0.1:8080')
         self.assertEqual(sidecar_ledger.pending_names(), [])
         events = [e['event'] for e in self.log_lines(c)]
         self.assertIn('sidecar_resolved', events)
@@ -321,11 +326,11 @@ class DaemonTests(unittest.TestCase):
         sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 2)
         sidecar_ledger.add('case')
         with mock.patch('wsi_ingest_daemon.run_sidecar_ocr', return_value=Result(0, 'pending')):
-            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
-            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'https://127.0.0.1:8080')
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'https://127.0.0.1:8080')
         self.assertTrue(sidecar_ledger.is_escalated('case'))
         with mock.patch('wsi_ingest_daemon.run_sidecar_ocr') as ocr:
-            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'https://127.0.0.1:8080')
         ocr.assert_not_called()
         self.assertEqual(sidecar_ledger.pending_names(), [])
         events = [e['event'] for e in self.log_lines(c)]
@@ -336,7 +341,7 @@ class DaemonTests(unittest.TestCase):
         sidecar_ledger = wd.SidecarLedger(self.st / 'sidecar.json', 5)
         sidecar_ledger.add('ghost')
         with mock.patch('wsi_ingest_daemon.run_sidecar_ocr') as ocr:
-            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'http://127.0.0.1:8080')
+            wd.run_pending_sidecar_ocr(c, sidecar_ledger, 'https://127.0.0.1:8080')
         ocr.assert_not_called()
         self.assertEqual(sidecar_ledger.pending_names(), [])
 
@@ -535,6 +540,66 @@ class DaemonTests(unittest.TestCase):
                         autobatch_merge_ledger=merge_ledger)
         self.assertEqual(merge_ledger.pending(), {'slide': '20260828'})
         self.assertFalse((self.pr / '20260828').exists())
+
+    def test_is_network_file_stable_accepts_static_nonzero_file(self):
+        path = self.make_dataset() / 'slide.vsi'
+        with mock.patch('wsi_ingest_daemon.time.sleep') as slept:
+            self.assertTrue(wd.is_network_file_stable(str(path), wait_interval=2))
+        slept.assert_called_once_with(2)
+
+    def test_is_network_file_stable_rejects_growing_file(self):
+        path = self.make_dataset() / 'slide.vsi'
+        sizes = [10, 20]
+        with mock.patch('wsi_ingest_daemon.os.path.getsize', side_effect=lambda p: sizes.pop(0) if sizes else 20), \
+             mock.patch('wsi_ingest_daemon.time.sleep'):
+            self.assertFalse(wd.is_network_file_stable(str(path), wait_interval=2))
+
+    def test_is_network_file_stable_rejects_missing_or_empty_file(self):
+        missing = self.st / 'gone.svs'
+        self.assertFalse(wd.is_network_file_stable(str(missing), wait_interval=0))
+        empty = self.st / 'empty.svs'
+        empty.write_bytes(b'')
+        self.assertFalse(wd.is_network_file_stable(str(empty), wait_interval=0))
+
+    def test_run_pass_skips_seal_until_network_file_is_stable(self):
+        self.make_dataset('new-case')
+        c = engine.cfg()
+        fake = fake_run_ingest({'seal': Result(0, 'sealed transaction: abc\n')})
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.dataset_is_network_stable', return_value=False):
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '')
+        self.assertEqual(fake.calls, [])
+        events = [e['event'] for e in self.log_lines(c)]
+        self.assertIn('network_file_unstable', events)
+
+    def test_run_pass_skips_observe_promote_and_integrity_until_stable(self):
+        self.make_dataset('case')
+        self.seal('case')
+        c = engine.cfg()
+        fake = fake_run_ingest({
+            'observe': Result(0), 'promote-dry-run': Result(0), 'promote-step': Result(0),
+        })
+        with mock.patch('wsi_ingest_daemon.run_ingest', fake), \
+             mock.patch('wsi_ingest_daemon.dataset_is_network_stable', return_value=False), \
+             mock.patch('wsi_ingest_daemon.probe_integrity') as probe:
+            wd.run_pass(c, wd.IntegrityLedger(self.st / 'ledger.json', 5), '')
+        self.assertEqual(fake.calls, [])
+        probe.assert_not_called()
+
+    def test_run_ingest_uses_argv_list_with_shell_false(self):
+        captured = {}
+
+        def fake_subprocess_run(cmd, **kwargs):
+            captured['cmd'] = cmd
+            captured['kwargs'] = kwargs
+            return Result(0, 'ok')
+
+        with mock.patch('wsi_ingest_daemon.subprocess.run', side_effect=fake_subprocess_run):
+            wd.run_ingest(['status'])
+        self.assertIsInstance(captured['cmd'], list)
+        self.assertEqual(captured['cmd'][0], sys.executable)
+        self.assertTrue(captured['cmd'][1].endswith('wsi_ingest.py'))
+        self.assertFalse(captured['kwargs'].get('shell', True))
 
     def test_end_to_end_real_subprocess_autobatch_hot_folder(self):
         os.environ.update(dict(

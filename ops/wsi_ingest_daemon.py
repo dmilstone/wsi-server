@@ -78,7 +78,7 @@ wsi_ingest.py, plus:
   WSI_INGEST_DAEMON_POLL_SECONDS           default 30
   WSI_INGEST_DAEMON_INTEGRITY_RETRY_LIMIT  default 5
   WSI_INGEST_DAEMON_SIDECAR_RETRY_LIMIT    default 6 (passes, not seconds)
-  WSI_INGEST_DAEMON_REFRESH_URL            e.g. http://127.0.0.1:8080 (optional)
+  WSI_INGEST_DAEMON_REFRESH_URL            e.g. https://127.0.0.1:8080 (optional)
   WSI_INGEST_DAEMON_LOG                    default <staging>/.wsi-ingest-control/daemon/daemon.log.jsonl
   WSI_INGEST_AUTOBATCH_ENABLED             default off (0/false); see above
   WSI_INGEST_NETWORK_DROP_ROOT             default unset (disabled); see above

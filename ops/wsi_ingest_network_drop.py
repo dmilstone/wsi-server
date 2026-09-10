@@ -4,15 +4,16 @@ latency and stalls, unlike a same-machine copy) be a source for staging,
 without touching wsi_ingest.py's own promotion mechanism at all.
 
 Why this is a separate front end rather than pointing WSI_INGEST_STAGING_ROOT
-directly at a network mount: promotion in wsi_ingest.py is one atomic
-same-filesystem rename (atomic_rename_noreplace), and roots_ok() enforces
-staging and production being on the same filesystem specifically so that
-promotion can never half-complete. A network share holding staging while
-production stays on local disk would make every promotion attempt fail
-closed forever (different filesystems) -- and moving production onto the
-network share too would mean the running viewer serving tiles over the
-network at read time, a separate and likely much bigger performance cost
-than anything ingestion-side. Neither is what this module does. Instead, it
+directly at a network mount: promotion in wsi_ingest.py prefers a same-volume
+atomic no-replace rename (atomic_rename_noreplace) and falls back to
+shutil.move/copy2 when staging and production live on distinct volume shares.
+The network-drop front end still never repoints WSI_INGEST_STAGING_ROOT itself
+at the share. A network share holding staging while production stays on local
+disk would make every promotion a copy rather than a rename -- and moving
+production onto the network share too would mean the running viewer serving
+tiles over the network at read time, a separate and likely much bigger
+performance cost than anything ingestion-side. Neither is what this module
+does. Instead, it
 treats the network path purely as an inbox of *slides*, not of dated
 directories. A VS200 (and similar) scanner writes into the same dated folder
 all day; treating that folder as one dataset would ingest it the first time
@@ -491,7 +492,7 @@ def relocate_unit(c, engine, root, unit, fingerprint, log, merge_ledger):
         return False
 
     try:
-        engine.atomic_rename_noreplace(temp_dir, dest_dir)
+        engine.promote_path(temp_dir, dest_dir)
     except engine.Fail as error:
         shutil.rmtree(temp_dir, ignore_errors=True)
         log("network_drop_relocate_failed", dataset=_short(dataset_name), detail=error.cat)

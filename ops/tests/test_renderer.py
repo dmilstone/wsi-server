@@ -21,6 +21,7 @@ def run(*arguments):
         capture_output=True,
         text=True,
         check=False,
+        shell=False,
     )
 
 

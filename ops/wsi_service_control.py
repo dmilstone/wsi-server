@@ -425,7 +425,7 @@ def start_ingest():
     env = load_ingest_environment()
     env.pop("WSI_OPS_DASHBOARD_PASSWORD", None)
     if "WSI_INGEST_DAEMON_REFRESH_URL" not in env:
-        env["WSI_INGEST_DAEMON_REFRESH_URL"] = f"http://{VIEWER_HOST}:{VIEWER_PORT}"
+        env["WSI_INGEST_DAEMON_REFRESH_URL"] = f"https://{VIEWER_HOST}:{VIEWER_PORT}"
     control = ingest_control_dir(env)
     control.mkdir(parents=True, exist_ok=True)
     (control / "stop").unlink(missing_ok=True)
@@ -587,7 +587,7 @@ def dashboard_page_url(cfg=None):
     remote = (cfg.get("remote_url") or "").strip()
     if remote:
         return normalize_remote_url(remote) + "/services"
-    return os.environ.get("WSI_OPS_DASHBOARD_URL", "http://127.0.0.1:8084/services")
+    return os.environ.get("WSI_OPS_DASHBOARD_URL", "https://127.0.0.1:8084/services")
 
 
 def viewer_open_url(cfg=None):
@@ -598,8 +598,8 @@ def viewer_open_url(cfg=None):
     if remote:
         parsed = urllib.parse.urlparse(normalize_remote_url(remote))
         host = parsed.hostname or VIEWER_HOST
-        return f"http://{host}:{VIEWER_PORT}/"
-    return f"http://{VIEWER_HOST}:{VIEWER_PORT}/"
+        return f"https://{host}:{VIEWER_PORT}/"
+    return f"https://{VIEWER_HOST}:{VIEWER_PORT}/"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

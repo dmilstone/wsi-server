@@ -22,7 +22,7 @@ class IngestTests(unittest.TestCase):
             except wi.Fail as e: print('FAIL',e.cat+':',str(e),file=err); return Result(1,out.getvalue(),err.getvalue())
             except SystemExit as e: return Result(e.code or 0,out.getvalue(),err.getvalue())
     def cli(self,*args,input=''):
-        e=os.environ.copy(); e.update(self.env); return subprocess.run([str(Path(__file__).parents[1]/'wsi-ingest'),*args],input=input,text=True,capture_output=True,env=e)
+        e=os.environ.copy(); e.update(self.env); return subprocess.run([str(Path(__file__).parents[1]/'wsi-ingest'),*args],input=input,text=True,capture_output=True,env=e,shell=False)
     def ds(self,n='case'):
         d=self.st/n; d.mkdir(); (d/'slide.vsi').write_text('vsi'); (d/'slide_data').mkdir(); (d/'slide_data'/'a.bin').write_text('x'); return d
     def seal_obs(self,n='case'):
@@ -166,5 +166,32 @@ class IngestTests(unittest.TestCase):
         # narrow pre-first-seal dry-run case is a documented no-op there instead.
         with mock.patch('wsi_ingest.platform.system',return_value='Windows'):
             wi._acquire_lock(5); wi._release_lock(5)
+
+    def test_promote_path_falls_back_to_shutil_move_on_cross_device(self):
+        self.seal_obs()
+        moved=[]
+        real_move=shutil.move
+        def boom(src,dst):
+            raise wi.Fail('filesystem','Cross-device link')
+        def fake_move(src,dst):
+            moved.append((src,dst))
+            return real_move(src,dst)
+        with mock.patch('wsi_ingest.atomic_rename_noreplace',side_effect=boom), \
+             mock.patch('wsi_ingest.shutil.move',side_effect=fake_move):
+            p=self.invoke('promote','--step','case',input='PROMOTE\n')
+        self.assertEqual(p.returncode,0,p.stderr)
+        self.assertTrue(moved)
+        self.assertFalse((self.st/'case').exists())
+        self.assertTrue((self.pr/'case'/'slide.vsi').exists())
+
+    def test_windows_not_same_device_is_cross_device_fail(self):
+        fake_kernel32=mock.Mock()
+        fake_kernel32.MoveFileExW=mock.Mock(return_value=0)
+        with mock.patch('wsi_ingest.platform.system',return_value='Windows'), \
+             mock.patch('wsi_ingest.ctypes.WinDLL',return_value=fake_kernel32,create=True), \
+             mock.patch('wsi_ingest.ctypes.get_last_error',return_value=17,create=True):
+            with self.assertRaises(wi.Fail) as ctx: wi.atomic_rename_noreplace('src','dst')
+        self.assertEqual(ctx.exception.cat,'filesystem')
+        self.assertTrue(wi._is_cross_device_fail(ctx.exception))
 
 if __name__=='__main__': unittest.main()

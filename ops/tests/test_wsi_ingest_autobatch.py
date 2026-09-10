@@ -1,4 +1,4 @@
-import json, os, sys, tempfile, time, unittest
+import json, os, shutil, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -355,16 +355,16 @@ class AutobatchScanIntegrationTests(unittest.TestCase):
         self.scan()
         time.sleep(1.1)
 
-        real_rename = os.rename
+        real_move = shutil.move
         calls = {"n": 0}
 
-        def flaky_rename(src, dst):
+        def flaky_move(src, dst):
             calls["n"] += 1
             if calls["n"] == 2:  # let the anchor move, fail on the companion
                 raise OSError("simulated failure moving companion")
-            return real_rename(src, dst)
+            return real_move(src, dst)
 
-        with mock.patch("wsi_ingest_autobatch.os.rename", side_effect=flaky_rename):
+        with mock.patch("wsi_ingest_autobatch.shutil.move", side_effect=flaky_move):
             self.scan()
 
         # Nothing left half-moved: nothing in staging/A, and both anchor and

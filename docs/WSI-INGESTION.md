@@ -14,7 +14,7 @@ export WSI_INGEST_OBSERVATION_INTERVAL_SECONDS=60
 export WSI_INGEST_MIN_QUIET_SECONDS=120
 ```
 
-Intended local values are staging `/Users/dm026/wsi-ingest-staging`, production `/Users/dm026/wsi-slides`, and quiet time `120` seconds. Do not commit those as active configuration. Staging must be outside production, production must be outside staging, and both roots must be on the same filesystem so a native no-replace directory rename can atomically move the dataset directory without overwrite or copy/delete fallback. The implementation uses Linux `renameat2(..., RENAME_NOREPLACE)` or macOS `renamex_np(..., RENAME_EXCL)` and fails closed where neither primitive is available.
+Intended local values are staging `$WSI_HOME/wsi-ingest-staging`, production `$WSI_HOME/wsi-slides` (or `%WSI_HOME%` on Windows), and quiet time `120` seconds. Do not commit those as active configuration. Staging must be outside production and production must be outside staging. Same-volume roots still use a native no-replace directory rename (`renameat2` / `renamex_np` / `MoveFileExW`). Distinct network volume shares fall back to `shutil.move` / `shutil.copy2`.
 
 Production must contain exactly `.wsi-environment-production` and no other `.wsi-environment-*` marker.
 
@@ -37,7 +37,7 @@ Filesystem quiescence reduces risk but cannot prove that acquisition has complet
 - `seal DATASET`: mutating control-state operation only; writes restricted state under staging `.wsi-ingest-control`.
 - `observe DATASET`: mutating control-state operation only; records a qualifying unchanged whole-tree observation.
 - `promote --dry-run DATASET`: read-only preflight; it never adds an observation.
-- `promote --step DATASET`: locks, revalidates, confirms, journals, uses a native atomic no-replace directory rename, fsyncs parents, verifies, and writes a restricted receipt.
+- `promote --step DATASET`: locks, revalidates, confirms, journals, uses a native atomic no-replace directory rename on the same volume (or `shutil.move`/`copy2` across volume shares), fsyncs parents, verifies, and writes a restricted receipt.
 - `history`: prints transaction IDs and phases without contained filenames.
 - `recover`: conservative idempotent recovery.
 
@@ -63,7 +63,7 @@ Recovery never deletes, overwrites, copies, or automatically moves production da
 
 - `configuration`: set all required environment variables and ensure observation settings are valid.
 - `environment`: fix production environment markers before retrying.
-- `filesystem`: place staging and production on the same filesystem.
+- `filesystem`: native rename failed; same-volume is preferred, otherwise a copy/move fallback is used.
 - `stability`: wait for the next observation interval or quiet period.
 - `manifest`: the dataset changed; preserve evidence, inspect, and reseal only after confirming acquisition is complete.
 - `manual_investigation`: do not clean up automatically; inspect restricted journal state and the two roots.
@@ -80,7 +80,7 @@ Each pass:
 
 1. seals any new top-level staging directory that isn't already tracked;
 2. records an observation for anything already sealed;
-3. runs a structural integrity probe (TIFF/BigTIFF header, or generic readability check for non-TIFF containers, `probe_integrity`) immediately before promotion, retried up to `--integrity-retry-limit` passes before a dataset is skipped and left for manual investigation. Any large `.svs`/`.ndpi` (routinely several GB) is normally written as BigTIFF rather than classic TIFF -- the probe recognizes both;
+3. runs a structural integrity probe (TIFF/BigTIFF header, or generic readability check for non-TIFF containers, `probe_integrity`) immediately before promotion, retried up to `--integrity-retry-limit` passes before a dataset is skipped and left for manual investigation. Any large `.svs`/`.ndpi` (routinely several GB) is normally written as BigTIFF rather than classic TIFF -- the probe recognizes both. Incoming files are skipped until `is_network_file_stable` reports a static non-zero size over `WSI_INGEST_NETWORK_STABLE_SECONDS` (default 2);
 4. promotes anything that has met the quiet/observation requirements and passed the integrity probe, then calls `POST /api/images/refresh` on the running server;
 5. queues the newly promoted dataset for a clinical-marker sidecar OCR pass (`ops/retro_build_metadata.py --only-dir`), retried up to `--sidecar-retry-limit` passes -- this runs after, not during, promotion, because the server's `ImageRegistry` snapshot (and therefore the `label.png` route the OCR step needs) only updates asynchronously.
 

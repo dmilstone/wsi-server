@@ -30,6 +30,19 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from wsi_paths import default_production_image_root
+except ImportError:
+    def default_production_image_root():
+        configured = os.environ.get("WSI_IMAGE_DIRECTORY")
+        if configured:
+            return Path(os.path.expandvars(configured)).expanduser()
+        home = os.environ.get("WSI_HOME") or os.environ.get("USERPROFILE") or os.environ.get("HOME")
+        base = Path(home).expanduser() if home else Path.home()
+        return base / "wsi" / "wsi-slides"
+
 SLIDE_EXTS = (".vsi", ".svs", ".tiff", ".tif", ".ndpi", ".czi", ".lif", ".nd2", ".mrxs")
 IF_TOKEN = re.compile(r"(?i)if\.\S+")
 PLACEHOLDER = re.compile(r"(?i)^if\.(pending|none|unknown|n/?a)\b")
@@ -54,7 +67,7 @@ PANEL_ALIASES = {
     "iggneph": "if.IgG/Nephr",
     "iggnephr": "if.IgG/Nephr",
 }
-DEFAULT_SERVER = "http://127.0.0.1:8080"
+DEFAULT_SERVER = "https://127.0.0.1:8080"
 
 
 def normalize_if_epitope(text: str) -> str:
@@ -255,6 +268,7 @@ def rotate_png_file(src: Path, dest: Path, angle: int) -> bool:
         [sips, "-r", str(turn), str(src), "--out", str(dest)],
         capture_output=True,
         check=False,
+        shell=False,
     )
     return completed.returncode == 0 and dest.is_file() and dest.stat().st_size > 0
 
@@ -268,6 +282,7 @@ def tesseract_stdout(image_path: Path) -> str:
         cwd=str(image_path.parent),
         capture_output=True,
         check=False,
+        shell=False,
     )
     return (completed.stdout or b"").decode("utf-8", "replace")
 
@@ -414,7 +429,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Write ingest-time if.epitope sidecar tokens")
     parser.add_argument(
         "--slides-dir",
-        default=os.environ.get("WSI_IMAGE_DIRECTORY", "/Users/dm026/wsi-slides"),
+        default=str(default_production_image_root()),
         help="Root directory of WSI containers",
     )
     parser.add_argument(
@@ -431,7 +446,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--server-url",
         default=os.environ.get("WSI_SERVER_URL", DEFAULT_SERVER),
-        help="Running viewer for label.png, e.g. http://127.0.0.1:8080",
+        help="Running viewer for label.png, e.g. https://127.0.0.1:8080",
     )
     parser.add_argument("--user", default=os.environ.get("WSI_USER", "Annotator"))
     parser.add_argument(

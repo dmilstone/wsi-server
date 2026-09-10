@@ -48,6 +48,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -462,6 +463,20 @@ def scan_and_relocate(c, engine, tracking, merge_ledger, log=None):
             tracking.forget(folder_key, entry.name)
 
 
+def relocate_entry(src, dst):
+    """Move a file or directory, including across distinct volume shares."""
+    src_p, dst_p = Path(src), Path(dst)
+    try:
+        shutil.move(str(src_p), str(dst_p))
+        return
+    except OSError:
+        if src_p.is_file() and not src_p.is_symlink():
+            shutil.copy2(str(src_p), str(dst_p))
+            src_p.unlink()
+            return
+        raise
+
+
 def _relocate_unit(c, engine, merge_ledger, folder, stem, unit_paths, log):
     """Best-effort atomic-or-nothing relocation of unit_paths into a brand
     new c['staging']/<name> directory, handing that whole directory off to
@@ -495,12 +510,12 @@ def _relocate_unit(c, engine, merge_ledger, folder, stem, unit_paths, log):
     try:
         for p in unit_paths:
             dest = dest_dir / p.name
-            os.rename(str(p), str(dest))
+            relocate_entry(p, dest)
             moved.append((p, dest))
     except OSError as error:
         for original, relocated in reversed(moved):
             try:
-                os.rename(str(relocated), str(original))
+                relocate_entry(relocated, original)
             except OSError:
                 log("autobatch_relocate_rollback_failed", origin=folder.name,
                     detail=f"could not restore {relocated.name}")
@@ -515,7 +530,7 @@ def _relocate_unit(c, engine, merge_ledger, folder, stem, unit_paths, log):
     except (OSError, ValueError) as error:
         for original, relocated in reversed(moved):
             try:
-                os.rename(str(relocated), str(original))
+                relocate_entry(relocated, original)
             except OSError:
                 log("autobatch_relocate_rollback_failed", origin=folder.name,
                     detail=f"could not restore {relocated.name}")
@@ -542,7 +557,7 @@ def _quarantine(c, folder, entry, log):
     if dest.exists():
         dest = dest_root / f"{entry.name}.{int(time.time())}"
     try:
-        os.rename(str(entry), str(dest))
+        relocate_entry(entry, dest)
         log("autobatch_quarantined", origin=folder.name)
     except OSError as error:
         log("autobatch_quarantine_failed", origin=folder.name, detail=str(error))
