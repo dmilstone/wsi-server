@@ -40,6 +40,7 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -122,7 +123,7 @@ public class BioFormatsTileService {
         ImageContext context = context(imageId, series);
         SessionDisplayState state = sessionState(session, imageId, series, context);
         return context.withReader(reader -> {
-            List<ImageSeriesProfile> profiles = catalogSeriesProfiles(reader);
+            List<ImageSeriesProfile> profiles = catalogSeriesProfiles(reader, context.entry().path());
             reader.setSeries(series);
             reader.setResolution(0);
             Double micronsPerPixelX = physicalSizeMicrons(reader, true);
@@ -150,16 +151,19 @@ public class BioFormatsTileService {
         return Math.min(z, planes - 1);
     }
 
-    private List<ImageSeriesProfile> catalogSeriesProfiles(IFormatReader reader) {
+    private List<ImageSeriesProfile> catalogSeriesProfiles(IFormatReader reader, Path slidePath) {
         MetadataRetrieve metadata = reader.getMetadataStore() instanceof MetadataRetrieve retrieve
                 ? retrieve : null;
         int previous = reader.getSeries();
+        boolean mrxsFluorescence = MrxsSlideInfo.isFluorescence(slidePath);
         List<ImageSeriesProfile> profiles = new ArrayList<>();
         try {
             for (int index = 0; index < reader.getSeriesCount(); index++) {
                 reader.setSeries(index);
                 String name = seriesName(metadata, index);
                 boolean thumbnail = reader.isThumbnailSeries();
+                boolean rgb = ImageContext.classifyRgb(
+                        mrxsFluorescence, reader.getPixelType(), reader.isRGB(), reader.getSizeC());
                 profiles.add(new ImageSeriesProfile(
                         index,
                         name,
@@ -168,7 +172,7 @@ public class BioFormatsTileService {
                         reader.getSizeC(),
                         zPlaneCount(reader.getSizeZ()),
                         reader.getResolutionCount(),
-                        reader.isRGB(),
+                        rgb,
                         thumbnail,
                         AssociatedImageSelection.isDiagnosticSpecimen(name, thumbnail)));
             }
@@ -576,12 +580,31 @@ public class BioFormatsTileService {
     public byte[] renderAnalysisRegion(String imageId, int series, int z,
                                        int x, int y, int width, int height,
                                        int maxEdge, HttpSession session) throws Exception {
+        return renderAnalysisRegion(imageId, series, z, x, y, width, height, maxEdge, session, null);
+    }
+
+    public byte[] renderAnalysisRegion(String imageId, int series, int z,
+                                       int x, int y, int width, int height,
+                                       int maxEdge, HttpSession session, Integer channel) throws Exception {
         ImageContext context = context(imageId, series);
         SessionDisplayState state = sessionState(session, imageId, series, context);
         List<ChannelDisplaySettings> settingsSnapshot = new ArrayList<>();
         synchronized (state) {
-            for (int channel = 0; channel < state.model().getChannelCount(); channel++) {
-                settingsSnapshot.add(copySettings(state.model().getChannel(channel)));
+            for (int index = 0; index < state.model().getChannelCount(); index++) {
+                settingsSnapshot.add(copySettings(state.model().getChannel(index)));
+            }
+        }
+        if (channel != null && !context.isRgb()) {
+            int selected = channel;
+            validateChannel(selected, settingsSnapshot.size());
+            for (int index = 0; index < settingsSnapshot.size(); index++) {
+                ChannelDisplaySettings settings = settingsSnapshot.get(index);
+                if (index == selected) {
+                    settings.setVisible(true);
+                    if (settings.getOpacity() <= 0) settings.setOpacity(1.0);
+                } else {
+                    settings.setVisible(false);
+                }
             }
         }
         int cap = maxEdge > 0 ? Math.min(maxEdge, 4096) : 2048;

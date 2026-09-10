@@ -58,8 +58,9 @@ public class ImageApiController {
                          @RequestParam(defaultValue = "2048") int max,
                          @RequestParam(defaultValue = "0") int series,
                          @RequestParam(defaultValue = "0") int z,
+                         @RequestParam(required = false) Integer channel,
                          HttpSession session) throws Exception {
-        return service.renderAnalysisRegion(imageId, series, z, x, y, width, height, max, session);
+        return service.renderAnalysisRegion(imageId, series, z, x, y, width, height, max, session, channel);
     }
     @GetMapping("/{imageId}/display")
     public DisplayResponse display(@PathVariable String imageId,
