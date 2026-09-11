@@ -81,6 +81,11 @@ const { AnnotationAdapter } = context;
     assert.equal(mapped[0].type, "Polygon");
     assert.equal(mapped[0].vertices.length, 3);
     assert.equal(AnnotationAdapter.verticesToPointsString(mapped[0].vertices), "8,10 12,10 11,14");
+    assert.ok(mapped[0].radius > 0, "StarDist polygons must carry a computed radius for quantify masks");
+    const footprints = AnnotationAdapter.nucleiFootprintsForPlugin(mapped);
+    assert.equal(footprints.length, 1);
+    assert.equal(footprints[0].vertices.length, 3);
+    assert.ok(footprints[0].r > 0);
 }
 
 {
@@ -166,6 +171,9 @@ assert.doesNotMatch(html, /Segment Cell Nuclei/);
 assert.match(html, /id="plugin-selector"/);
 assert.match(html, /<option value="quantify-nuclei-pixel">Run Pixel Intensity Plugin</);
 assert.match(html, /<option value="per-object-pixel-quantifier">Quantify Individual Objects \(Color Code\)</);
+assert.match(html, /Nuclear channel \(recommended\)/);
+assert.match(adapterSource, /static nuclearPluginChannel\(/);
+assert.match(adapterSource, /static isPluginTransportFailure\(/);
 assert.match(html, /<option value="ihc-pixel-quantifier">Run IHC Color Deconvolution Plugin</);
 assert.match(adapterSource, /static async runIhcColorDeconvolution\(/);
 assert.match(adapterSource, /ihc-pixel-quantifier/);
@@ -273,6 +281,14 @@ assert.match(html, /value="cellpose-segmentation"/);
 assert.match(html, /value="qupath-cell-detection"/);
 assert.match(html, /id="ai-advanced-cellpose-params"/);
 assert.match(html, /id="ai-advanced-qupath-params"/);
+assert.match(html, /id="ai-stardist-cell-expansion-mode"/);
+assert.match(html, /id="ai-stardist-cell-expansion-scale"/);
+assert.match(html, /id="ai-stardist-cell-constrain"/);
+assert.match(html, /id="ai-cellpose-cell-expansion-mode"/);
+assert.match(html, /id="ai-qupath-cell-expansion-mode"/);
+assert.match(html, /Watershed grow \(QuPath default\)/);
+assert.match(adapterSource, /static normalizeCellExpansionMode\(/);
+assert.match(adapterSource, /static syncAiCellExpansionControls\(/);
 assert.match(adapterSource, /static normalizeAiDetector\(/);
 assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
 
@@ -310,6 +326,9 @@ assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
     assert.equal(capturedBody.rayCount, 48);
     assert.equal(capturedBody.boundaryTightness, 0.6);
     assert.equal(capturedBody.modelOverride, "he");
+    assert.equal(capturedBody.cellExpansionMode, "radial");
+    assert.equal(capturedBody.cellExpansion, AnnotationAdapter.AI_DEFAULT_CELL_EXPANSION_SCALE);
+    assert.equal(capturedBody.cellConstrainScale, AnnotationAdapter.AI_DEFAULT_CELL_CONSTRAIN_SCALE);
 
     // Defaults apply when the advanced controls aren't present in the DOM.
     const defaultsRoot = {
@@ -329,8 +348,9 @@ assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
     // config.channel but never actually reached the backend request -- the payload
     // always sent whatever channels happened to be visible in the Brightness &
     // Contrast panel, silently ignoring the dropdown entirely. Choosing a specific
-    // channel must now restrict detection to only that channel; "default" must keep
-    // the prior visible-channels behavior unchanged.
+    // channel must restrict detection to only that channel. "default" must send the
+    // nuclear band only — sending every visible channel made membrane/cytoplasm
+    // signal count as nuclei.
     const channelRoot = {
         getElementById: (id) => {
             if (id === "ai-prob-threshold") return { value: "0.5" };
@@ -366,14 +386,16 @@ assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
         }
     };
     await AnnotationAdapter.runStarDistSegmentation({ root: defaultChannelRoot, viewer: null });
-    assert.equal(capturedBody.channels.join(","), AnnotationAdapter.visiblePluginChannels().join(","),
-        "\"Default Viewport\" must keep segmenting on whatever channels are visible in Brightness & Contrast");
+    assert.equal(capturedBody.channels.join(","), AnnotationAdapter.nuclearPluginChannel(),
+        "recommended/default must segment on the nuclear channel, not every visible band");
 
     const cellposeRoot = {
         getElementById: (id) => {
             if (id === "ai-detector-selector") return { value: "cellpose-segmentation" };
             if (id === "ai-cellpose-model") return { value: "cyto2" };
             if (id === "ai-cellpose-diameter") return { value: "28" };
+            if (id === "ai-cellpose-cell-expansion-mode") return { value: "offset" };
+            if (id === "ai-cellpose-cell-expansion") return { value: "7" };
             if (id === "ai-prob-threshold") return { value: "0.5" };
             if (id === "ai-nms-threshold") return { value: "0.4" };
             return null;
@@ -384,6 +406,8 @@ assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
         "the AI Labs detector list must send Cellpose to /api/plugins/execute");
     assert.equal(capturedBody.modelOverride, "cyto2");
     assert.equal(capturedBody.diameter, 28);
+    assert.equal(capturedBody.cellExpansionMode, "offset");
+    assert.equal(capturedBody.cellExpansion, 7);
 
     const qupathRoot = {
         getElementById: (id) => {
@@ -392,7 +416,9 @@ assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
             if (id === "ai-qupath-sigma") return { value: "1.2" };
             if (id === "ai-qupath-min-area") return { value: "12" };
             if (id === "ai-qupath-max-area") return { value: "350" };
+            if (id === "ai-qupath-cell-expansion-mode") return { value: "watershed" };
             if (id === "ai-qupath-cell-expansion") return { value: "5" };
+            if (id === "ai-qupath-cell-constrain") return { value: "1.8" };
             if (id === "ai-prob-threshold") return { value: "0.5" };
             if (id === "ai-nms-threshold") return { value: "0.4" };
             return null;
@@ -406,6 +432,8 @@ assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
     assert.equal(capturedBody.minArea, 12);
     assert.equal(capturedBody.maxArea, 350);
     assert.equal(capturedBody.cellExpansion, 5);
+    assert.equal(capturedBody.cellExpansionMode, "watershed");
+    assert.equal(capturedBody.cellConstrainScale, 1.8);
 
     // Regression: there was no dedicated Heat Map button — only a dropdown + "Run"
     // combo that silently no-oped without nuclei segmented first, and no way to
@@ -451,6 +479,57 @@ assert.match(adapterSource, /static async runNucleiDetectionPlugin\(/);
         AnnotationAdapter.lastNucleiCircles = [];
         AnnotationAdapter.segmentCellNuclei = previousSegment;
         AnnotationAdapter.runPerObjectPixelQuantifier = previousQuantify;
+    }
+
+    {
+        const previous = AnnotationAdapter.displayController;
+        AnnotationAdapter.displayController = {
+            getDisplay: () => ({
+                channels: [
+                    { name: "Cyan (DAPI)", visible: true, index: 0 },
+                    { name: "Green (FITC)", visible: true, index: 1 },
+                    { name: "Red (TRITC)", visible: false, index: 2 }
+                ]
+            })
+        };
+        assert.equal(AnnotationAdapter.visiblePluginChannels().join(","), "Cyan (DAPI),Green (FITC)");
+        assert.equal(AnnotationAdapter.nuclearPluginChannel(), "Cyan (DAPI)");
+        assert.equal(AnnotationAdapter.resolveSegmentationChannels("default").join(","), "Cyan (DAPI)");
+        AnnotationAdapter.displayController = previous;
+    }
+
+    {
+        let localPaint = 0;
+        const previousPaint = AnnotationAdapter.paintViewportNucleiCircles;
+        AnnotationAdapter.paintViewportNucleiCircles = async () => {
+            localPaint += 1;
+            return { count: 3, nuclei: [] };
+        };
+        const emptyRoot = {
+            getElementById: (id) => {
+                if (id === "ai-prob-threshold") return { value: "0.5" };
+                if (id === "ai-nms-threshold") return { value: "0.4" };
+                return null;
+            }
+        };
+        context.WsiCsrf.csrfFetch = async () => ({ ok: true, json: async () => ({ nuclei: [] }) });
+        const empty = await AnnotationAdapter.segmentCellNuclei({ root: emptyRoot, viewer: null });
+        assert.equal(empty.count, 0);
+        assert.equal(localPaint, 0, "empty StarDist result must not fall back to local canvas contours");
+
+        context.WsiCsrf.csrfFetch = async () => {
+            const error = new Error("No matching channels for plugin request.");
+            error.status = 400;
+            throw error;
+        };
+        const clientError = await AnnotationAdapter.segmentCellNuclei({ root: emptyRoot, viewer: null });
+        assert.equal(clientError.count, 0);
+        assert.equal(localPaint, 0, "4xx plugin errors must not fall back to local canvas contours");
+
+        context.WsiCsrf.csrfFetch = async () => { throw new Error("Failed to fetch"); };
+        await AnnotationAdapter.segmentCellNuclei({ root: emptyRoot, viewer: null });
+        assert.equal(localPaint, 1, "network failure may use local contours");
+        AnnotationAdapter.paintViewportNucleiCircles = previousPaint;
     }
 
     console.log("nuclei-stardist-tiles.test.js: ok");

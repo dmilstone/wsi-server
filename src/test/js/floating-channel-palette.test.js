@@ -69,6 +69,22 @@ assert.match(adapterSource, /minWidth: "340px"/);
 assert.match(adapterSource, /minHeight: "400px"/);
 assert.match(html, /id="fcp-min"/);
 assert.match(html, /id="fcp-max"/);
+assert.match(html, /id="fcp-max-value"/);
+assert.match(html, /Double-click to type a value/);
+assert.match(html, /id="qp-display-range"/);
+assert.match(html, /id="qp-display-range-title"/);
+assert.match(html, /Display range/);
+assert.match(html, /Set display range maximum/);
+assert.match(html, /Set display range minimum/);
+assert.match(html, /id="qp-display-range-max"/);
+assert.match(html, /id="qp-display-range-min"/);
+assert.match(html, /id="fcp-min-value"[^>]*title="Double-click to type a value"/);
+assert.match(adapterSource, /static setChannelDisplayMax\(/);
+assert.match(adapterSource, /static setChannelDisplayMin\(/);
+assert.match(adapterSource, /static bindChannelHistogramDrag\(/);
+assert.match(adapterSource, /static pickHistogramHandle\(/);
+assert.match(adapterSource, /static openDisplayRangeDialog\(/);
+assert.match(html, /Drag to set channel min or max/);
 assert.match(html, /id="fcp-gamma"/);
 assert.match(html, /id="fcp-auto"/);
 assert.match(html, /id="fcp-reset"/);
@@ -386,6 +402,9 @@ assert.match(adapterSource, /style\.maxHeight = "none"/);
 assert.doesNotMatch(adapterSource, /toggleFloatingZStackMinimized[\s\S]{0,200}display = "none"/);
 assert.match(adapterSource, /parentNode\.removeChild\(palette\)/);
 assert.match(adapterSource, /static bindFloatingAiLabsPalette\(/);
+assert.match(adapterSource, /static fitFloatingPaletteToViewport\(/);
+assert.match(html, /#floating-ai-labs-palette \{[\s\S]*?max-height:\s*calc\(100vh - 16px\)/);
+assert.match(html, /#floating-ai-labs-palette \.fcp-body \{[\s\S]*?overflow-y:\s*auto/);
 assert.match(adapterSource, /static bindFloatingZStackPalette\(/);
 assert.match(adapterSource, /static setFloatingZStackPaletteVisible\(/);
 assert.match(adapterSource, /static isolateFloatingPalettePointerEvents\(/);
@@ -555,6 +574,9 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     assert.doesNotMatch(canvas.style.filter, /brightness\(/);
     const mapped = AnnotationAdapter.mapChannelWindowToFloatFilter(1000, 20000, 1.25, 65535);
     assert.equal(mapped.scale, 65535);
+    const typed = AnnotationAdapter.mapChannelWindowToFloatFilter(0, 220000, 1, 65535);
+    assert.ok(typed.hi > 1, "typed channel max may exceed the native slider scale");
+    assert.ok(typed.slope < 1);
     const rgbMapped = AnnotationAdapter.mapChannelWindowToFloatFilter(0, 255, 1, 255);
     assert.equal(rgbMapped.scale, 255);
     assert.ok(Math.abs(rgbMapped.slope - 1) < 0.01);
@@ -1727,6 +1749,63 @@ assert.equal(AnnotationAdapter.startScreenWideColorPick(0), false);
     assert.deepEqual(applied, [[0, "#112233"]]);
     assert.equal(AnnotationAdapter.consumeEyeDropperResult(0, { sRGBHex: "#445566" }, null, 7), false);
     AnnotationAdapter.applyChannelPaletteColor = prevApply;
+}
+
+{
+    const channels = [{ index: 0, name: "C5", black: 50808, white: 65535, gamma: 1, visible: true }];
+    const max = { value: "65535", max: "65535" };
+    const maxOut = { textContent: "65,535" };
+    const previousController = AnnotationAdapter.displayController;
+    const previousCeiling = AnnotationAdapter.channelDisplayRangeCeiling;
+    AnnotationAdapter.displayController = {
+        getDisplay() { return { channels }; },
+        getMetadata() { return { rgb: false, modality: "FLUORESCENCE" }; },
+        getCurrentSeries() { return 0; },
+        getViewer() { return { drawer: { canvas: { style: {} } }, forceRedraw() {} }; },
+        scheduleDisplayUpdate() {}
+    };
+    AnnotationAdapter.channelDisplayRangeCeiling = 0;
+    const doc = {
+        getElementById(id) {
+            if (id === "fcp-max") return max;
+            if (id === "fcp-max-value") return maxOut;
+            return null;
+        }
+    };
+    assert.equal(AnnotationAdapter.formatDisplayRangeInput(220000), "220000.0");
+    const applied = AnnotationAdapter.setChannelDisplayMax("220000.0", doc);
+    assert.equal(applied.max, 220000);
+    assert.equal(channels[0].white, 220000);
+    assert.equal(max.max, "220000");
+    assert.equal(max.value, "220000");
+    assert.equal(AnnotationAdapter.parseDisplayRangeValue("nope"), null);
+    assert.equal(AnnotationAdapter.parseDisplayRangeValue("0"), null);
+    assert.equal(AnnotationAdapter.parseDisplayRangeValue("0", { which: "min" }), 0);
+    assert.equal(AnnotationAdapter.pickHistogramHandle(8, 10, 200, 10), "min");
+    assert.equal(AnnotationAdapter.pickHistogramHandle(198, 10, 200, 10), "max");
+    const minApplied = AnnotationAdapter.setChannelDisplayMin("44528.8", doc);
+    assert.equal(Math.round(minApplied.min), 44529);
+    assert.ok(channels[0].black < channels[0].white);
+    AnnotationAdapter.displayController = previousController;
+    AnnotationAdapter.channelDisplayRangeCeiling = previousCeiling;
+}
+
+{
+    const previousInner = { w: context.window.innerWidth, h: context.window.innerHeight };
+    context.window.innerWidth = 900;
+    context.window.innerHeight = 500;
+    const palette = {
+        offsetWidth: 320,
+        offsetHeight: 900,
+        scrollHeight: 900,
+        style: { left: "80px", top: "96px", width: "320px", height: "900px" }
+    };
+    const fitted = AnnotationAdapter.fitFloatingPaletteToViewport(palette, 8);
+    assert.ok(fitted.height <= 500 - 8);
+    assert.ok(fitted.top + fitted.height <= 500 - 8);
+    assert.equal(palette.style.minHeight, "0");
+    context.window.innerWidth = previousInner.w;
+    context.window.innerHeight = previousInner.h;
 }
 
 console.log("floating-channel-palette.test.js: ok");

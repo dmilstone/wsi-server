@@ -164,6 +164,50 @@ assert.equal(AnnotationAdapter.detectionFillEnabled, false);
     AnnotationAdapter.aiNucleusOverlayParts = [];
 }
 
+{
+    function makeSvgDoc() {
+        return {
+            createElementNS(_ns, tag) {
+                return {
+                    tagName: tag,
+                    attrs: {},
+                    style: {},
+                    children: [],
+                    setAttribute(name, value) { this.attrs[name] = String(value); },
+                    getAttribute(name) { return this.attrs[name]; },
+                    appendChild(child) { this.children.push(child); return child; }
+                };
+            }
+        };
+    }
+    const viewer = {
+        world: {
+            getItemCount: () => 1,
+            getItemAt: () => ({ imageToViewportRectangle: (x, y, w, h) => ({ x, y, width: w, height: h }) })
+        },
+        addOverlay() {}
+    };
+    const nucleus = { vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 10 }] };
+    const previousMode = AnnotationAdapter.cellDisplayMode;
+    AnnotationAdapter.cellDisplayMode = "nuclei-boundaries";
+    const both = makeSvgDoc();
+    AnnotationAdapter.paintStarConvexNucleiLayer(viewer, [nucleus], both);
+    const bothSvg = AnnotationAdapter.aiNucleusOverlayElements[0];
+    assert.equal(bothSvg.children.length, 2, "nuclei & boundaries paints a cell ring and a nucleus");
+    assert.equal(bothSvg.children[0].attrs["data-cell-part"], "boundary");
+    assert.equal(bothSvg.children[1].attrs["data-cell-part"], "nucleus");
+
+    AnnotationAdapter.cellDisplayMode = "centroids";
+    const dots = makeSvgDoc();
+    AnnotationAdapter.paintStarConvexNucleiLayer(viewer, [nucleus], dots);
+    const dotSvg = AnnotationAdapter.aiNucleusOverlayElements[0];
+    assert.equal(dotSvg.children.length, 1);
+    assert.equal(dotSvg.children[0].tagName, "circle");
+    assert.equal(dotSvg.children[0].attrs["data-cell-part"], "centroid");
+    AnnotationAdapter.cellDisplayMode = previousMode;
+    AnnotationAdapter.aiNucleusOverlayParts = [];
+}
+
 // renderSynchronizedCellObjects: the canvas-drawn circle-detection path must only call
 // ctx.fill() (interior) when detectionFillEnabled is true; the outline stroke must always
 // be drawn either way.
