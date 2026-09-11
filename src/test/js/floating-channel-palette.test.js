@@ -34,10 +34,10 @@ assert.match(adapterSource, /static applyChannelPaletteLayout\(/);
 assert.match(adapterSource, /static bindChannelListSplitter\(/);
 assert.match(html, /\.floating-channel-cb\s*\{/);
 assert.match(html, /border:\s*2px solid var\(--channel-color, #fff\)/);
-assert.match(html, /\.floating-channel-cb:checked/);
-assert.match(html, /background-color:\s*var\(--channel-color, #4d94d8\)/);
-assert.match(html, /\.floating-channel-cb:not\(:checked\)::after/);
+assert.match(html, /\.floating-channel-cb:checked::after/);
 assert.match(html, /content:\s*"\\00d7"/);
+assert.doesNotMatch(html, /\.floating-channel-cb:checked\s*\{[^}]*background-color:\s*var\(--channel-color/);
+assert.doesNotMatch(html, /\.floating-channel-cb:not\(:checked\)::after/);
 assert.match(html, /id="fcp-show-all"/);
 assert.match(html, /class="bc-channels-head"/);
 assert.match(html, /qp-color-chooser/);
@@ -216,7 +216,7 @@ assert.match(html, /Default \(Nuclear Spot\)/);
 assert.match(html, /Boundary: Tissue Wall/);
 assert.match(html, /Custom Configuration\.\.\./);
 assert.match(html, /data-tooltip="\(\.\) Points Tool: Click to drop counted marker points."/);
-assert.match(html, /data-tooltip="\(S\) Selection Tool: Click a shape to select it, double-click to name it."/);
+assert.match(html, /data-tooltip="\(S\) Selection Tool: Click a shape to select it. Right-click an annotation for lock and properties."/);
 assert.match(html, /data-tooltip="\(C\) Brightness &amp; Contrast Tool: Adjust display levels for the current image."/);
 assert.match(html, /data-tooltip="\(Z\) Zoom Tool: Click a region to zoom in\. Shift-click a region to zoom out\."/);
 
@@ -387,6 +387,9 @@ assert.match(adapterSource, /BIT16_INTENSITY_SCALE = 65535/);
 assert.match(adapterSource, /static channelLevelScale\(/);
 assert.match(adapterSource, /static mapChannelWindowToFloatFilter\(/);
 assert.match(adapterSource, /static applyFloat16BitWindowProcessor\(/);
+assert.match(adapterSource, /static rememberTiledChannelWindows\(/);
+assert.match(adapterSource, /static relativeChannelWindowMap\(/);
+assert.match(adapterSource, /static applyRelativeWindowProcessor\(/);
 assert.match(adapterSource, /static renderMeasurementResultsTable\(/);
 assert.match(adapterSource, /static appendMeasurementResultRow\(/);
 assert.match(html, /font-size:\s*clamp\(13px,\s*0\.4vw \+ 8px,\s*19px\)/);
@@ -606,6 +609,65 @@ assert.equal(AnnotationAdapter.placeholderPaletteChannels()[2].lut, "RED");
     assert.equal(mapped.exponent, 1.25);
     AnnotationAdapter.clearViewportTileContrastFilter({ drawer: { canvas } });
     assert.equal(canvas.style.filter, "");
+}
+
+{
+    const tiled = { black: 8, white: 8885, gamma: 0.85 };
+    const identity = AnnotationAdapter.relativeChannelWindowMap(tiled, tiled);
+    assert.equal(identity.identity, true);
+    assert.ok(Math.abs(AnnotationAdapter.remapTiledDisplayByte(128, identity) - 128) < 0.001);
+
+    const nudged = AnnotationAdapter.relativeChannelWindowMap(
+        { black: 8, white: 9100, gamma: 0.85 },
+        tiled
+    );
+    assert.equal(nudged.identity, false);
+    const mid = AnnotationAdapter.remapTiledDisplayByte(128, nudged);
+    assert.ok(mid > 20 && mid < 250, "small window moves must keep mid-gray instead of posterizing");
+    const oldStretch = AnnotationAdapter.mapChannelWindowToFloatFilter(8, 8885, 0.85, 65535);
+    assert.ok(oldStretch.slope > 6, "the previous 0–65535 CSS stretch is what posterized 8-bit tiles");
+    const svg = AnnotationAdapter.writeRelativeWindowSvgFilter({
+        getElementById() { return { setAttribute() {} }; }
+    }, nudged);
+    assert.ok(svg.slope > 0.9 && svg.slope < 1.1);
+
+    const previousWindows = AnnotationAdapter.tiledChannelWindows;
+    AnnotationAdapter.rememberTiledChannelWindows([
+        { index: 0, lut: "BLUE", black: 8, white: 8885, gamma: 0.85 },
+        { index: 1, lut: "GREEN", black: 8, white: 8885, gamma: 0.85 }
+    ]);
+    const pixels = new Uint8ClampedArray([0, 0, 128, 255]);
+    const context = {
+        canvas: { width: 1, height: 1 },
+        getImageData() { return { data: pixels }; },
+        putImageData() {}
+    };
+    const mapped = AnnotationAdapter.mapChannelWindowToFloatFilter(8, 8885, 0.85, 65535);
+    assert.equal(AnnotationAdapter.applyFloat16BitWindowProcessor(context, mapped), true);
+    assert.ok(Math.abs(pixels[2] - 128) < 2, "preview is identity when sliders match tiled tiles");
+
+    const stretchPixels = new Uint8ClampedArray([0, 0, 128, 255]);
+    const stretchContext = {
+        canvas: { width: 1, height: 1 },
+        getImageData() { return { data: stretchPixels }; },
+        putImageData() {}
+    };
+    const stretch = AnnotationAdapter.relativeChannelWindowMap(
+        { black: 8, white: 9200, gamma: 0.85 },
+        { black: 8, white: 8885, gamma: 0.85 }
+    );
+    assert.equal(AnnotationAdapter.applyRelativeWindowProcessor(stretchContext, stretch), true);
+    assert.ok(stretchPixels[2] > 100 && stretchPixels[2] < 250);
+
+    let clearedFilters = null;
+    AnnotationAdapter.clearViewportTileContrastFilter({
+        drawer: { canvas: { style: { filter: "url(#fcp-gamma-filter)" } } },
+        setFilterOptions(options) { clearedFilters = options; }
+    });
+    assert.ok(clearedFilters?.filters);
+    assert.ok(Array.isArray(clearedFilters.filters.processors));
+    assert.equal(clearedFilters.filters.processors.length, 0);
+    AnnotationAdapter.tiledChannelWindows = previousWindows;
 }
 
 {

@@ -35,7 +35,7 @@ const { AnnotationAdapter } = context;
 assert.match(html, /id="delete-selected-annotations-btn"[^>]*>Delete</);
 assert.match(html, /id="annotation-context-menu-delete"/);
 assert.match(html, /<b>Delete \/ Backspace<\/b>/);
-assert.match(html, /Lock\/Unlock Position, Delete, or Set class for the selected annotation\(s\)/);
+assert.match(html, /Lock\/Unlock Position, Set properties \(name, color, class, or create a class\), or Delete/);
 assert.match(adapterSource, /Delete this annotation\? This cannot be undone\./);
 assert.match(adapterSource, /Delete \$\{n\} selected annotations\? This cannot be undone\./);
 assert.match(adapterSource, /static promptDeleteSelectedAnnotations\(/);

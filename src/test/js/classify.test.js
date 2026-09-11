@@ -46,10 +46,12 @@ assert.match(html, /Create training image\.\.\./);
 assert.match(html, /Create duplicate channel training images\.\.\./);
 assert.match(html, /Split project train\/validation\/test\.\.\./);
 assert.match(html, /id="classify-dialog"/);
-assert.match(html, /id="annotation-context-menu-set-class"/);
+assert.match(html, /id="annotation-context-menu-set-properties"/);
 assert.match(html, /Ctrl\+Shift\+D/);
 assert.match(html, /Ctrl\+Shift\+P/);
-assert.match(html, /annotation-adapter\.js\?v=20260911-ai-hierarchy/);
+assert.match(html, /annotation-adapter\.js\?v=20260911-persist-objects/);
+assert.match(html, /id="annotation-properties-color"[^>]*data-qp-color-trigger/);
+assert.match(adapterSource, /static openObjectColorChooser\(/);
 assert.match(html, /#classify-menu \.multiview-submenu \{\s*position:\s*static/);
 assert.match(adapterSource, /static layoutClassifyMenu\(/);
 

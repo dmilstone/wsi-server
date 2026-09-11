@@ -48,6 +48,7 @@ public class AnnotationService {
                 image.relativePath(),
                 userId,
                 Instant.now(),
+                List.of(),
                 List.of()
         );
     }
@@ -81,7 +82,8 @@ public class AnnotationService {
                 image.relativePath(),
                 userId,
                 touchModifiedTime || document.modifiedAt() == null ? now : document.modifiedAt(),
-                List.copyOf(normalized)
+                List.copyOf(normalized),
+                normalizeDetections(document.detections())
         );
     }
 
@@ -137,6 +139,62 @@ public class AnnotationService {
                 value.bodies() == null ? List.of() : value.bodies().stream().filter(Objects::nonNull).toList(),
                 vertices
         );
+    }
+
+    private List<DetectionObject> normalizeDetections(List<DetectionObject> source) {
+        if (source == null || source.isEmpty()) return List.of();
+        List<DetectionObject> normalized = new ArrayList<>(source.size());
+        Set<String> ids = new HashSet<>();
+        for (DetectionObject value : source) {
+            if (value == null) continue;
+            String id = value.id() == null || value.id().isBlank()
+                    ? UUID.randomUUID().toString()
+                    : value.id().trim();
+            if (!ids.add(id)) {
+                id = UUID.randomUUID().toString();
+                ids.add(id);
+            }
+            String name = value.name() == null ? null : value.name().trim();
+            if (name != null && name.isEmpty()) name = null;
+            if (name != null && name.codePointCount(0, name.length()) > MAX_NAME_LENGTH) {
+                name = name.substring(0, name.offsetByCodePoints(0, MAX_NAME_LENGTH));
+            }
+            String color = value.color() == null ? null : value.color().trim();
+            if (color != null && !color.matches("#[0-9A-Fa-f]{6}")) color = null;
+            if (color != null) color = color.toLowerCase();
+            String pathClass = value.pathClass() == null ? null : value.pathClass().trim();
+            if (pathClass != null && pathClass.isEmpty()) pathClass = null;
+            String classification = value.classification() == null ? null : value.classification().trim();
+            if (classification != null && classification.isEmpty()) classification = null;
+            Double cx = finiteOrNull(value.cx());
+            Double cy = finiteOrNull(value.cy());
+            Double radius = finiteOrNull(value.radius());
+            List<List<Double>> vertices = normalizeVertices(value.vertices());
+            List<List<Double>> cellVertices = normalizeVertices(value.cellVertices());
+            normalized.add(new DetectionObject(
+                    id, name, color, pathClass, classification, cx, cy, radius, vertices, cellVertices
+            ));
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static List<List<Double>> normalizeVertices(List<List<Double>> source) {
+        if (source == null || source.isEmpty()) return List.of();
+        return source.stream()
+                .filter(Objects::nonNull)
+                .map(point -> {
+                    if (point.size() < 2) return null;
+                    Double vx = point.get(0);
+                    Double vy = point.get(1);
+                    if (vx == null || vy == null || !Double.isFinite(vx) || !Double.isFinite(vy)) return null;
+                    return List.of(vx, vy);
+                })
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private static Double finiteOrNull(Double value) {
+        return value != null && Double.isFinite(value) ? value : null;
     }
 
     private static String validateUuid(String value) {

@@ -60,6 +60,42 @@ class AnnotationNameTests {
                 fixture.registry.getFirst().id(), "user", collection(annotation("a".repeat(201)))));
     }
 
+    @Test
+    void detectionsRoundTripWithColorClassAndVertices() throws Exception {
+        Fixture fixture = fixture();
+        DetectionObject detection = new DetectionObject(
+                "cell-1",
+                "GC cell",
+                "#112233",
+                "Tumor",
+                "nucleus",
+                15.5,
+                18.25,
+                6.0,
+                List.of(List.of(14.0, 17.0), List.of(17.0, 17.0), List.of(15.5, 20.0)),
+                List.of()
+        );
+        AnnotationCollection saved = fixture.service.save(
+                fixture.registry.getFirst().id(),
+                "user",
+                new AnnotationCollection(
+                        1, "ignored", "ignored", "ignored",
+                        Instant.parse("2026-01-04T03:04:05Z"),
+                        List.of(annotation("ROI")),
+                        List.of(detection)
+                )
+        );
+        AnnotationCollection loaded = fixture.service.load(fixture.registry.getFirst().id(), "user");
+        assertEquals(1, loaded.detections().size());
+        DetectionObject roundTrip = loaded.detections().getFirst();
+        assertEquals(detection.id(), roundTrip.id());
+        assertEquals(detection.name(), roundTrip.name());
+        assertEquals(detection.color(), roundTrip.color());
+        assertEquals(detection.pathClass(), roundTrip.pathClass());
+        assertEquals(detection.vertices(), roundTrip.vertices());
+        assertEquals(saved.detections().getFirst(), roundTrip);
+    }
+
     private Fixture fixture() throws Exception {
         Path images = temporaryDirectory.resolve("images");
         Files.createDirectories(images);

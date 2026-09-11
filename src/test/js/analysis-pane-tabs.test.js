@@ -154,6 +154,10 @@ function matches(node, sel) {
     if (sel === "[data-qp-hierarchy-key]") {
         return Boolean(node.getAttribute("data-qp-hierarchy-key") || node.dataset?.qpHierarchyKey);
     }
+    const hierarchyKey = sel.match(/^\[data-qp-hierarchy-key="([^"]+)"\]$/);
+    if (hierarchyKey) {
+        return (node.getAttribute("data-qp-hierarchy-key") || node.dataset?.qpHierarchyKey) === hierarchyKey[1];
+    }
     if (sel === "[data-qp-hierarchy-action]") {
         return Boolean(node.getAttribute("data-qp-hierarchy-action") || node.dataset?.qpHierarchyAction);
     }
@@ -397,14 +401,16 @@ const { AnnotationAdapter } = context;
     assert.equal(doc.list.querySelectorAll(".qp-annotation-list-item")[0].classList.contains("is-selected"), true);
 
     const opened = [];
-    const previous = AnnotationAdapter.openAnnotationNamePanelForShape;
-    AnnotationAdapter.openAnnotationNamePanelForShape = id => {
-        opened.push(id);
+    const previous = AnnotationAdapter.openAnnotationPropertiesDialog;
+    AnnotationAdapter.openAnnotationPropertiesDialog = (_root, ids) => {
+        opened.push(ids);
         return true;
     };
     doc.list.querySelectorAll(".qp-annotation-list-item")[0].dispatch("dblclick");
-    assert.deepEqual(opened, ["wand-id"]);
-    AnnotationAdapter.openAnnotationNamePanelForShape = previous;
+    assert.equal(opened.length, 1);
+    assert.ok(Array.isArray(opened[0]));
+    assert.equal(opened[0][0], "wand-id");
+    AnnotationAdapter.openAnnotationPropertiesDialog = previous;
 
     AnnotationAdapter.setAnalysisPaneView("slides", doc);
     assert.equal(AnnotationAdapter.savedAnnotationsArray.length, 2,
@@ -472,6 +478,31 @@ const { AnnotationAdapter } = context;
         .find(row => row.getAttribute("data-qp-hierarchy-key") === "detection:0");
     detectionRow.dispatch("click");
     assert.equal(AnnotationAdapter.selectedHierarchyDetectionIndex, 0);
+    assert.equal(AnnotationAdapter.detectionIndexAtImagePoint(15, 15), 0);
+    assert.equal(AnnotationAdapter.detectionIndexAtImagePoint(80, 80), 1);
+    assert.equal(AnnotationAdapter.detectionIndexAtImagePoint(400, 400), null);
+    const went = [];
+    const previousGoTo = AnnotationAdapter.goToDetection;
+    AnnotationAdapter.goToDetection = index => {
+        went.push(index);
+        return true;
+    };
+    detectionRow.dispatch("dblclick");
+    assert.deepEqual(went, [0]);
+    assert.equal(AnnotationAdapter.selectedHierarchyDetectionIndex, 0);
+    AnnotationAdapter.goToDetection = previousGoTo;
+    const menus = [];
+    const previousMenu = AnnotationAdapter.openAnnotationContextMenu;
+    AnnotationAdapter.openAnnotationContextMenu = (_ids, _x, _y, _root, options = {}) => {
+        menus.push(options);
+        return true;
+    };
+    detectionRow.dispatch("contextmenu");
+    assert.equal(menus.length, 1);
+    assert.equal(menus[0].kind, "detection");
+    assert.equal(menus[0].indexes.length, 1);
+    assert.equal(menus[0].indexes[0], 0);
+    AnnotationAdapter.openAnnotationContextMenu = previousMenu;
     assert.match(doc.getElementById("qp-hierarchy-crumb").textContent, /Cell \(GL7\)/);
     const measureKeys = doc.tbody.querySelectorAll("tr").map(row => row.children[0].textContent);
     assert.ok(measureKeys.includes("Nucleus: Area"));

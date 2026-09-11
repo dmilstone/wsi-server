@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260911-ai-hierarchy"></script>
+    <script src="/annotation-adapter.js?v=20260911-persist-objects"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
@@ -758,7 +758,8 @@
             background: rgba(126, 200, 255, .08);
         }
         .nucleus-stardist-layer .is-hierarchy-selected {
-            stroke-width: 3.25;
+            stroke: #ffe082 !important;
+            stroke-width: 3.5 !important;
         }
         .image-info > h2 {
             margin: 0;
@@ -2843,31 +2844,20 @@
             background: #174b78;
             box-shadow: none;
         }
-        #ai-nuclei-visible {
-            width: auto;
-            min-width: 52px;
-            max-width: 72px;
-            min-height: 22px;
-            height: 22px;
-            margin: 0;
-            padding: 0 8px;
-            font-size: 11px;
-            line-height: 1;
-            align-self: flex-start;
-            opacity: 0.42;
-            background: #243140 !important;
-            color: rgba(255, 255, 255, 0.62) !important;
-            font-weight: 750;
-        }
-        #ai-nuclei-visible[aria-pressed="true"] {
-            opacity: 1;
-            background: #1f6f4a !important;
-            color: #ffffff !important;
-        }
         #ai-analytics-panel .ai-lab-actions .ai-nuclei-row {
             display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: space-between;
+            gap: 6px;
+        }
+        #ai-analytics-panel .ai-lab-actions .ai-nuclei-row .ai-lab-field {
+            margin: 0;
+            flex: 1 1 0;
+            min-width: 0;
+        }
+        #ai-analytics-panel .ai-lab-actions .ai-nuclei-row .ai-lab-field-end {
+            margin-left: auto;
+            flex: 1 1 0;
         }
         #ai-analytics-panel .ai-plugin-row {
             display: flex;
@@ -2877,13 +2867,13 @@
         #ai-analytics-panel .ai-detector-row {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-            margin: 0 0 8px;
-            color: #ffe08a;
-            font-size: 11px;
-            font-weight: 650;
+            gap: 0;
+            margin: 0;
         }
-        #ai-analytics-panel .ai-detector-row #ai-detector-selector {
+        #ai-analytics-panel .ai-detector-row #ai-detector-selector,
+        #ai-analytics-panel .ai-lab-field #ai-seg-target,
+        #ai-analytics-panel .ai-lab-field #ai-seg-channel,
+        #ai-analytics-panel .ai-lab-field #ai-seg-border {
             min-height: 36px;
             margin: 0;
             padding: 0 8px;
@@ -3439,6 +3429,7 @@
         #floating-admin-palette,
         #floating-zstack-palette,
         #floating-measurement-palette,
+        #floating-pixel-intensity-palette,
         #floating-wand-palette {
             position: fixed !important;
             z-index: 9999 !important;
@@ -3635,13 +3626,21 @@
             font-size: 12px;
         }
         #floating-ai-labs-palette #ai-analytics-panel .ai-detector-row {
-            margin: 0 0 4px;
-            font-size: 10px;
+            margin: 0;
         }
         #floating-ai-labs-palette #ai-analytics-panel .ai-detector-row #ai-detector-selector,
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-field #ai-seg-target,
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-field #ai-seg-channel,
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-field #ai-seg-border,
         #floating-ai-labs-palette #ai-analytics-panel .ai-plugin-row #plugin-selector {
             min-height: 28px;
             font-size: 11px;
+            pointer-events: auto;
+        }
+        #floating-ai-labs-palette #ai-seg-border:disabled {
+            opacity: 1;
+            pointer-events: auto;
+            color: #f7f2d8;
         }
         #floating-ai-labs-palette #ai-analytics-panel .ai-lab-disclaimer {
             margin: 0 0 4px;
@@ -3652,6 +3651,11 @@
         }
         #floating-ai-labs-palette #ai-analytics-panel .ai-lab-disclaimer .ai-lab-field {
             padding: 0 6px 4px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-nuclei-row .ai-lab-field select {
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
         }
         #floating-ai-labs-palette #ai-analytics-panel .ai-status-stack {
             gap: 4px;
@@ -3704,6 +3708,65 @@
             background: var(--surface-raised);
             border: 1px solid var(--border);
         }
+        #floating-pixel-intensity-palette {
+            z-index: 10000 !important;
+            display: none;
+            min-width: 20rem;
+            min-height: 10rem;
+            width: 24rem;
+            left: auto;
+            right: 1.5rem;
+            top: 5.5rem;
+            color: var(--text);
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+        }
+        #floating-pixel-intensity-palette .pixel-intensity-stats,
+        #floating-pixel-intensity-palette .ai-plugin-stats {
+            margin: 0;
+            overflow: auto;
+            border: 1px solid rgba(0, 255, 120, .28);
+            border-radius: 7px;
+            background: rgba(8, 18, 14, .72);
+        }
+        #floating-pixel-intensity-palette .pixel-intensity-stats table,
+        #floating-pixel-intensity-palette .ai-plugin-stats table {
+            width: 100%;
+            border-collapse: collapse;
+            font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: #d7ffe8;
+        }
+        #floating-pixel-intensity-palette .pixel-intensity-stats th,
+        #floating-pixel-intensity-palette .pixel-intensity-stats td,
+        #floating-pixel-intensity-palette .ai-plugin-stats th,
+        #floating-pixel-intensity-palette .ai-plugin-stats td {
+            padding: 5px 6px;
+            text-align: right;
+            border-bottom: 1px solid rgba(255,255,255,.08);
+            font-variant-numeric: tabular-nums;
+        }
+        #floating-pixel-intensity-palette .pixel-intensity-stats th:first-child,
+        #floating-pixel-intensity-palette .pixel-intensity-stats td:first-child,
+        #floating-pixel-intensity-palette .ai-plugin-stats th:first-child,
+        #floating-pixel-intensity-palette .ai-plugin-stats td:first-child {
+            text-align: left;
+            color: #9dffc2;
+        }
+        #floating-pixel-intensity-palette .pixel-intensity-stats caption,
+        #floating-pixel-intensity-palette .ai-plugin-stats caption {
+            caption-side: top;
+            padding: 6px 8px 2px;
+            text-align: left;
+            color: #c9b56a;
+            font-size: 10px;
+            font-weight: 650;
+        }
+        #annotation-properties-dialog {
+            z-index: 10055;
+            min-width: 22rem;
+        }
+        #annotation-properties-dialog[hidden] { display: none !important; }
+        #annotation-properties-new-class[hidden] { display: none !important; }
         #floating-measurement-palette {
             z-index: 9998 !important;
             display: none;
@@ -3822,6 +3885,58 @@
             min-height: 0;
             overflow: auto;
             padding: 0.5rem 0.625rem 0.625rem;
+        }
+        #floating-ai-labs-palette .fcp-titlebar {
+            gap: 6px;
+        }
+        #floating-ai-labs-palette .fcp-title {
+            flex: 0 0 auto;
+        }
+        #floating-ai-labs-palette .ai-lab-disclaimer-title {
+            position: relative;
+            margin: 0 0 0 auto;
+            flex: 0 1 auto;
+            max-width: min(14rem, 58%);
+            border: 1px solid rgba(240, 165, 0, .4);
+            border-radius: 5px;
+            background: rgba(11, 18, 32, .55);
+        }
+        #floating-ai-labs-palette .ai-lab-disclaimer-title > summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 2px 6px;
+            color: #c9b56a;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: .01em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            user-select: none;
+        }
+        #floating-ai-labs-palette .ai-lab-disclaimer-title > summary::-webkit-details-marker { display: none; }
+        #floating-ai-labs-palette .ai-lab-disclaimer-title > summary::after {
+            content: "▸";
+            margin-left: 4px;
+            color: #f0a500;
+            font-size: 9px;
+        }
+        #floating-ai-labs-palette .ai-lab-disclaimer-title[open] > summary::after { content: "▾"; }
+        #floating-ai-labs-palette .ai-lab-disclaimer-title .ai-lab-note {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 4px);
+            z-index: 6;
+            width: 16rem;
+            margin: 0;
+            padding: 6px 8px;
+            border: 1px solid rgba(240, 165, 0, .45);
+            border-radius: 6px;
+            background: #0b1220;
+            color: #c9b56a;
+            font-size: 10px;
+            line-height: 1.35;
+            box-shadow: 0 6px 16px rgba(0,0,0,.4);
         }
         #floating-ai-labs-palette .fcp-titlebar,
         #floating-admin-palette .fcp-titlebar,
@@ -4024,7 +4139,8 @@
         .qp-color-chooser,
         .qp-channel-properties,
         .qp-custom-colors,
-        .qp-display-range {
+        .qp-display-range,
+        #annotation-properties-dialog {
             position: fixed;
             z-index: 10050;
             color-scheme: light;
@@ -4040,11 +4156,13 @@
         .qp-color-chooser *,
         .qp-channel-properties *,
         .qp-custom-colors *,
-        .qp-display-range * {
+        .qp-display-range *,
+        #annotation-properties-dialog * {
             color: inherit;
             -webkit-text-fill-color: inherit;
         }
         .qp-color-chooser {
+            z-index: 10058;
             padding: 8px 8px 6px;
             width: max-content;
             max-width: 92vw;
@@ -4213,7 +4331,8 @@
             padding: 16px 18px 12px;
         }
         .qp-channel-properties-body label { text-align: right; color: #222; }
-        .qp-channel-properties-body input[type="text"] {
+        .qp-channel-properties-body input[type="text"],
+        .qp-channel-properties-body select {
             min-width: 16rem;
             border: 1px solid #8aa8c8;
             border-radius: 3px;
@@ -4824,7 +4943,7 @@
             <button type="button" class="qp-tool" id="primary-qp-tool-points" data-qp-tool="points"
                     data-tooltip="(.) Points Tool: Click to drop counted marker points." aria-label="Points" aria-pressed="false">⁘</button>
             <button type="button" class="qp-tool" id="primary-qp-tool-selection" data-qp-tool="selection"
-                    data-tooltip="(S) Selection Tool: Click a shape to select it, double-click to name it." aria-label="Selection" aria-pressed="false">🎯</button>
+                    data-tooltip="(S) Selection Tool: Click a shape to select it. Right-click an annotation for lock and properties." aria-label="Selection" aria-pressed="false">🎯</button>
             <button type="button" class="qp-tool" id="primary-qp-tool-contrast" data-qp-tool="contrast"
                     data-tooltip="(C) Brightness &amp; Contrast Tool: Adjust display levels for the current image." aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
                 <button type="button" class="qp-magnification" id="primary-qp-magnification"
@@ -4982,7 +5101,7 @@
             <button type="button" class="qp-tool" id="qp-tool-points" data-qp-tool="points"
                     data-tooltip="(.) Points Tool: Click to drop counted marker points." aria-label="Points" aria-pressed="false">⁘</button>
             <button type="button" class="qp-tool" id="qp-tool-selection" data-qp-tool="selection"
-                    data-tooltip="(S) Selection Tool: Click a shape to select it, double-click to name it." aria-label="Selection" aria-pressed="false">🎯</button>
+                    data-tooltip="(S) Selection Tool: Click a shape to select it. Right-click an annotation for lock and properties." aria-label="Selection" aria-pressed="false">🎯</button>
             <button type="button" class="qp-tool" id="qp-tool-contrast" data-qp-tool="contrast"
                     data-tooltip="(C) Brightness &amp; Contrast Tool: Adjust display levels for the current image." aria-label="Brightness and Contrast" aria-pressed="false">◐</button>
             <button type="button" class="qp-magnification" id="qp-magnification"
@@ -5367,29 +5486,51 @@
 <aside id="floating-ai-labs-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-ai-labs-title">
     <div class="fcp-titlebar" id="floating-ai-labs-handle">
         <span class="fcp-title" id="floating-ai-labs-title">🔬 AI Labs</span>
+        <details class="ai-lab-disclaimer ai-lab-disclaimer-title">
+            <summary>System Diagnostic Disclaimer</summary>
+            <p class="ai-lab-note">Experimental tools. Results are not diagnostic. Annotations, detections, and their properties are saved per workstation.</p>
+        </details>
         <button type="button" id="floating-ai-labs-close" class="fcp-close" aria-label="Close AI Labs">×</button>
     </div>
     <div class="fcp-body">
         <div id="ai-labs-panel" class="ai-labs-panel">
         <div id="ai-analytics-panel" class="ai-analytics-panel">
             <div class="ai-lab-actions">
-                <details class="ai-lab-disclaimer">
-                    <summary>System Diagnostic Disclaimer</summary>
-                    <p class="ai-lab-note">Experimental viewport simulation on this browser only. Results are not diagnostic and are not saved to the annotation store.</p>
-                </details>
-                <label class="ai-detector-row" for="ai-detector-selector">
-                    Cell detector
-                    <select id="ai-detector-selector" aria-label="Cell detector">
+                <button id="ai-segment-nuclei" class="action" type="button">1. Segment Nuclei</button>
+                <div class="ai-detector-row">
+                    <select id="ai-detector-selector" aria-label="StarDist">
                         <option value="stardist-segmentation" selected>StarDist</option>
                         <option value="cellpose-segmentation">Cellpose</option>
                         <option value="qupath-cell-detection">QuPath Cell Detection</option>
                     </select>
+                </div>
+                <div class="ai-nuclei-row">
+                    <label class="ai-lab-field" for="ai-seg-target">
+                        <select id="ai-seg-target" aria-label="Selected Annotation">
+                            <option value="viewport" selected>Visible region</option>
+                            <option value="annotation">Selected Annotation</option>
+                        </select>
+                    </label>
+                    <label class="ai-lab-field ai-lab-field-end" for="ai-seg-channel">
+                        <select id="ai-seg-channel" aria-label="Nuclear channel (recommended)">
+                            <option value="default" selected>Nuclear channel (recommended)</option>
+                            <option value="1">Channel 1 (DAPI/Blue)</option>
+                            <option value="2">Channel 2 (Green)</option>
+                            <option value="3">Channel 3 (Red)</option>
+                        </select>
+                    </label>
+                </div>
+                <label class="ai-lab-field" for="ai-seg-border">
+                    <select id="ai-seg-border" aria-label="Exclude the entire nucleus">
+                        <option value="exclude" selected>Exclude the entire nucleus</option>
+                        <option value="include">Include the entire nucleus</option>
+                        <option value="truncate">Truncate to the annotation outline</option>
+                    </select>
                 </label>
-                <button id="ai-segment-nuclei" class="action" type="button">1. Segment Nuclei</button>
                 <div class="ai-plugin-row">
-                    <select id="plugin-selector" aria-label="Plugin action">
+                    <select id="plugin-selector" aria-label="Quantify Individual Objects">
+                        <option value="per-object-pixel-quantifier" selected>Quantify Individual Objects (Color Code)</option>
                         <option value="quantify-nuclei-pixel">Run Pixel Intensity Plugin</option>
-                        <option value="per-object-pixel-quantifier">Quantify Individual Objects (Color Code)</option>
                         <option value="ihc-pixel-quantifier">Run IHC Color Deconvolution Plugin</option>
                     </select>
                     <button id="ai-run-plugin" class="action" type="button">Run</button>
@@ -5397,36 +5538,9 @@
                 <button id="ai-heatmap-toggle" class="action" type="button" aria-pressed="false"
                         title="Segment (if needed) and color-code nuclei by signal intensity; click again to revert"
                         aria-label="Toggle nucleus signal heat map">🌡️ Heat Map</button>
-                <div class="ai-nuclei-row">
-                    <button id="ai-nuclei-visible" class="action" type="button" aria-pressed="false" title="Show" aria-label="Show">Show</button>
-                    <label class="ai-lab-field" for="ai-seg-target" style="margin:0;flex:1;">
-                        <select id="ai-seg-target" aria-label="Segmentation target">
-                            <option value="viewport" selected>Visible region</option>
-                            <option value="annotation">Selected annotation</option>
-                        </select>
-                    </label>
-                </div>
-                <label class="ai-lab-field" for="ai-seg-border">
-                    <span>Nuclei crossing the annotation outline</span>
-                    <select id="ai-seg-border" aria-label="How to treat nuclei that cross the annotation outline">
-                        <option value="exclude" selected>Exclude the entire nucleus</option>
-                        <option value="include">Include the entire nucleus</option>
-                        <option value="truncate">Truncate to the annotation outline</option>
-                    </select>
-                </label>
-                <div id="ai-plugin-stats" class="ai-plugin-stats" hidden></div>
                 <button id="ai-extract-br-features" class="action" type="button">2. Extract Breast Tissue Features (BR)</button>
                 <div id="ai-status-stack" class="ai-status-stack">
                     <div id="ai-lab-config" class="ai-lab-config">
-                        <div class="ai-lab-field">
-                            <label for="ai-seg-channel">Segmentation Channel</label>
-                            <select id="ai-seg-channel">
-                                <option value="default" selected>Nuclear channel (recommended)</option>
-                                <option value="1">Channel 1 (DAPI/Blue)</option>
-                                <option value="2">Channel 2 (Green)</option>
-                                <option value="3">Channel 3 (Red)</option>
-                            </select>
-                        </div>
                         <div class="ai-lab-field">
                             <label for="ai-prob-threshold">Detection Probability Threshold</label>
                             <div class="ai-lab-slider-row">
@@ -5622,6 +5736,15 @@
         </div>
     </div>
 </aside>
+<aside id="floating-pixel-intensity-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-pixel-intensity-title">
+    <div class="fcp-titlebar" id="floating-pixel-intensity-handle">
+        <span class="fcp-title" id="floating-pixel-intensity-title">Pixel Intensity</span>
+        <button type="button" id="floating-pixel-intensity-close" class="fcp-close" aria-label="Close Pixel Intensity">×</button>
+    </div>
+    <div class="fcp-body">
+        <div id="pixel-intensity-stats" class="ai-plugin-stats pixel-intensity-stats"></div>
+    </div>
+</aside>
 <aside id="floating-admin-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-admin-title">
     <div class="fcp-titlebar" id="floating-admin-handle">
         <span class="fcp-title" id="floating-admin-title">Workstation Admin Tools</span>
@@ -5741,7 +5864,7 @@
             <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s). If it has cells or nested objects: Yes keeps them, No deletes them too, Cancel leaves everything. Cannot be undone.</td></tr>
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Left pane and Hierarchy</td></tr>
             <tr><td>Slides / Image / Annotations / Hierarchy</td><td>Left-pane tabs. Hierarchy is the image → annotation → cell tree with measurements.</td></tr>
-            <tr><td>Hierarchy tree</td><td>Click a row to select that object. Twisties expand or collapse. Lock toggles the image or an annotation. Toolbar: expand all, collapse all, lock, delete, select all annotations, select all detections.</td></tr>
+            <tr><td>Hierarchy tree</td><td>Click a row to select that object. Double-click a cell to go to it on the image. Twisties expand or collapse. Lock toggles the image or an annotation. Toolbar: expand all, collapse all, lock, delete, select all annotations, select all detections.</td></tr>
             <tr><td>Hierarchy Measurements / Description</td><td>Key/Value table for the selected object; filter by key; Description is a short text view. Click Key or Value to sort. Copy copies Object ID.</td></tr>
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Classify</td></tr>
             <tr><td><b>Classify</b> menu</td><td>Object classification (train/load/save/apply to detections); Pixel classification (train/load/thresholder on annotations); Training images</td></tr>
@@ -5750,10 +5873,12 @@
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">View, channels, and Z</td></tr>
             <tr><td><b>View</b> menu / right-click image</td><td>Multi-view; Cell display; Display (Show analysis, Brightness/Contrast, overlay 400%–1%); Set tool; Open Z-stack controller</td></tr>
             <tr><td><b>Ctrl+Shift+S</b> / <b>⌘⇧S</b> / <b>Ctrl+Alt+S</b></td><td>Synchronize multi-view pan and zoom (on by default once two panes have images)</td></tr>
-            <tr><td>Right-click image</td><td>Open View menu: Multi-view, Cell display, Display, Set tool (not when the pointer is on an annotation)</td></tr>
+            <tr><td>Right-click image</td><td>Open View menu: Multi-view, Cell display, Display, Set tool (not when the pointer is on an annotation or cell)</td></tr>
             <tr><td>Drag locked annotation</td><td>Pan the image; annotations and detections stay in register</td></tr>
             <tr><td>Drag channel histogram</td><td>Grab the min or max line to set Brightness &amp; Contrast window</td></tr>
-            <tr><td>Right-click annotation</td><td>Lock/Unlock Position, Delete, or Set class for the selected annotation(s)</td></tr>
+            <tr><td>Right-click annotation</td><td>Lock/Unlock Position, Set properties (name, color, class, or create a class), or Delete</td></tr>
+            <tr><td>Right-click cell</td><td>Set properties (name, color, class) using the same QuPath color picker as Brightness &amp; Contrast</td></tr>
+            <tr><td>Double-click cell</td><td>On the image: select that detection in Hierarchy. In Hierarchy: go to and select that cell</td></tr>
             <tr><td>View ▸ Cell display</td><td>Nuclei &amp; cell boundaries; nuclei only; cell boundaries only; cell centroids only</td></tr>
             <tr><td>View ▸ Open Z-stack controller</td><td>Reopen the focal-plane window</td></tr>
             <tr><td>B&amp;C channel checkbox</td><td>Empty colored outline = hidden; × inside the outline = shown (never a solid channel-color fill)</td></tr>
@@ -5924,8 +6049,8 @@
 <div id="annotation-context-menu" style="display: none; position: fixed; z-index: 100020; min-width: 190px; background: #1c1c1c; color: #fff; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.5); overflow: hidden; font-size: 0.85rem;">
     <button type="button" id="annotation-context-menu-lock-toggle"
             style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; color: #fff; cursor: pointer; font: inherit;">🔒 Lock Position</button>
-    <button type="button" id="annotation-context-menu-set-class"
-            style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; border-top: 1px solid #333; color: #fff; cursor: pointer; font: inherit;">Set class…</button>
+    <button type="button" id="annotation-context-menu-set-properties"
+            style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; border-top: 1px solid #333; color: #fff; cursor: pointer; font: inherit;">Set properties…</button>
     <button type="button" id="annotation-context-menu-delete"
             style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; border-top: 1px solid #333; color: #ff8888; cursor: pointer; font: inherit;">Delete</button>
 </div>
@@ -7091,8 +7216,10 @@
                     : null),
             preserveViewport: preserveViewport ? { bounds, zoom } : null,
             onReady: () => {
+                AnnotationAdapter.rememberTiledChannelWindows(display?.channels);
                 AnnotationAdapter.clearViewportTileContrastFilter(viewer);
                 if (rgbView) AnnotationAdapter.applyViewportRgbChannelFilter(viewer);
+                else AnnotationAdapter.applyViewportChannelDisplayFilter(viewer);
                 AnnotationAdapter.applyZStackLayerOpacities(viewer, currentZ);
                 AnnotationAdapter.schedulePrefetchAdjacentZPlaneTiles({
                     viewer,
@@ -7578,8 +7705,11 @@
             syncChannelControls();
             saveLocalDisplay(imageId, display, currentSeries);
             if (reopen) openViewer(true);
-            else AnnotationAdapter.applyChannelLayerOpacities(viewer, display.channels, currentZ);
-            AnnotationAdapter.clearViewportTileContrastFilter(viewer);
+            else {
+                AnnotationAdapter.applyChannelLayerOpacities(viewer, display.channels, currentZ);
+                AnnotationAdapter.rememberTiledChannelWindows(display.channels);
+                AnnotationAdapter.clearViewportTileContrastFilter(viewer);
+            }
             AnnotationAdapter.syncFloatingChannelPalette();
         } catch (error) {
             if (sequence === updateSequence) showError(error);
@@ -8113,6 +8243,42 @@
     <div class="annotation-editor-actions">
         <button type="button" id="annotation-editor-cancel">Cancel</button>
         <button type="button" id="annotation-editor-save">Save</button>
+    </div>
+</div>
+<div id="annotation-properties-dialog" class="qp-channel-properties" hidden role="dialog" aria-label="Annotation properties">
+    <div class="qp-channel-properties-title" id="annotation-properties-title">
+        <span class="qp-dialog-traffic">
+            <button type="button" class="is-close" data-qp-window-close aria-label="Close properties"></button>
+            <i class="is-min" aria-hidden="true"></i>
+            <i class="is-max" aria-hidden="true"></i>
+        </span>
+        <span data-qp-properties-label>Annotation properties</span>
+    </div>
+    <div class="qp-channel-properties-body">
+        <label for="annotation-properties-name">Name</label>
+        <input type="text" id="annotation-properties-name" autocomplete="off" data-max-unicode-length="200">
+        <label for="annotation-properties-class">Class</label>
+        <select id="annotation-properties-class" aria-label="Annotation class"></select>
+        <label>Color</label>
+        <button type="button" class="qp-color-dropdown" id="annotation-properties-color" data-qp-color-trigger data-color="#ffd54a" aria-label="Color">
+            <span class="qp-color-swatch" style="background:#ffd54a"></span>
+            <span data-qp-color-name>Custom</span>
+            <span class="qp-color-dropdown-caret">▼</span>
+        </button>
+    </div>
+    <div id="annotation-properties-new-class" class="qp-channel-properties-body" hidden>
+        <label for="annotation-properties-new-class-name">New class</label>
+        <input type="text" id="annotation-properties-new-class-name" autocomplete="off">
+        <label>Class color</label>
+        <button type="button" class="qp-color-dropdown" id="annotation-properties-new-class-color" data-qp-color-trigger data-color="#e6194b" aria-label="New class color">
+            <span class="qp-color-swatch" style="background:#e6194b"></span>
+            <span data-qp-color-name>Red</span>
+            <span class="qp-color-dropdown-caret">▼</span>
+        </button>
+    </div>
+    <div class="qp-dialog-actions">
+        <button type="button" id="annotation-properties-cancel">Cancel</button>
+        <button type="button" id="annotation-properties-apply">Apply</button>
     </div>
 </div>
 <div id="measurement-popup-overlay" role="status" aria-live="polite">

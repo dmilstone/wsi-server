@@ -115,7 +115,7 @@ const LegacyRightPanelLayout = {
             <div class="ai-lab-actions">
                 <details class="ai-lab-disclaimer">
                     <summary>System Diagnostic Disclaimer</summary>
-                    <p class="ai-lab-note">Experimental viewport simulation on this browser only. Results are not diagnostic and are not saved to the annotation store.</p>
+                    <p class="ai-lab-note">Experimental tools. Results are not diagnostic. Annotations, detections, and their properties are saved per workstation.</p>
                 </details>
                 <button id="ai-segment-nuclei" class="action" type="button">1. Segment Nuclei</button>
                 <div class="ai-plugin-row">

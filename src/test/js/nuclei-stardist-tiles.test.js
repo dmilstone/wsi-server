@@ -194,12 +194,12 @@ assert.doesNotMatch(adapterSource, /mapPluginNucleiToOverlays[\s\S]{0,1200}style
 assert.doesNotMatch(adapterSource, /host\.clearOverlays\(\)/);
 assert.match(adapterSource, /startDisabled:\s*true/);
 assert.match(adapterSource, /static setMeasureTracking\(/);
-assert.match(html, /id="ai-nuclei-visible"/);
+assert.doesNotMatch(html, /id="ai-nuclei-visible"/);
 assert.match(html, />1\. Segment Nuclei</);
 assert.doesNotMatch(html, /Segment Cell Nuclei/);
 assert.match(html, /id="plugin-selector"/);
 assert.match(html, /<option value="quantify-nuclei-pixel">Run Pixel Intensity Plugin</);
-assert.match(html, /<option value="per-object-pixel-quantifier">Quantify Individual Objects \(Color Code\)</);
+assert.match(html, /<option value="per-object-pixel-quantifier"( selected)?>Quantify Individual Objects \(Color Code\)</);
 assert.match(html, /Nuclear channel \(recommended\)/);
 assert.match(adapterSource, /static nuclearPluginChannel\(/);
 assert.match(html, /Do not pin fill\/stroke here/);
@@ -237,7 +237,7 @@ assert.equal(AnnotationAdapter.chooseDefaultSeries([
     { index: 2, width: 8000, height: 6000, rgb: false, isDiagnosticSpecimen: true }
 ]), 2);
 assert.match(html, /<summary>System Diagnostic Disclaimer<\/summary>/);
-assert.match(html, /Experimental viewport simulation on this browser only/);
+assert.match(html, /Annotations, detections, and their properties are saved per workstation/);
 assert.match(adapterSource, /static async runPerObjectPixelQuantifier\(/);
 assert.match(adapterSource, /per-object-pixel-quantifier/);
 assert.match(adapterSource, /rainbowRgbFromNormalized/);
@@ -314,11 +314,20 @@ assert.match(html, /id="ai-seg-target"/);
 assert.match(html, /id="ai-seg-border"/);
 assert.match(html, /Exclude the entire nucleus/);
 assert.match(html, /Truncate to the annotation outline/);
+assert.doesNotMatch(html, /Cell detector/i);
+assert.doesNotMatch(html, /Nuclei crossing the annotation outline/);
+assert.match(
+    html,
+    /id="floating-ai-labs-title">🔬 AI Labs<\/span>[\s\S]*System Diagnostic Disclaimer[\s\S]*id="ai-segment-nuclei"[\s\S]*id="ai-detector-selector"[\s\S]*id="ai-seg-target"[\s\S]*id="ai-seg-channel"[\s\S]*id="ai-seg-border"[\s\S]*id="plugin-selector"[\s\S]*id="ai-run-plugin"[\s\S]*id="ai-heatmap-toggle"/
+);
 assert.match(adapterSource, /static applyAnnotationRoiToNuclei\(/);
 assert.match(adapterSource, /static clipNucleiToAnnotationShape\(/);
 assert.doesNotMatch(html, />Target</);
 assert.doesNotMatch(html, /Display Segmentation Mask Overlays/);
-assert.match(html, /#ai-nuclei-visible\[aria-pressed="true"\]/);
+assert.doesNotMatch(html, /#ai-nuclei-visible\[aria-pressed="true"\]/);
+assert.match(html, /ai-lab-disclaimer-title/);
+assert.match(html, /ai-lab-field-end/);
+assert.doesNotMatch(html, /<label for="ai-seg-channel">Segmentation Channel<\/label>/);
 assert.match(adapterSource, /button\.textContent = label/);
 assert.match(adapterSource, /showing \? "Hide" : "Show"/);
 assert.doesNotMatch(html, /Hide Segmented Nuclei/);
@@ -326,6 +335,107 @@ assert.doesNotMatch(html, />Nuclei</);
 assert.match(adapterSource, /activateQuPathTool\("rectangle"\)/);
 assert.match(adapterSource, /setMeasureTracking\(false\)/);
 assert.match(html, /id="ai-heatmap-toggle"/);
+assert.match(html, /id="floating-pixel-intensity-palette"/);
+assert.match(html, /id="floating-pixel-intensity-title">Pixel Intensity</);
+assert.match(html, /id="pixel-intensity-stats"/);
+assert.doesNotMatch(html, /id="ai-plugin-stats"/);
+assert.match(html, /id="annotation-properties-dialog"/);
+assert.match(html, /id="annotation-properties-class"/);
+assert.match(html, /id="annotation-properties-color"[^>]*data-qp-color-trigger/);
+assert.doesNotMatch(html, /id="annotation-properties-color"[^>]*type="color"/);
+assert.match(adapterSource, /static openFloatingPixelIntensityPalette\(/);
+assert.match(adapterSource, /static focusHierarchyDetection\(/);
+assert.match(adapterSource, /static openAnnotationPropertiesDialog\(/);
+assert.match(adapterSource, /static openObjectColorChooser\(/);
+assert.match(adapterSource, /kind === "detection"/);
+assert.match(adapterSource, /border\.disabled = false/);
+assert.match(adapterSource, /static serializeDetectionsForStore\(/);
+assert.match(adapterSource, /detections: AnnotationAdapter.serializeDetectionsForStore\(\)/);
+
+{
+    AnnotationAdapter._restoringStoredObjects = true;
+    AnnotationAdapter.replaceLocalizedCellObjects([{
+        id: "n1",
+        name: "cell-a",
+        color: "#112233",
+        pathClass: "Tumor",
+        cx: 10,
+        cy: 12,
+        vertices: [{ x: 8, y: 10 }, { x: 12, y: 10 }, { x: 10, y: 14 }]
+    }]);
+    AnnotationAdapter.lastNucleiCircles = AnnotationAdapter.localizedCellObjects.slice();
+    AnnotationAdapter._restoringStoredObjects = false;
+    const stored = AnnotationAdapter.serializeDetectionsForStore();
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].id, "n1");
+    assert.equal(stored[0].name, "cell-a");
+    assert.equal(stored[0].color, "#112233");
+    assert.equal(stored[0].pathClass, "Tumor");
+    assert.ok(stored[0].vertices.length >= 3);
+    AnnotationAdapter._restoringStoredObjects = true;
+    AnnotationAdapter.replaceLocalizedCellObjects([]);
+    AnnotationAdapter._restoringStoredObjects = false;
+    assert.equal(AnnotationAdapter.restoreDetectionsFromStore(stored), 1);
+    const restored = AnnotationAdapter.listDetections()[0];
+    assert.equal(restored.pathClass, "Tumor");
+    assert.equal(restored.color, "#112233");
+    assert.equal(restored.name, "cell-a");
+}
+
+{
+    const border = { disabled: true, style: {}, removeAttribute(name) { if (name === "disabled") this.disabled = false; } };
+    const target = { value: "viewport" };
+    const root = {
+        getElementById(id) {
+            if (id === "ai-seg-border") return border;
+            if (id === "ai-seg-target") return target;
+            return null;
+        }
+    };
+    assert.equal(AnnotationAdapter.syncAnnotationBorderControl(root), true);
+    assert.equal(border.disabled, false);
+    target.value = "annotation";
+    assert.equal(AnnotationAdapter.syncAnnotationBorderControl(root), true);
+    assert.equal(border.disabled, false);
+}
+
+{
+    const picked = [];
+    const created = [];
+    const prevDoc = context.document;
+    context.document = {
+        body: { appendChild(node) { created.push(node); } },
+        createElement() {
+            const node = {
+                style: {},
+                dataset: {},
+                className: "",
+                classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+                id: "",
+                innerHTML: "",
+                children: [],
+                setAttribute() {},
+                appendChild(child) { this.children.push(child); return child; },
+                querySelector() { return { addEventListener() {} }; },
+                addEventListener() {}
+            };
+            return node;
+        },
+        addEventListener() {},
+        removeEventListener() {},
+        getElementById() { return null; }
+    };
+    assert.equal(AnnotationAdapter.openChannelColorChooser(null, { getBoundingClientRect() { return { left: 8, top: 8, bottom: 24, right: 40 }; } }, context.document, {
+        currentHex: "#112233",
+        onPick(hex) { picked.push(hex); }
+    }), true);
+    assert.equal(created.some(node => node.id === "qp-color-chooser"), true);
+    assert.equal(typeof AnnotationAdapter._colorChooserSession?.onPick, "function");
+    AnnotationAdapter._colorChooserSession.onPick("#aabbcc");
+    assert.deepEqual(picked, ["#aabbcc"]);
+    AnnotationAdapter.closeChannelColorChooser(context.document);
+    context.document = prevDoc;
+}
 assert.match(adapterSource, /static async toggleHeatMap\(/);
 assert.match(adapterSource, /static resetNucleusOverlayColors\(/);
 

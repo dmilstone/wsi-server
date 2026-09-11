@@ -103,7 +103,7 @@ assert.equal(panelOpenedFor, null, "single click/mousedown must NOT open the nam
 
 const dblclickResult = AnnotationAdapter.onQuPathDoubleClick(fakeShapeEvent);
 assert.equal(dblclickResult, true);
-assert.equal(panelOpenedFor, "shape-1", "double-click on a shape must open the name popup");
+assert.equal(panelOpenedFor, null, "double-click on a shape must not open the name popup");
 
 AnnotationAdapter.openAnnotationNamePanelForShape = previousOpenPanel;
 
@@ -374,7 +374,7 @@ AnnotationAdapter.launchBrightnessContrastPalette = previousLaunch;
     AnnotationAdapter.onQuPathDoubleClick(fakeShapeEvent);
     assert.equal(AnnotationAdapter.qpDrawSession, null,
         "double-click must clear a leftover rubber-band (the whole-view wash)");
-    assert.equal(named, "shape-1");
+    assert.equal(named, null, "double-click on an annotation must not open the name popup");
     AnnotationAdapter.openAnnotationNamePanelForShape = previousOpen;
 }
 

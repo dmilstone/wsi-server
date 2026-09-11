@@ -103,34 +103,21 @@ public final class LinearWindowPixelMapper
     public int map(
             int value16
     ) {
-        int intensity = windowIntensity(value16);
-
-        if (intensity > 0 && intensity < 255 && inverseGamma != 1.0) {
-            double normalized = intensity / 255.0;
-            intensity = clamp8(
-                    (int) Math.round(
-                            Math.pow(normalized, inverseGamma) * 255.0
-                    )
-            );
-        }
-
-        return lut.color(intensity);
-    }
-
-    private int windowIntensity(
-            int value16
-    ) {
+        double normalized;
         if (value16 <= black) {
-            return 0;
+            normalized = 0.0;
+        } else if (value16 >= white) {
+            normalized = 1.0;
+        } else {
+            normalized = (value16 - black) / (double) range;
         }
 
-        if (value16 >= white) {
-            return 255;
+        if (normalized > 0.0 && normalized < 1.0 && inverseGamma != 1.0) {
+            normalized = Math.pow(normalized, inverseGamma);
         }
 
-        return (value16 - black)
-                * 255
-                / range;
+        int intensity = clamp8((int) Math.round(normalized * 255.0));
+        return lut.color(intensity);
     }
 
     private int clamp8(
