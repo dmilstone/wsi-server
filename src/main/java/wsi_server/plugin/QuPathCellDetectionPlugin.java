@@ -57,7 +57,9 @@ public class QuPathCellDetectionPlugin implements WsiPlugin {
                         request.sigma(),
                         request.minArea(),
                         request.maxArea(),
-                        request.cellExpansion()
+                        request.cellExpansion(),
+                        request.cellExpansionMode(),
+                        request.cellConstrainScale()
                 )
         );
         return new PluginResult(

@@ -57,6 +57,23 @@ class QuantifyNucleiPixelPluginMaskTests {
     }
 
     @Test
+    void polygonVerticesMaskWithoutRadius() {
+        PluginSampleGrid grid = grid(8, 8, 1.0);
+        PluginExecuteRequest.NucleusFootprint nucleus = new PluginExecuteRequest.NucleusFootprint(
+                3, 3, 0,
+                List.of(
+                        new PluginExecuteRequest.NucleusFootprint.Vertex(1, 1),
+                        new PluginExecuteRequest.NucleusFootprint.Vertex(5, 1),
+                        new PluginExecuteRequest.NucleusFootprint.Vertex(5, 5),
+                        new PluginExecuteRequest.NucleusFootprint.Vertex(1, 5)
+                )
+        );
+        boolean[] mask = NucleusCircleMask.single(grid, nucleus);
+        assertTrue(mask[3 * 8 + 3], "polygon rasterization must fill the interior even when r is 0");
+        assertEquals(false, mask[7 * 8 + 7]);
+    }
+
+    @Test
     void circleMaskIncludesBoundaryPixels() {
         PluginSampleGrid grid = grid(5, 5, 1.0);
         boolean[] mask = NucleusCircleMask.single(
@@ -131,5 +148,36 @@ class PerObjectPixelQuantifierPluginTests {
         assertEquals(1, reports.size());
         assertEquals(1, reports.get(0).channels().size());
         assertTrue(reports.get(0).channels().get(0).sampleCount() > 0);
+    }
+
+    @Test
+    void polygonFootprintWithoutRadiusStillColorCodes() {
+        int width = 8;
+        int height = 8;
+        int[] plane = new int[width * height];
+        for (int i = 0; i < plane.length; i++) plane[i] = 20 + i;
+        PluginSampleGrid grid = new PluginSampleGrid(
+                0, 0, width, height,
+                0, 0, width, height,
+                1, 1,
+                List.of("DAPI"),
+                new int[] {0},
+                new int[][] {plane}
+        );
+        List<ObjectColorKey> keys = PerObjectPixelQuantifierPlugin.quantifyObjects(
+                grid,
+                List.of(new PluginExecuteRequest.NucleusFootprint(
+                        3, 3, 0,
+                        List.of(
+                                new PluginExecuteRequest.NucleusFootprint.Vertex(1, 1),
+                                new PluginExecuteRequest.NucleusFootprint.Vertex(5, 1),
+                                new PluginExecuteRequest.NucleusFootprint.Vertex(5, 5),
+                                new PluginExecuteRequest.NucleusFootprint.Vertex(1, 5)
+                        )
+                ))
+        );
+        assertEquals(1, keys.size());
+        assertTrue(Double.isFinite(keys.get(0).key()));
+        assertTrue(keys.get(0).key() > 0);
     }
 }

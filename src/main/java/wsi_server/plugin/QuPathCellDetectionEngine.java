@@ -22,9 +22,22 @@ public final class QuPathCellDetectionEngine {
             Double sigma,
             Double minArea,
             Double maxArea,
-            Double cellExpansion
+            Double cellExpansion,
+            String cellExpansionMode,
+            Double cellConstrainScale
     ) {
-        public static final Params DEFAULT = new Params(null, null, null, null, null, null);
+        public static final Params DEFAULT = new Params(null, null, null, null, null, null, null, null);
+
+        public Params(
+                Double probability,
+                Double backgroundRadius,
+                Double sigma,
+                Double minArea,
+                Double maxArea,
+                Double cellExpansion
+        ) {
+            this(probability, backgroundRadius, sigma, minArea, maxArea, cellExpansion, null, null);
+        }
     }
 
     private QuPathCellDetectionEngine() {
@@ -51,12 +64,34 @@ public final class QuPathCellDetectionEngine {
         if (maskCount < 8) return List.of();
         float[] distance = distanceTransform(mask, width, height);
         int[] labels = watershed(distance, mask, width, height);
-        int expansion = (int) Math.round(resolve(resolved.cellExpansion(), 4, 0, 20));
-        if (expansion > 0) expandLabels(labels, width, height, expansion);
         double minArea = resolve(resolved.minArea(), 10, 4, 200);
         double maxArea = resolve(resolved.maxArea(), 400, 40, 2000);
         if (maxArea < minArea) maxArea = minArea;
-        return polygonsFromLabels(grid, labels, width, height, minArea, maxArea);
+        CellBoundaryExpander.Mode mode = CellBoundaryExpander.parse(
+                resolved.cellExpansionMode(), CellBoundaryExpander.Mode.WATERSHED);
+        double constrain = resolve(resolved.cellConstrainScale(), CellBoundaryExpander.DEFAULT_CONSTRAIN, 1.0, 3.0);
+        if (mode == CellBoundaryExpander.Mode.NONE) {
+            return polygonsFromLabels(grid, labels, width, height, minArea, maxArea, null);
+        }
+        if (mode == CellBoundaryExpander.Mode.WATERSHED) {
+            int expansion = (int) Math.round(resolve(resolved.cellExpansion(), 4, 0, 20));
+            int[] cellLabels = null;
+            if (expansion > 0) {
+                cellLabels = labels.clone();
+                expandLabels(cellLabels, width, height, expansion);
+            }
+            return CellBoundaryExpander.constrainCells(
+                    polygonsFromLabels(grid, labels, width, height, minArea, maxArea, cellLabels),
+                    constrain);
+        }
+        double amount = mode == CellBoundaryExpander.Mode.RADIAL
+                ? resolve(resolved.cellExpansion(), CellBoundaryExpander.DEFAULT_RADIAL, 1.0, 2.5)
+                : resolve(resolved.cellExpansion(), CellBoundaryExpander.DEFAULT_OFFSET_PX, 0, 20);
+        return CellBoundaryExpander.attach(
+                polygonsFromLabels(grid, labels, width, height, minArea, maxArea, null),
+                mode,
+                amount,
+                constrain);
     }
 
     static void subtractBackground(float[] field, int width, int height, double radius) {
@@ -226,6 +261,18 @@ public final class QuPathCellDetectionEngine {
     static List<NucleusPolygon> polygonsFromLabels(
             PluginSampleGrid grid, int[] labels, int width, int height, double minArea, double maxArea
     ) {
+        return polygonsFromLabels(grid, labels, width, height, minArea, maxArea, null);
+    }
+
+    static List<NucleusPolygon> polygonsFromLabels(
+            PluginSampleGrid grid,
+            int[] labels,
+            int width,
+            int height,
+            double minArea,
+            double maxArea,
+            int[] cellLabels
+    ) {
         int maxLabel = 0;
         for (int label : labels) if (label > maxLabel) maxLabel = label;
         int[] area = new int[maxLabel + 1];
@@ -251,11 +298,15 @@ public final class QuPathCellDetectionEngine {
             if (area[label] < minArea || area[label] > maxArea) continue;
             List<NucleusPolygon.Vertex> ring = traceContour(grid, labels, width, height, label, seedX[label], seedY[label]);
             if (ring.size() < 3) continue;
+            List<NucleusPolygon.Vertex> cellRing = cellLabels == null
+                    ? List.of()
+                    : traceContour(grid, cellLabels, width, height, label, seedX[label], seedY[label]);
             polygons.add(new NucleusPolygon(
                     polygons.size(),
                     grid.imageXOf((int) Math.round(sumX[label] / area[label])),
                     grid.imageYOf((int) Math.round(sumY[label] / area[label])),
-                    ring
+                    ring,
+                    cellRing.size() >= 3 ? cellRing : List.of()
             ));
         }
         return List.copyOf(polygons);

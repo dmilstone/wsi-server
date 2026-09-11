@@ -50,6 +50,29 @@ class CellDetectionPluginTests {
     }
 
     @Test
+    void cellBoundaryExpanderGrowsARingAndCapsIt() {
+        List<NucleusPolygon.Vertex> square = List.of(
+                new NucleusPolygon.Vertex(0, 0),
+                new NucleusPolygon.Vertex(10, 0),
+                new NucleusPolygon.Vertex(10, 10),
+                new NucleusPolygon.Vertex(0, 10)
+        );
+        NucleusPolygon nucleus = new NucleusPolygon(0, 5, 5, square);
+        List<NucleusPolygon> radial = CellBoundaryExpander.attach(
+                List.of(nucleus), CellBoundaryExpander.Mode.RADIAL, 2.0, 1.5);
+        assertEquals(1, radial.size());
+        assertFalse(radial.getFirst().cellVertices().isEmpty());
+        NucleusPolygon.Vertex grown = radial.getFirst().cellVertices().getFirst();
+        assertTrue(Math.hypot(grown.x() - 5, grown.y() - 5) <= Math.hypot(-5, -5) * 1.5 + 1e-6);
+
+        List<NucleusPolygon> none = CellBoundaryExpander.attach(
+                List.of(nucleus), CellBoundaryExpander.Mode.NONE, 2.0, 1.5);
+        assertTrue(none.getFirst().cellVertices().isEmpty());
+        assertEquals(CellBoundaryExpander.Mode.OFFSET, CellBoundaryExpander.parse("perimeter", null));
+        assertEquals(CellBoundaryExpander.Mode.WATERSHED, CellBoundaryExpander.parse("watershed", null));
+    }
+
+    @Test
     void pluginIdsMatchTheAiLabsSelector() {
         assertEquals("cellpose-segmentation", CellposeSegmentationPlugin.ID);
         assertEquals("qupath-cell-detection", QuPathCellDetectionPlugin.ID);

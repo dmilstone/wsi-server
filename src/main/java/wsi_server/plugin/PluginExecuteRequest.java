@@ -32,7 +32,9 @@ public record PluginExecuteRequest(
         Double sigma,
         Double minArea,
         Double maxArea,
-        Double cellExpansion
+        Double cellExpansion,
+        String cellExpansionMode,
+        Double cellConstrainScale
 ) {
     /** Builds the StarDist fallback-engine parameter bundle from this request. */
     StarDistTensorEngine.Params starDistParams() {
@@ -43,7 +45,15 @@ public record PluginExecuteRequest(
     public record NucleusFootprint(
             @JsonAlias({"centerX", "x"}) double cx,
             @JsonAlias({"centerY", "y"}) double cy,
-            @JsonAlias({"radius"}) double r
+            @JsonAlias({"radius"}) double r,
+            List<Vertex> vertices
     ) {
+        public NucleusFootprint(double cx, double cy, double r) {
+            this(cx, cy, r, List.of());
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record Vertex(double x, double y) {
+        }
     }
 }

@@ -69,8 +69,9 @@ public class StarDistSegmentationPlugin implements WsiPlugin {
                 request.height(),
                 channels
         );
-        List<NucleusPolygon> nuclei = StarDistTensorEngine.infer(
-                grid, brightfield, weights, request.starDistParams());
+        List<NucleusPolygon> nuclei = CellBoundaryExpander.attach(
+                StarDistTensorEngine.infer(grid, brightfield, weights, request.starDistParams()),
+                request);
         // NATIVE_MODEL_IMPLEMENTED is currently always false (see StarDistTensorEngine):
         // the trained-model path is an unimplemented stub, so every call runs the
         // 32-ray heuristic below regardless of `weightsName`/`weights`. Report that

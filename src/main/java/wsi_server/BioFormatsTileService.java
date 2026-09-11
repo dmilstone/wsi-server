@@ -1012,7 +1012,7 @@ public class BioFormatsTileService {
                 throw new IllegalArgumentException("Plugin region is outside the image.");
             }
             int planeZ = Math.max(0, Math.min(z, Math.max(0, context.sizeZ() - 1)));
-            int maxPixels = 512 * 512;
+            int maxPixels = 1024 * 1024;
             int resolution = 0;
             if ((long) clipW * clipH > maxPixels) {
                 int count = Math.max(1, reader.getResolutionCount());
@@ -1114,13 +1114,19 @@ public class BioFormatsTileService {
             // Fall through to name matching.
         }
         String key = raw.toUpperCase(java.util.Locale.ROOT).replace("CHANNEL", "").trim();
-        if (key.equals("DAPI") || key.equals("BLUE") || key.equals("1") || key.equals("B")) {
+        if (context != null && context.isRgb()) {
+            if (key.equals("R") || key.equals("RED")) return 0;
+            if (key.equals("G") || key.equals("GREEN")) return 1;
+            if (key.equals("B") || key.equals("BLUE")) return sizeC > 2 ? 2 : 0;
+        }
+        if (key.contains("DAPI") || key.contains("HOECHST") || key.contains("HOECH")
+                || key.equals("BLUE") || key.equals("1") || key.equals("B")) {
             return sizeC > 0 ? 0 : -1;
         }
-        if (key.equals("FITC") || key.equals("GREEN") || key.equals("2") || key.equals("G")) {
+        if (key.contains("FITC") || key.equals("GREEN") || key.equals("2") || key.equals("G")) {
             return sizeC > 1 ? 1 : -1;
         }
-        if (key.equals("TRITC") || key.equals("RED") || key.equals("3") || key.equals("R")) {
+        if (key.contains("TRITC") || key.equals("RED") || key.equals("3") || key.equals("R")) {
             return sizeC > 2 ? 2 : -1;
         }
         for (int i = 0; i < sizeC; i++) {

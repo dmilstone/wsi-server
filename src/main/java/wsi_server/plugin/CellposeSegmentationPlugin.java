@@ -50,15 +50,18 @@ public class CellposeSegmentationPlugin implements WsiPlugin {
                 request.x(), request.y(), request.width(), request.height(),
                 channels
         );
-        List<NucleusPolygon> nuclei = CellposeEngine.detect(
-                grid,
-                brightfield,
-                new CellposeEngine.Params(
-                        request.probability(),
-                        request.nms(),
-                        request.diameter(),
-                        cellposeModel
-                )
+        List<NucleusPolygon> nuclei = CellBoundaryExpander.attach(
+                CellposeEngine.detect(
+                        grid,
+                        brightfield,
+                        new CellposeEngine.Params(
+                                request.probability(),
+                                request.nms(),
+                                request.diameter(),
+                                cellposeModel
+                        )
+                ),
+                request
         );
         String engine = CellposeEngine.NATIVE_MODEL_IMPLEMENTED
                 ? CellposeEngine.NATIVE_ENGINE_LABEL

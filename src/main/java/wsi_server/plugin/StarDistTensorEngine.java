@@ -268,10 +268,9 @@ public final class StarDistTensorEngine {
                     for (int c = 0; c < channels; c++) sum += tensor[y][x][c];
                     value = channels == 0 ? 0f : sum / channels;
                 } else {
+                    // Nuclear channel only. Max-across-visible-bands treated membrane /
+                    // cytoplasm markers as nuclei and wrecked fluorescence contours.
                     value = tensor[y][x][0];
-                    for (int c = 1; c < channels; c++) {
-                        if (tensor[y][x][c] > value) value = tensor[y][x][c];
-                    }
                 }
                 field[row + x] = value;
             }
@@ -295,7 +294,8 @@ public final class StarDistTensorEngine {
         float cut = threshold(field, brightfield, params.probability());
         int rayCount = resolveRayCount(params.rayCount());
         float boundaryTightness = resolveBoundaryTightness(params.boundaryTightness());
-        List<Peak> peaks = findPeaks(field, width, height, cut, params.nms(), params.maxNucleusRadius());
+        float sampleRadius = sampleSpaceRadius(grid, params.maxNucleusRadius());
+        List<Peak> peaks = findPeaks(field, width, height, cut, params.nms(), sampleRadius);
         List<NucleusPolygon> polygons = new ArrayList<>();
         for (Peak peak : peaks) {
             if (polygons.size() >= MAX_NUCLEI) break;
@@ -325,7 +325,10 @@ public final class StarDistTensorEngine {
         // just the flat global cut) so a nucleus sitting inside a broader, locally
         // brighter region still gets an outline sized to itself, not to that region.
         float cut = Math.max(Math.max(0.05f, threshold * boundaryTightness), (float) (peak.score * RAY_RELATIVE_DROPOFF));
-        float limit = Math.max(4f, peak.radius * 2.6f);
+        // peak.radius is already in sample pixels. A hardcoded 4-step floor
+        // exploded outlines after a wide viewport was downsampled (4 sample
+        // steps can be tens of image pixels).
+        float limit = Math.max(1.5f, peak.radius * 2.6f);
         double[] lengths = new double[rayCount];
         for (int ray = 0; ray < rayCount; ray++) {
             double angle = (ray / (double) rayCount) * Math.PI * 2;
@@ -368,8 +371,14 @@ public final class StarDistTensorEngine {
     static List<Peak> findPeaks(
             float[] field, int width, int height, float cut, Double nmsOverride, Double maxNucleusRadiusOverride
     ) {
+        return findPeaks(field, width, height, cut, nmsOverride, resolvePeakRadius(maxNucleusRadiusOverride));
+    }
+
+    static List<Peak> findPeaks(
+            float[] field, int width, int height, float cut, Double nmsOverride, float sampleRadius
+    ) {
         int radius = 2;
-        float peakRadius = resolvePeakRadius(maxNucleusRadiusOverride);
+        float peakRadius = sampleRadius > 0 ? sampleRadius : 6f;
         List<Peak> peaks = new ArrayList<>();
         for (int y = radius; y < height - radius; y++) {
             for (int x = radius; x < width - radius; x++) {
@@ -399,7 +408,7 @@ public final class StarDistTensorEngine {
         }
         peaks.sort(Comparator.comparingDouble((Peak peak) -> peak.score).reversed());
         List<Peak> kept = new ArrayList<>();
-        double minDist2 = resolveNmsMinDist2(nmsOverride);
+        double minDist2 = resolveNmsMinDist2(nmsOverride, peakRadius);
         for (Peak peak : peaks) {
             boolean near = false;
             for (Peak other : kept) {
@@ -452,20 +461,35 @@ public final class StarDistTensorEngine {
     }
 
     /**
-     * Maps the 0.1-1.0 "overlap suppression" slider onto a minimum peak-to-peak
-     * distance (squared). {@code null} preserves the legacy fixed 5px radius.
+     * Slider radius is in <em>image</em> pixels. After the plugin grid downsamples
+     * a wide viewport, treating that number as sample pixels made rays search
+     * 15+ sample steps (hundreds of image pixels) and produced giant spiked
+     * outlines. Convert with the grid scale so a 6 px nucleus stays compact.
      */
-    private static double resolveNmsMinDist2(Double nmsOverride) {
-        if (nmsOverride == null || !Double.isFinite(nmsOverride)) return 25;
+    static float sampleSpaceRadius(PluginSampleGrid grid, Double imageRadius) {
+        float image = resolvePeakRadius(imageRadius);
+        double scale = 1;
+        if (grid != null) {
+            scale = (Math.abs(grid.scaleX()) + Math.abs(grid.scaleY())) / 2.0;
+        }
+        if (!(scale > 0) || !Double.isFinite(scale)) scale = 1;
+        return (float) Math.max(1.5, Math.min(80.0, image * scale));
+    }
+
+    private static double resolveNmsMinDist2(Double nmsOverride, float sampleRadius) {
+        double radius = sampleRadius > 0 ? sampleRadius : 6;
+        if (nmsOverride == null || !Double.isFinite(nmsOverride)) {
+            double legacy = Math.max(4, radius * 0.9);
+            return legacy * legacy;
+        }
         double clamped = Math.max(0.1, Math.min(1.0, nmsOverride));
-        double minDist = 2.5 + clamped * 7.5;
+        double minDist = radius * (0.7 + clamped * 1.3);
         return minDist * minDist;
     }
 
     /**
-     * Expected/max nucleus radius in pixels; feeds directly into the outline ray
-     * search limit ({@code peak.radius * 2.6}) in {@link #starConvexVertices}.
-     * {@code null} preserves the legacy fixed 6px baseline.
+     * Expected/max nucleus radius in image pixels. {@code null} preserves the
+     * legacy 6 px baseline.
      */
     private static float resolvePeakRadius(Double maxNucleusRadiusOverride) {
         if (maxNucleusRadiusOverride == null || !Double.isFinite(maxNucleusRadiusOverride)) return 6f;

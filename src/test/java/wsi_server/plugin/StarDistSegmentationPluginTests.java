@@ -298,6 +298,85 @@ class StarDistSegmentationPluginTests {
     }
 
     @Test
+    void fluorescenceNuclearChannelIgnoresLaterBands() {
+        float[][][] tensor = new float[3][3][2];
+        for (int y = 0; y < 3; y++) {
+            for (int x = 0; x < 3; x++) {
+                tensor[y][x][0] = 0.2f;
+                tensor[y][x][1] = 1.0f;
+            }
+        }
+        float[] field = StarDistTensorEngine.nuclearChannel(tensor, false);
+        for (float value : field) {
+            assertEquals(0.2f, value, 0.02f,
+                    "fluorescence detection must use the nuclear plane, not max-across-visible-bands");
+        }
+    }
+
+    @Test
+    void sampleSpaceRadiusShrinksAfterViewportDownsample() {
+        PluginSampleGrid grid = new PluginSampleGrid(
+                0, 0, 256, 256,
+                0, 0, 64, 64,
+                0.25, 0.25,
+                List.of("DAPI"),
+                new int[] {0},
+                new int[][] {new int[64 * 64]}
+        );
+        assertEquals(1.5f, StarDistTensorEngine.sampleSpaceRadius(grid, 6.0), 1e-5);
+        assertEquals(6.0f, StarDistTensorEngine.sampleSpaceRadius(
+                new PluginSampleGrid(
+                        0, 0, 64, 64,
+                        0, 0, 64, 64,
+                        1, 1,
+                        List.of("DAPI"),
+                        new int[] {0},
+                        new int[][] {new int[64 * 64]}
+                ),
+                6.0), 1e-5);
+    }
+
+    @Test
+    void downsampledRadiusKeepsOutlinesCompact() {
+        int width = 64;
+        int height = 64;
+        float[] field = new float[width * height];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                field[y * width + x] = 1.0f;
+            }
+        }
+        PluginSampleGrid grid = new PluginSampleGrid(
+                0, 0, 256, 256,
+                0, 0, width, height,
+                0.25, 0.25,
+                List.of("DAPI"),
+                new int[] {0},
+                new int[][] {new int[width * height]}
+        );
+        StarDistTensorEngine.Peak scaled = new StarDistTensorEngine.Peak(
+                32, 32, 1.0, StarDistTensorEngine.sampleSpaceRadius(grid, 6.0));
+        StarDistTensorEngine.Peak naive = new StarDistTensorEngine.Peak(32, 32, 1.0, 6f);
+        List<NucleusPolygon.Vertex> scaledRing = StarDistTensorEngine.starConvexVertices(
+                grid, field, width, height, scaled, 0.1f, 8, 1.0f);
+        List<NucleusPolygon.Vertex> naiveRing = StarDistTensorEngine.starConvexVertices(
+                grid, field, width, height, naive, 0.1f, 8, 1.0f);
+        double scaledReach = 0;
+        double naiveReach = 0;
+        int cx = grid.imageXOf(32);
+        int cy = grid.imageYOf(32);
+        for (NucleusPolygon.Vertex vertex : scaledRing) {
+            scaledReach = Math.max(scaledReach, Math.hypot(vertex.x() - cx, vertex.y() - cy));
+        }
+        for (NucleusPolygon.Vertex vertex : naiveRing) {
+            naiveReach = Math.max(naiveReach, Math.hypot(vertex.x() - cx, vertex.y() - cy));
+        }
+        assertTrue(scaledReach < 30, "image-space radius 6px must stay compact after 4x downsample, was " + scaledReach);
+        assertTrue(naiveReach > scaledReach * 1.5,
+                "treating the slider as sample pixels must reach farther than the scaled radius");
+    }
+
+    @Test
     void pluginResultSegmentationEngineDefaultsToNullForNonStarDistPlugins() {
         // Every other plugin (pixel intensity, IHC deconvolution, per-object quantifier)
         // constructs PluginResult via the pre-existing 12-arg compatibility constructor
