@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260910-zstack-menu"></script>
+    <script src="/annotation-adapter.js?v=20260911-ai-plugins-fix"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
@@ -1230,7 +1230,166 @@
         .multiview-item.is-open > .multiview-submenu {
             display: block;
         }
+        /* Classify sits on the far-right toolbar. Side flyouts are clipped by
+           html/body overflow:hidden, so its nested menus expand in-place. */
+        #classify-menu {
+            overflow: visible;
+            z-index: 100060;
+        }
+        #classify-menu .multiview-item {
+            position: static;
+        }
+        #classify-menu .multiview-submenu {
+            position: static;
+            left: auto;
+            right: auto;
+            top: auto;
+            min-width: 0;
+            border: 0;
+            border-top: 1px solid #5a4a78;
+            border-bottom: 1px solid #5a4a78;
+            box-shadow: none;
+            background: #1a1428;
+            padding: 2px 0;
+        }
+        #classify-menu .multiview-submenu button {
+            padding-left: 28px;
+        }
+        #classify-menu .multiview-submenu-label .multiview-accel {
+            transform: rotate(90deg);
+            display: inline-block;
+        }
+        #classify-menu .multiview-item.is-open > .multiview-submenu-label .multiview-accel,
+        #classify-menu .multiview-item:hover > .multiview-submenu-label .multiview-accel {
+            transform: rotate(-90deg);
+        }
+        /* Image-space View menu: nested trees fly left or right (fixed, so they
+           are not clipped by the primary panel). Only the active hover/click
+           path is visible — CSS :hover/:focus-within must not stack siblings.
+           JS flips the side when a flyout would leave the viewport. */
+        #multiview-menu {
+            overflow: visible;
+            z-index: 100060;
+        }
+        #multiview-menu .multiview-item {
+            position: relative;
+        }
+        #multiview-menu .multiview-submenu {
+            display: none !important;
+            position: fixed;
+            left: auto;
+            right: auto;
+            top: auto;
+            min-width: 220px;
+            border: 1px solid #5a4a78;
+            box-shadow: 0 8px 22px rgba(0,0,0,.45);
+            background: #2b2140;
+            padding: 4px 0;
+            z-index: 100062;
+        }
+        #multiview-menu .multiview-item:hover > .multiview-submenu,
+        #multiview-menu .multiview-item:focus-within > .multiview-submenu,
+        #multiview-menu .multiview-item.is-open > .multiview-submenu {
+            display: none !important;
+        }
+        #multiview-menu .multiview-item.is-flyout-open > .multiview-submenu {
+            display: block !important;
+        }
+        #multiview-menu .multiview-submenu .multiview-submenu {
+            z-index: 100063;
+        }
+        #multiview-menu .multiview-submenu-label .multiview-accel {
+            transform: none;
+            display: inline-block;
+        }
+        #multiview-menu .multiview-item.is-flyout-left > .multiview-submenu-label .multiview-accel {
+            transform: scaleX(-1);
+        }
         .multiview-accel { color: #cbb6e8; font-size: 12px; }
+        .classify-dialog {
+            position: fixed;
+            z-index: 100040;
+            left: 72px;
+            top: 88px;
+            width: min(440px, calc(100vw - 32px));
+            max-height: calc(100vh - 48px);
+            display: flex;
+            flex-direction: column;
+            background: #1c1c1c;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 6px;
+            box-shadow: 0 12px 32px rgba(0,0,0,.55);
+        }
+        .classify-dialog[hidden] { display: none !important; }
+        .classify-dialog-titlebar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            background: #2a2140;
+            cursor: move;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .classify-dialog-close {
+            margin-left: auto;
+            border: 0;
+            background: transparent;
+            color: #ff8888;
+            font-size: 18px;
+            cursor: pointer;
+        }
+        .classify-dialog-body {
+            padding: 10px 12px 12px;
+            overflow: auto;
+            font-size: 13px;
+        }
+        .classify-dialog-body label {
+            display: block;
+            margin: 8px 0 4px;
+            color: #ccc;
+        }
+        .classify-dialog-body input,
+        .classify-dialog-body select,
+        .classify-dialog-body textarea {
+            width: 100%;
+            box-sizing: border-box;
+            background: #111;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 5px 7px;
+        }
+        .classify-dialog-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .classify-dialog-actions button {
+            background: #3d2a5c;
+            color: #fff;
+            border: 1px solid #6a4a8c;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font: inherit;
+        }
+        .classify-dialog-actions button:hover { background: #5b3d8c; }
+        .classify-dialog-status {
+            padding: 6px 12px 10px;
+            color: #cde;
+            font-size: 12px;
+        }
+        .classify-class-swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
         .multiview-check { width: 14px; display: inline-block; }
         .multiview-detached {
             position: fixed;
@@ -3161,11 +3320,75 @@
         }
         #floating-ai-labs-palette {
             min-width: 20rem;
+            min-height: 0;
             left: 7.5rem;
-            top: 6rem;
+            top: 8px;
+            max-height: calc(100vh - 16px);
+            max-height: calc(100dvh - 16px);
             color: #f7f2d8;
             background: #0b1220;
             border: 1px solid #f0a500;
+        }
+        #floating-ai-labs-palette .fcp-body {
+            overflow-x: hidden;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            min-height: 0;
+            flex: 1 1 auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-actions {
+            gap: 4px;
+            padding: 6px 8px 8px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-actions .action {
+            min-height: 28px;
+            font-size: 12px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-detector-row {
+            margin: 0 0 4px;
+            font-size: 10px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-detector-row #ai-detector-selector,
+        #floating-ai-labs-palette #ai-analytics-panel .ai-plugin-row #plugin-selector {
+            min-height: 28px;
+            font-size: 11px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-disclaimer {
+            margin: 0 0 4px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-disclaimer > summary {
+            padding: 4px 6px;
+            font-size: 10px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-disclaimer .ai-lab-field {
+            padding: 0 6px 4px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-status-stack {
+            gap: 4px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-config {
+            gap: 4px;
+            padding: 6px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-field {
+            gap: 2px;
+            font-size: 10px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-field select {
+            min-height: 24px;
+            font-size: 11px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-slider-row {
+            gap: 6px;
+            grid-template-columns: minmax(48px, 1fr) 36px;
+        }
+        #floating-ai-labs-palette #ai-analytics-panel .ai-lab-slider-row output {
+            font-size: 10px;
+        }
+        #floating-ai-labs-palette #ai-reset-baseline-btn {
+            font-size: 0.75rem !important;
+            padding: 0.25em 0.6em !important;
         }
         #floating-admin-palette {
             min-width: 17.5rem;
@@ -3505,7 +3728,8 @@
         }
         .qp-color-chooser,
         .qp-channel-properties,
-        .qp-custom-colors {
+        .qp-custom-colors,
+        .qp-display-range {
             position: fixed;
             z-index: 10050;
             color-scheme: light;
@@ -3520,7 +3744,8 @@
         }
         .qp-color-chooser *,
         .qp-channel-properties *,
-        .qp-custom-colors * {
+        .qp-custom-colors *,
+        .qp-display-range * {
             color: inherit;
             -webkit-text-fill-color: inherit;
         }
@@ -3645,7 +3870,8 @@
             padding: 0 0 12px;
         }
         .qp-channel-properties-title,
-        .qp-custom-colors-title {
+        .qp-custom-colors-title,
+        .qp-display-range .qp-channel-properties-title {
             display: flex;
             align-items: center;
             justify-content: center;
@@ -3733,6 +3959,37 @@
             -webkit-text-fill-color: #1a1a1a !important;
             cursor: pointer;
             font-weight: 600;
+        }
+        .qp-display-range {
+            z-index: 10056;
+            min-width: 22rem;
+            padding: 0 0 12px;
+        }
+        .qp-display-range[hidden] { display: none !important; }
+        .qp-display-range-body {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 10px 12px;
+            align-items: center;
+            padding: 18px 18px 14px;
+        }
+        .qp-display-range-body label { color: #222; }
+        .qp-display-range-body input {
+            min-width: 12rem;
+            border: 1px solid #8aa8c8;
+            border-radius: 3px;
+            padding: 3px 6px;
+            font: inherit;
+            color: #111 !important;
+            -webkit-text-fill-color: #111 !important;
+            background: #fff !important;
+        }
+        #fcp-max-value {
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        #fcp-max-value:hover {
+            outline: 1px solid #8aa8c8;
         }
         .qp-custom-colors {
             z-index: 10060;
@@ -3822,6 +4079,7 @@
             width: 100%;
             height: 88px;
             background: #000;
+            cursor: ew-resize;
         }
         .fcp-histogram-meta {
             display: flex;
@@ -4302,9 +4560,13 @@
             </div>
         <div class="toolbar-ops-spacer" aria-hidden="true"></div>
         <div class="toolbar-group primary-right-group ops-display-group" role="group" aria-label="Utilities">
+            <button id="classify-menu-button" class="toolbar-chip" type="button"
+                    aria-haspopup="true" aria-expanded="false" aria-controls="classify-menu"
+                    data-tooltip="Classify ▸ Object, pixel, and training-image classifiers"
+                    aria-label="Classify menu">Classify</button>
             <button id="view-menu-button" class="toolbar-chip" type="button"
                     aria-haspopup="true" aria-expanded="false" aria-controls="multiview-menu"
-                    data-tooltip="View ▸ Channel viewer, Z-stack controller, Multi-view grids, synchronize viewers"
+                    data-tooltip="View ▸ Multi-view, Cell display, Display, Set tool (same tree as image right-click)"
                     aria-label="View menu">View</button>
             <button id="primary-help-directory-link" class="toolbar-chip" type="button"
                     aria-label="Help"
@@ -4552,7 +4814,7 @@
                 <div class="bc-channels-grid" id="floating-channel-palette-rows" data-fcp-layout="1"></div>
                 <div class="fcp-list-splitter" id="fcp-list-splitter" role="separator" aria-orientation="horizontal" aria-label="Adjust channel list height"></div>
                 <div class="fcp-histogram-wrap">
-                    <canvas id="floating-channel-histogram" width="340" height="88" aria-label="Channel histogram"></canvas>
+                    <canvas id="floating-channel-histogram" width="340" height="88" aria-label="Channel histogram" title="Drag to set channel min or max"></canvas>
                 </div>
                 <div class="fcp-histogram-meta">
                     <label class="fcp-histogram-log" for="fcp-log-histogram" title="Show counts on a log scale. Intensity stays linear.">
@@ -4567,12 +4829,12 @@
                 <div class="fcp-slider">
                     <label for="fcp-min">Channel min</label>
                     <input id="fcp-min" type="range" min="0" max="65535" step="1" value="0" aria-label="Channel min">
-                    <output id="fcp-min-value" for="fcp-min">0</output>
+                    <output id="fcp-min-value" for="fcp-min" title="Double-click to type a value">0</output>
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-max">Channel max</label>
                     <input id="fcp-max" type="range" min="0" max="65535" step="1" value="65535" aria-label="Channel max">
-                    <output id="fcp-max-value" for="fcp-max">65,535</output>
+                    <output id="fcp-max-value" for="fcp-max" title="Double-click to type a value">65,535</output>
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-gamma">Viewer gamma</label>
@@ -4592,6 +4854,26 @@
             <span class="fcp-edge-handle" data-edge="se" aria-hidden="true"></span>
             <span class="fcp-edge-handle" data-edge="sw" aria-hidden="true"></span>
         </aside>
+        <div id="qp-display-range" class="qp-display-range" hidden role="dialog" aria-labelledby="qp-display-range-title" aria-hidden="true">
+            <div class="qp-channel-properties-title" id="qp-display-range-title">
+                <span class="qp-dialog-traffic">
+                    <button type="button" class="is-close" data-dr-close aria-label="Close display range"></button>
+                    <i class="is-min" aria-hidden="true"></i>
+                    <i class="is-max" aria-hidden="true"></i>
+                </span>
+                Display range
+            </div>
+            <div class="qp-display-range-body">
+                <label for="qp-display-range-min" data-dr-min-label>Set display range minimum</label>
+                <input id="qp-display-range-min" type="text" inputmode="decimal" autocomplete="off" hidden>
+                <label for="qp-display-range-max" data-dr-max-label>Set display range maximum</label>
+                <input id="qp-display-range-max" type="text" inputmode="decimal" autocomplete="off">
+            </div>
+            <div class="qp-dialog-actions">
+                <button type="button" data-dr-cancel>Cancel</button>
+                <button type="button" data-dr-ok>OK</button>
+            </div>
+        </div>
         <aside id="floating-wand-palette" class="floating-palette" hidden aria-hidden="true" role="dialog" aria-labelledby="floating-wand-title">
             <div class="fcp-titlebar" id="floating-wand-handle">
                 <span class="fcp-title" id="floating-wand-title">Wand parameters</span>
@@ -4789,7 +5071,7 @@
                         <div class="ai-lab-field">
                             <label for="ai-seg-channel">Segmentation Channel</label>
                             <select id="ai-seg-channel">
-                                <option value="default" selected>Default Viewport</option>
+                                <option value="default" selected>Nuclear channel (recommended)</option>
                                 <option value="1">Channel 1 (DAPI/Blue)</option>
                                 <option value="2">Channel 2 (Green)</option>
                                 <option value="3">Channel 3 (Red)</option>
@@ -4840,6 +5122,35 @@
                                     <output id="ai-boundary-tightness-value" for="ai-boundary-tightness">0.82</output>
                                 </div>
                             </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-stardist-cell-expansion-mode">Cell expansion method</label>
+                                <select id="ai-stardist-cell-expansion-mode" aria-label="StarDist cell expansion method">
+                                    <option value="none">None (nuclei only)</option>
+                                    <option value="radial" selected>Radial scale (from nucleus center)</option>
+                                    <option value="offset">Perimeter offset (pixels)</option>
+                                </select>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-amount="radial" data-cell-expansion-for="ai-stardist-cell-expansion-mode">
+                                <label for="ai-stardist-cell-expansion-scale">Cell expansion scale</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-stardist-cell-expansion-scale" type="range" min="1" max="2.5" step="0.05" value="1.45">
+                                    <output id="ai-stardist-cell-expansion-scale-value" for="ai-stardist-cell-expansion-scale">1.45</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-amount="offset" data-cell-expansion-for="ai-stardist-cell-expansion-mode" hidden>
+                                <label for="ai-stardist-cell-expansion">Cell expansion (px)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-stardist-cell-expansion" type="range" min="0" max="20" step="1" value="5">
+                                    <output id="ai-stardist-cell-expansion-value" for="ai-stardist-cell-expansion">5</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-constrain="1" data-cell-expansion-for="ai-stardist-cell-expansion-mode">
+                                <label for="ai-stardist-cell-constrain">Constrain scale (max cell / nucleus)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-stardist-cell-constrain" type="range" min="1" max="3" step="0.05" value="1.5">
+                                    <output id="ai-stardist-cell-constrain-value" for="ai-stardist-cell-constrain">1.50</output>
+                                </div>
+                            </div>
                         </details>
                         <details id="ai-advanced-cellpose-params" class="ai-lab-disclaimer" data-detector="cellpose-segmentation" hidden>
                             <summary>Cellpose Parameters</summary>
@@ -4857,6 +5168,35 @@
                                 <div class="ai-lab-slider-row">
                                     <input id="ai-cellpose-diameter" type="range" min="6" max="80" step="1" value="30">
                                     <output id="ai-cellpose-diameter-value" for="ai-cellpose-diameter">30</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field">
+                                <label for="ai-cellpose-cell-expansion-mode">Cell expansion method</label>
+                                <select id="ai-cellpose-cell-expansion-mode" aria-label="Cellpose cell expansion method">
+                                    <option value="none">None (detected outline only)</option>
+                                    <option value="radial" selected>Radial scale (from nucleus center)</option>
+                                    <option value="offset">Perimeter offset (pixels)</option>
+                                </select>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-amount="radial" data-cell-expansion-for="ai-cellpose-cell-expansion-mode">
+                                <label for="ai-cellpose-cell-expansion-scale">Cell expansion scale</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-cellpose-cell-expansion-scale" type="range" min="1" max="2.5" step="0.05" value="1.45">
+                                    <output id="ai-cellpose-cell-expansion-scale-value" for="ai-cellpose-cell-expansion-scale">1.45</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-amount="offset" data-cell-expansion-for="ai-cellpose-cell-expansion-mode" hidden>
+                                <label for="ai-cellpose-cell-expansion">Cell expansion (px)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-cellpose-cell-expansion" type="range" min="0" max="20" step="1" value="5">
+                                    <output id="ai-cellpose-cell-expansion-value" for="ai-cellpose-cell-expansion">5</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-constrain="1" data-cell-expansion-for="ai-cellpose-cell-expansion-mode">
+                                <label for="ai-cellpose-cell-constrain">Constrain scale (max cell / nucleus)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-cellpose-cell-constrain" type="range" min="1" max="3" step="0.05" value="1.5">
+                                    <output id="ai-cellpose-cell-constrain-value" for="ai-cellpose-cell-constrain">1.50</output>
                                 </div>
                             </div>
                         </details>
@@ -4891,10 +5231,33 @@
                                 </div>
                             </div>
                             <div class="ai-lab-field">
+                                <label for="ai-qupath-cell-expansion-mode">Cell expansion method</label>
+                                <select id="ai-qupath-cell-expansion-mode" aria-label="QuPath cell expansion method">
+                                    <option value="none">None (nuclei only)</option>
+                                    <option value="watershed" selected>Watershed grow (QuPath default)</option>
+                                    <option value="radial">Radial scale (from nucleus center)</option>
+                                    <option value="offset">Perimeter offset (pixels)</option>
+                                </select>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-amount="radial" data-cell-expansion-for="ai-qupath-cell-expansion-mode" hidden>
+                                <label for="ai-qupath-cell-expansion-scale">Cell expansion scale</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-qupath-cell-expansion-scale" type="range" min="1" max="2.5" step="0.05" value="1.45">
+                                    <output id="ai-qupath-cell-expansion-scale-value" for="ai-qupath-cell-expansion-scale">1.45</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-amount="offset" data-cell-expansion-for="ai-qupath-cell-expansion-mode">
                                 <label for="ai-qupath-cell-expansion">Cell expansion (px)</label>
                                 <div class="ai-lab-slider-row">
                                     <input id="ai-qupath-cell-expansion" type="range" min="0" max="20" step="1" value="4">
                                     <output id="ai-qupath-cell-expansion-value" for="ai-qupath-cell-expansion">4</output>
+                                </div>
+                            </div>
+                            <div class="ai-lab-field" data-cell-expansion-constrain="1" data-cell-expansion-for="ai-qupath-cell-expansion-mode">
+                                <label for="ai-qupath-cell-constrain">Constrain scale (max cell / nucleus)</label>
+                                <div class="ai-lab-slider-row">
+                                    <input id="ai-qupath-cell-constrain" type="range" min="1" max="3" step="0.05" value="1.5">
+                                    <output id="ai-qupath-cell-constrain-value" for="ai-qupath-cell-constrain">1.50</output>
                                 </div>
                             </div>
                         </details>
@@ -5026,15 +5389,23 @@
             <tr><td><b>Enter</b></td><td>Seal an in-progress polygon, polyline, or wand</td></tr>
             <tr><td><b>Escape</b></td><td>Cancel an unfinished drawing or close a menu</td></tr>
             <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s) — cannot be undone</td></tr>
+            <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Classify</td></tr>
+            <tr><td><b>Classify</b> menu</td><td>Object classification (train/load/save/apply to detections); Pixel classification (train/load/thresholder on annotations); Training images</td></tr>
+            <tr><td><b>Ctrl+Shift+D</b> / <b>⌘⇧D</b></td><td>Train object classifier</td></tr>
+            <tr><td><b>Ctrl+Shift+P</b> / <b>⌘⇧P</b></td><td>Train pixel classifier</td></tr>
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">View, channels, and Z</td></tr>
-            <tr><td><b>View</b> menu</td><td>Show channel viewer; Open Z-stack controller; Multi-view grid size; add/remove row or column; reset sizes; synchronize; match resolutions; close/detach/attach</td></tr>
+            <tr><td><b>View</b> menu / right-click image</td><td>Multi-view; Cell display; Display (Show analysis, Brightness/Contrast, overlay 400%–1%); Set tool</td></tr>
             <tr><td><b>Ctrl+Shift+S</b> / <b>⌘⇧S</b> / <b>Ctrl+Alt+S</b></td><td>Synchronize multi-view pan and zoom (on by default once two panes have images)</td></tr>
-            <tr><td>Right-click image</td><td>Open View / Multi-view menu (not when the pointer is on an annotation)</td></tr>
+            <tr><td>Right-click image</td><td>Open View menu: Multi-view, Cell display, Display, Set tool (not when the pointer is on an annotation)</td></tr>
+            <tr><td>Drag locked annotation</td><td>Pan the image; annotations and detections stay in register</td></tr>
+            <tr><td>Drag channel histogram</td><td>Grab the min or max line to set Brightness &amp; Contrast window</td></tr>
             <tr><td>Right-click annotation</td><td>Lock/Unlock Position or Delete the selected annotation(s)</td></tr>
             <tr><td>Right-click channel viewer</td><td>Sync to cursor/center/off; Zoom relative to the main window; Show all channels; names; cursor</td></tr>
             <tr><td>Drag slide onto a pane</td><td>Open that slide in the target Multi-view pane</td></tr>
             <tr><td><b>Alt+Wheel</b> or <b>↑ / ↓</b></td><td>Change Z-stack focal plane</td></tr>
             <tr><td>Double-click magnification</td><td>Type an exact magnification (for example 10) and press Enter</td></tr>
+            <tr><td>Double-click channel max</td><td>Type a display-range maximum in Brightness &amp; Contrast and press Enter</td></tr>
+            <tr><td>Double-click channel min</td><td>Type a display-range minimum in Brightness &amp; Contrast and press Enter</td></tr>
             <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">Ctrl+Shift+T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
             <tr><td>Vis</td><td>Export Visible Region (native-resolution image download)</td></tr>
             <tr><td>Ant</td><td>Export Selected Annotation (native-resolution crop; select an annotation first)</td></tr>
@@ -5053,36 +5424,114 @@
     <div class="legend-resize-handle" data-edge="se"></div>
     <div class="legend-resize-handle" data-edge="sw"></div>
 </div>
-<div id="multiview-menu" class="multiview-menu" hidden role="menu" aria-label="View">
-    <button type="button" role="menuitemcheckbox" data-mv="channel-viewer" aria-checked="false">
-        <span>Show channel viewer</span>
-    </button>
-    <button type="button" role="menuitem" data-mv="z-stack-controller">
-        <span>Open Z-stack controller</span>
-    </button>
+<div id="classify-menu" class="multiview-menu" hidden role="menu" aria-label="Classify">
     <div class="multiview-item">
-        <div class="multiview-submenu-label">Set grid size <span class="multiview-accel">▶</span></div>
-        <div class="multiview-submenu" role="menu" aria-label="Set grid size">
-            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="1" data-cols="1" aria-checked="true">Grid 1 x 1 (single viewer)</button>
-            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="1" data-cols="2" aria-checked="false">Grid 1 x 2 (horizontal)</button>
-            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="2" data-cols="1" aria-checked="false">Grid 2 x 1 (vertical)</button>
-            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="2" data-cols="2" aria-checked="false">Grid 2 x 2</button>
-            <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="3" data-cols="3" aria-checked="false">Grid 3 x 3</button>
-            <button type="button" role="menuitem" data-mv="add-row">Add row</button>
-            <button type="button" role="menuitem" data-mv="add-column">Add column</button>
-            <button type="button" role="menuitem" data-mv="remove-row">Remove row</button>
-            <button type="button" role="menuitem" data-mv="remove-column">Remove column</button>
-            <button type="button" role="menuitem" data-mv="reset-sizes">Reset viewer sizes</button>
+        <div class="multiview-submenu-label">Object classification <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Object classification">
+            <button type="button" role="menuitem" data-cf="reset-detection-classifications">Reset detection classifications</button>
+            <button type="button" role="menuitem" data-cf="load-object-classifier">Load object classifier...</button>
+            <button type="button" role="menuitem" data-cf="train-object-classifier">Train object classifier... <span class="multiview-accel" data-cf-accel="object">Ctrl+Shift+D</span></button>
+            <button type="button" role="menuitem" data-cf="create-single-measurement-classifier">Create single measurement classifier...</button>
+            <button type="button" role="menuitem" data-cf="create-composite-classifier">Create composite classifier...</button>
+            <button type="button" role="menuitem" data-cf="set-cell-intensity-classifications">Set cell intensity classifications...</button>
         </div>
     </div>
-    <button type="button" role="menuitemcheckbox" data-mv="sync" aria-checked="false">
-        <span>Synchronize viewers</span>
-        <span class="multiview-accel" data-mv-accel="sync">Ctrl+Shift+S</span>
-    </button>
-    <button type="button" role="menuitem" data-mv="match">Match viewer resolutions</button>
-    <button type="button" role="menuitem" data-mv="close">Close viewer</button>
-    <button type="button" role="menuitem" data-mv="detach">Detach viewer from grid</button>
-    <button type="button" role="menuitem" data-mv="attach" hidden>Attach viewer to grid</button>
+    <div class="multiview-item">
+        <div class="multiview-submenu-label">Pixel classification <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Pixel classification">
+            <button type="button" role="menuitem" data-cf="load-pixel-classifier">Load pixel classifier...</button>
+            <button type="button" role="menuitem" data-cf="train-pixel-classifier">Train pixel classifier... <span class="multiview-accel" data-cf-accel="pixel">Ctrl+Shift+P</span></button>
+            <button type="button" role="menuitem" data-cf="create-thresholder">Create thresholder...</button>
+        </div>
+    </div>
+    <div class="multiview-item">
+        <div class="multiview-submenu-label">Training images <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Training images">
+            <button type="button" role="menuitem" data-cf="create-region-annotations">Create region annotations...</button>
+            <button type="button" role="menuitem" data-cf="create-training-image">Create training image...</button>
+            <button type="button" role="menuitem" data-cf="create-duplicate-channel-training-images">Create duplicate channel training images...</button>
+            <button type="button" role="menuitem" data-cf="split-project-train-validation-test">Split project train/validation/test...</button>
+        </div>
+    </div>
+</div>
+<div id="classify-dialog" class="classify-dialog" hidden role="dialog" aria-labelledby="classify-dialog-title" aria-hidden="true">
+    <div class="classify-dialog-titlebar" id="classify-dialog-handle">
+        <span id="classify-dialog-title">Classify</span>
+        <button type="button" id="classify-dialog-close" class="classify-dialog-close" aria-label="Close classify dialog">×</button>
+    </div>
+    <div id="classify-dialog-body" class="classify-dialog-body"></div>
+    <div id="classify-dialog-status" class="classify-dialog-status"></div>
+</div>
+<div id="multiview-menu" class="multiview-menu" hidden role="menu" aria-label="View">
+    <div class="multiview-item" data-mv-submenu="multi-view">
+        <div class="multiview-submenu-label">Multi-view <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Multi-view">
+            <button type="button" role="menuitemcheckbox" data-mv="channel-viewer" aria-checked="false">
+                <span>Show channel viewer</span>
+            </button>
+            <button type="button" role="menuitem" data-mv="z-stack-controller">
+                <span>Open Z-stack controller</span>
+            </button>
+            <div class="multiview-item">
+                <div class="multiview-submenu-label">Set grid size <span class="multiview-accel">▶</span></div>
+                <div class="multiview-submenu" role="menu" aria-label="Set grid size">
+                    <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="1" data-cols="1" aria-checked="true">Grid 1 x 1 (single viewer)</button>
+                    <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="1" data-cols="2" aria-checked="false">Grid 1 x 2 (horizontal)</button>
+                    <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="2" data-cols="1" aria-checked="false">Grid 2 x 1 (vertical)</button>
+                    <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="2" data-cols="2" aria-checked="false">Grid 2 x 2</button>
+                    <button type="button" role="menuitemradio" data-mv="grid" data-mv-grid data-rows="3" data-cols="3" aria-checked="false">Grid 3 x 3</button>
+                    <button type="button" role="menuitem" data-mv="add-row">Add row</button>
+                    <button type="button" role="menuitem" data-mv="add-column">Add column</button>
+                    <button type="button" role="menuitem" data-mv="remove-row">Remove row</button>
+                    <button type="button" role="menuitem" data-mv="remove-column">Remove column</button>
+                    <button type="button" role="menuitem" data-mv="reset-sizes">Reset viewer sizes</button>
+                </div>
+            </div>
+            <button type="button" role="menuitemcheckbox" data-mv="sync" aria-checked="false">
+                <span>Synchronize viewers</span>
+                <span class="multiview-accel" data-mv-accel="sync">Ctrl+Shift+S</span>
+            </button>
+            <button type="button" role="menuitem" data-mv="match">Match viewer resolutions</button>
+            <button type="button" role="menuitem" data-mv="close">Close viewer</button>
+            <button type="button" role="menuitem" data-mv="detach">Detach viewer from grid</button>
+            <button type="button" role="menuitem" data-mv="attach" hidden>Attach viewer to grid</button>
+        </div>
+    </div>
+    <div class="multiview-item" data-mv-submenu="cell-display">
+        <div class="multiview-submenu-label">Cell display <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Cell display">
+            <button type="button" role="menuitemradio" data-mv="cell-display" data-mode="nuclei-boundaries" aria-checked="false">Nuclei &amp; cell boundaries</button>
+            <button type="button" role="menuitemradio" data-mv="cell-display" data-mode="nuclei" aria-checked="true">Nuclei only</button>
+            <button type="button" role="menuitemradio" data-mv="cell-display" data-mode="boundaries" aria-checked="false">Cell boundaries only</button>
+            <button type="button" role="menuitemradio" data-mv="cell-display" data-mode="centroids" aria-checked="false">Cell centroids only</button>
+        </div>
+    </div>
+    <div class="multiview-item" data-mv-submenu="display">
+        <div class="multiview-submenu-label">Display <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Display">
+            <button type="button" role="menuitemcheckbox" data-mv="show-analysis" aria-checked="true">Show analysis</button>
+            <button type="button" role="menuitem" data-mv="brightness-contrast">Brightness/Contrast</button>
+            <button type="button" role="menuitemradio" data-mv="overlay-opacity" data-opacity="4" aria-checked="false">400%</button>
+            <button type="button" role="menuitemradio" data-mv="overlay-opacity" data-opacity="1" aria-checked="true">100%</button>
+            <button type="button" role="menuitemradio" data-mv="overlay-opacity" data-opacity="0.5" aria-checked="false">50%</button>
+            <button type="button" role="menuitemradio" data-mv="overlay-opacity" data-opacity="0.1" aria-checked="false">10%</button>
+            <button type="button" role="menuitemradio" data-mv="overlay-opacity" data-opacity="0.01" aria-checked="false">1%</button>
+        </div>
+    </div>
+    <div class="multiview-item" data-mv-submenu="set-tool">
+        <div class="multiview-submenu-label">Set tool <span class="multiview-accel">▶</span></div>
+        <div class="multiview-submenu" role="menu" aria-label="Set tool">
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="move" aria-checked="true">Move</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="rectangle" aria-checked="false">Rectangle</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="ellipse" aria-checked="false">Ellipse</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="line" aria-checked="false">Line</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="polygon" aria-checked="false">Polygon</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="polyline" aria-checked="false">Polyline</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="brush" aria-checked="false">Brush</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="wand" aria-checked="false">Wand</button>
+            <button type="button" role="menuitemradio" data-mv="set-tool" data-tool="points" aria-checked="false">Points</button>
+        </div>
+    </div>
 </div>
 <div id="channel-viewer" class="channel-viewer" hidden role="dialog" aria-label="Channel viewer" aria-hidden="true">
     <div class="channel-viewer-titlebar" id="channel-viewer-handle">
@@ -5102,6 +5551,8 @@
 <div id="annotation-context-menu" style="display: none; position: fixed; z-index: 100020; min-width: 190px; background: #1c1c1c; color: #fff; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.5); overflow: hidden; font-size: 0.85rem;">
     <button type="button" id="annotation-context-menu-lock-toggle"
             style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; color: #fff; cursor: pointer; font: inherit;">🔒 Lock Position</button>
+    <button type="button" id="annotation-context-menu-set-class"
+            style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; border-top: 1px solid #333; color: #fff; cursor: pointer; font: inherit;">Set class…</button>
     <button type="button" id="annotation-context-menu-delete"
             style="display: block; width: 100%; text-align: left; padding: 8px 12px; background: transparent; border: none; border-top: 1px solid #333; color: #ff8888; cursor: pointer; font: inherit;">Delete</button>
 </div>
@@ -7263,6 +7714,7 @@
         }
     });
 
+    AnnotationAdapter.bindClassifyMenu(document);
     AnnotationAdapter.bindMultiView(document, {
         beforeLayout: snapshotActiveMultiViewPane,
         onActivate: activateMultiViewPane,

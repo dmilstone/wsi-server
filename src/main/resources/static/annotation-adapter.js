@@ -356,6 +356,24 @@ class AnnotationAdapter {
         return false;
     }
 
+    static isClassifyObjectShortcut(event) {
+        if (!event) return false;
+        const key = String(event.key || "").toLowerCase();
+        return key === "d"
+            && Boolean(event.shiftKey)
+            && (Boolean(event.ctrlKey) || Boolean(event.metaKey))
+            && !event.altKey;
+    }
+
+    static isClassifyPixelShortcut(event) {
+        if (!event) return false;
+        const key = String(event.key || "").toLowerCase();
+        return key === "p"
+            && Boolean(event.shiftKey)
+            && (Boolean(event.ctrlKey) || Boolean(event.metaKey))
+            && !event.altKey;
+    }
+
     static ensureMultiviewState() {
         const state = AnnotationAdapter.multiview;
         if (!Array.isArray(state.panes) || state.panes.length === 0) {
@@ -1967,6 +1985,16 @@ class AnnotationAdapter {
                 return AnnotationAdapter.toggleChannelViewer();
             case "z-stack-controller":
                 return AnnotationAdapter.openZStackController();
+            case "cell-display":
+                return AnnotationAdapter.setCellDisplayMode(detail.mode);
+            case "show-analysis":
+                return AnnotationAdapter.setNucleiOverlaysVisible(AnnotationAdapter.aiOverlayVisible === false);
+            case "brightness-contrast":
+                return AnnotationAdapter.launchBrightnessContrastPalette();
+            case "overlay-opacity":
+                return AnnotationAdapter.setOverlayOpacity(detail.opacity);
+            case "set-tool":
+                return AnnotationAdapter.activateQuPathTool(detail.tool || detail.mode);
             case "match":
                 return AnnotationAdapter.matchViewerResolutions();
             case "close":
@@ -2001,6 +2029,30 @@ class AnnotationAdapter {
             channelViewer.setAttribute("aria-checked", String(open));
             channelViewer.classList.toggle("is-checked", open);
         }
+        const cellMode = AnnotationAdapter.normalizeCellDisplayMode(AnnotationAdapter.cellDisplayMode);
+        menu.querySelectorAll("[data-mv='cell-display']").forEach(item => {
+            const on = AnnotationAdapter.normalizeCellDisplayMode(item.dataset.mode) === cellMode;
+            item.setAttribute("aria-checked", String(on));
+            item.classList.toggle("is-checked", on);
+        });
+        const analysis = menu.querySelector("[data-mv='show-analysis']");
+        if (analysis) {
+            const showing = AnnotationAdapter.aiOverlayVisible !== false;
+            analysis.setAttribute("aria-checked", String(showing));
+            analysis.classList.toggle("is-checked", showing);
+        }
+        const overlay = Number(AnnotationAdapter.overlayOpacity);
+        menu.querySelectorAll("[data-mv='overlay-opacity']").forEach(item => {
+            const on = Math.abs(Number(item.dataset.opacity) - overlay) < 1e-6;
+            item.setAttribute("aria-checked", String(on));
+            item.classList.toggle("is-checked", on);
+        });
+        const tool = String(AnnotationAdapter.currentActiveTool || "move").toLowerCase();
+        menu.querySelectorAll("[data-mv='set-tool']").forEach(item => {
+            const on = String(item.dataset.tool || "").toLowerCase() === tool;
+            item.setAttribute("aria-checked", String(on));
+            item.classList.toggle("is-checked", on);
+        });
         const enable = (selector, on) => {
             menu.querySelectorAll(selector).forEach(item => {
                 item.disabled = !on;
@@ -2025,11 +2077,200 @@ class AnnotationAdapter {
         if (!menu) return false;
         menu.hidden = true;
         menu.style.display = "none";
-        menu.querySelectorAll?.(".multiview-item.is-open")?.forEach(item => {
-            item.classList.remove("is-open");
-        });
+        AnnotationAdapter.clearMultiViewFlyouts(menu);
         const button = doc.getElementById("view-menu-button");
         button?.setAttribute("aria-expanded", "false");
+        return true;
+    }
+
+    static preferredFlyoutSideFromPoint(x, viewW) {
+        const width = Number(viewW) > 0 ? Number(viewW) : 1280;
+        const point = Number(x);
+        if (!Number.isFinite(point)) return "right";
+        return point < width / 2 ? "right" : "left";
+    }
+
+    static chooseFlyoutSide(anchor, size, preferred = "right", pad = 8, view = {}) {
+        const width = Math.max(1, Number(size?.width) || 250);
+        const viewW = Number(view.w) > 0 ? Number(view.w) : 1280;
+        const right = Number(anchor?.right);
+        const left = Number(anchor?.left);
+        const spaceRight = viewW - pad - (Number.isFinite(right) ? right : 0);
+        const spaceLeft = (Number.isFinite(left) ? left : 0) - pad;
+        let side = preferred === "left" ? "left" : "right";
+        if (side === "right" && spaceRight < width && spaceLeft > spaceRight) side = "left";
+        else if (side === "left" && spaceLeft < width && spaceRight > spaceLeft) side = "right";
+        return side;
+    }
+
+    static placeFlyout(anchor, size, side, pad = 8, view = {}) {
+        const width = Math.max(1, Number(size?.width) || 250);
+        const height = Math.max(1, Number(size?.height) || 80);
+        const viewW = Number(view.w) > 0 ? Number(view.w) : 1280;
+        const viewH = Number(view.h) > 0 ? Number(view.h) : 800;
+        const resolved = side === "left" ? "left" : "right";
+        let left = resolved === "left"
+            ? Number(anchor?.left) - width
+            : Number(anchor?.right);
+        let top = Number(anchor?.top) - 4;
+        if (!Number.isFinite(left)) left = pad;
+        if (!Number.isFinite(top)) top = pad;
+        left = Math.max(pad, Math.min(left, viewW - width - pad));
+        top = Math.max(pad, Math.min(top, viewH - height - pad));
+        return { left, top, side: resolved };
+    }
+
+    static multiViewImmediateChild(item, className) {
+        if (!item) return null;
+        if (typeof item.querySelector === "function") {
+            try {
+                const scoped = item.querySelector(`:scope > .${className}`);
+                if (scoped) return scoped;
+            } catch (_error) { /* :scope unsupported in some test stubs */ }
+        }
+        const kids = item.children || [];
+        for (let i = 0; i < kids.length; i += 1) {
+            if (kids[i]?.classList?.contains?.(className)) return kids[i];
+        }
+        return typeof item.querySelector === "function" ? item.querySelector(`.${className}`) : null;
+    }
+
+    static multiViewImmediateSubmenu(item) {
+        return AnnotationAdapter.multiViewImmediateChild(item, "multiview-submenu");
+    }
+
+    static multiViewImmediateLabel(item) {
+        return AnnotationAdapter.multiViewImmediateChild(item, "multiview-submenu-label");
+    }
+
+    static resetMultiViewSubmenuStyle(submenu) {
+        if (!submenu?.style) return false;
+        submenu.style.display = "";
+        submenu.style.left = "";
+        submenu.style.top = "";
+        submenu.style.right = "";
+        submenu.style.bottom = "";
+        submenu.style.position = "";
+        return true;
+    }
+
+    static clearMultiViewFlyouts(menu) {
+        if (!menu?.querySelectorAll) return false;
+        if (menu._flyoutLeaveTimer && typeof clearTimeout === "function") {
+            clearTimeout(menu._flyoutLeaveTimer);
+            menu._flyoutLeaveTimer = 0;
+        }
+        menu.querySelectorAll(".multiview-item").forEach(item => {
+            item.classList?.remove?.("is-open", "is-flyout-open", "is-flyout-left", "is-flyout-right");
+            AnnotationAdapter.resetMultiViewSubmenuStyle(AnnotationAdapter.multiViewImmediateSubmenu(item));
+        });
+        return true;
+    }
+
+    static collectMultiViewFlyoutPath(menu, item) {
+        const path = [];
+        let current = item;
+        while (current && menu?.contains?.(current)) {
+            if (current.classList?.contains?.("multiview-item")) path.push(current);
+            current = current.parentElement;
+        }
+        return path;
+    }
+
+    static setMultiViewFlyoutPath(menu, item) {
+        if (!menu?.querySelectorAll) return false;
+        if (menu._flyoutLeaveTimer && typeof clearTimeout === "function") {
+            clearTimeout(menu._flyoutLeaveTimer);
+            menu._flyoutLeaveTimer = 0;
+        }
+        const path = AnnotationAdapter.collectMultiViewFlyoutPath(menu, item);
+        const onPath = new Set(path);
+        menu.querySelectorAll(".multiview-item").forEach(node => {
+            const open = onPath.has(node);
+            node.classList?.toggle?.("is-flyout-open", open);
+            if (!open) {
+                node.classList?.remove?.("is-open", "is-flyout-left", "is-flyout-right");
+                const submenu = AnnotationAdapter.multiViewImmediateSubmenu(node);
+                if (submenu?.style) submenu.style.display = "none";
+            }
+        });
+        path.forEach(node => AnnotationAdapter.layoutMultiViewSubmenu(node, menu));
+        return path.length > 0;
+    }
+
+    static layoutMultiViewSubmenu(item, menu) {
+        const submenu = AnnotationAdapter.multiViewImmediateSubmenu(item);
+        const label = AnnotationAdapter.multiViewImmediateLabel(item);
+        if (!submenu || !label) return false;
+        if (!item.classList?.contains("is-flyout-open")) return false;
+        const view = {
+            w: typeof window !== "undefined" ? window.innerWidth : 1280,
+            h: typeof window !== "undefined" ? window.innerHeight : 800
+        };
+        const pad = 8;
+        const preferred = menu?.dataset?.flyoutPreferred || "right";
+        submenu.style.position = "fixed";
+        submenu.style.display = "block";
+        const size = {
+            width: Math.max(160, submenu.offsetWidth || 250),
+            height: Math.max(40, submenu.offsetHeight || 80)
+        };
+        const anchor = typeof label.getBoundingClientRect === "function"
+            ? label.getBoundingClientRect()
+            : { left: 0, right: size.width, top: 0, bottom: 24 };
+        const side = AnnotationAdapter.chooseFlyoutSide(anchor, size, preferred, pad, view);
+        const pos = AnnotationAdapter.placeFlyout(anchor, size, side, pad, view);
+        submenu.style.left = `${pos.left}px`;
+        submenu.style.top = `${pos.top}px`;
+        submenu.style.right = "auto";
+        submenu.style.bottom = "auto";
+        item.classList?.toggle?.("is-flyout-left", pos.side === "left");
+        item.classList?.toggle?.("is-flyout-right", pos.side === "right");
+        return pos;
+    }
+
+    static layoutMultiViewFlyouts(menu) {
+        if (!menu?.querySelectorAll) return false;
+        menu.querySelectorAll(".multiview-item.is-flyout-open").forEach(item => {
+            AnnotationAdapter.layoutMultiViewSubmenu(item, menu);
+        });
+        return true;
+    }
+
+    static bindMultiViewFlyoutLayout(menu) {
+        if (!menu || menu.dataset?.flyoutLayoutBound === "1") return Boolean(menu);
+        const openPath = event => {
+            const item = event.target?.closest?.(".multiview-item");
+            if (!item || !menu.contains(item)) return;
+            AnnotationAdapter.setMultiViewFlyoutPath(menu, item);
+        };
+        menu.addEventListener("mouseover", openPath);
+        menu.addEventListener("focusin", openPath);
+        menu.addEventListener("mouseleave", event => {
+            const next = event.relatedTarget;
+            if (next && typeof menu.contains === "function" && menu.contains(next)) return;
+            const later = typeof setTimeout === "function" ? setTimeout : null;
+            if (!later) {
+                AnnotationAdapter.clearMultiViewFlyouts(menu);
+                return;
+            }
+            menu._flyoutLeaveTimer = later(() => {
+                menu._flyoutLeaveTimer = 0;
+                if (menu.hidden) return;
+                AnnotationAdapter.clearMultiViewFlyouts(menu);
+            }, 120);
+        });
+        const view = typeof window !== "undefined" ? window : null;
+        if (view && typeof view.addEventListener === "function" && !view._wsiFlyoutResizeBound) {
+            view.addEventListener("resize", () => {
+                const open = typeof document !== "undefined"
+                    ? document.getElementById("multiview-menu")
+                    : null;
+                if (open && !open.hidden) AnnotationAdapter.layoutMultiViewFlyouts(open);
+            });
+            view._wsiFlyoutResizeBound = true;
+        }
+        if (menu.dataset) menu.dataset.flyoutLayoutBound = "1";
         return true;
     }
 
@@ -2038,11 +2279,14 @@ class AnnotationAdapter {
         const menu = doc?.getElementById?.("multiview-menu");
         if (!menu) return false;
         AnnotationAdapter.syncMultiViewMenuState(doc);
+        AnnotationAdapter.clearMultiViewFlyouts(menu);
         menu.hidden = false;
         menu.style.display = "block";
         const pad = 8;
+        const viewW = typeof window !== "undefined" ? window.innerWidth : 1280;
+        const viewH = typeof window !== "undefined" ? window.innerHeight : 800;
         const width = menu.offsetWidth || 260;
-        const height = menu.offsetHeight || 320;
+        const height = menu.offsetHeight || 160;
         let x = Number(event?.clientX);
         let y = Number(event?.clientY);
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
@@ -2051,10 +2295,13 @@ class AnnotationAdapter {
             x = rect ? rect.left : 16;
             y = rect ? rect.bottom + 4 : 48;
         }
-        x = Math.max(pad, Math.min(x, window.innerWidth - width - pad));
-        y = Math.max(pad, Math.min(y, window.innerHeight - height - pad));
+        const preferred = AnnotationAdapter.preferredFlyoutSideFromPoint(x, viewW);
+        menu.dataset.flyoutPreferred = preferred;
+        x = Math.max(pad, Math.min(x, viewW - width - pad));
+        y = Math.max(pad, Math.min(y, viewH - height - pad));
         menu.style.left = `${x}px`;
         menu.style.top = `${y}px`;
+        AnnotationAdapter.bindMultiViewFlyoutLayout(menu);
         doc.getElementById("view-menu-button")?.setAttribute("aria-expanded", "true");
         return true;
     }
@@ -2070,7 +2317,9 @@ class AnnotationAdapter {
                 const submenuLabel = event.target?.closest?.(".multiview-submenu-label");
                 if (submenuLabel) {
                     event.preventDefault();
-                    submenuLabel.parentElement?.classList.toggle("is-open");
+                    const item = submenuLabel.closest?.(".multiview-item") || submenuLabel.parentElement;
+                    item?.classList.add("is-open");
+                    AnnotationAdapter.setMultiViewFlyoutPath(menu, item);
                     return;
                 }
                 const item = event.target?.closest?.("[data-mv]");
@@ -2079,7 +2328,10 @@ class AnnotationAdapter {
                 const command = item.getAttribute("data-mv");
                 AnnotationAdapter.runMultiViewCommand(command, {
                     rows: item.dataset.rows,
-                    cols: item.dataset.cols
+                    cols: item.dataset.cols,
+                    mode: item.dataset.mode,
+                    opacity: item.dataset.opacity,
+                    tool: item.dataset.tool
                 });
                 AnnotationAdapter.closeMultiViewMenu(doc);
             });
@@ -2120,6 +2372,1504 @@ class AnnotationAdapter {
         if (accel) accel.textContent = AnnotationAdapter.multiViewAcceleratorLabel();
         AnnotationAdapter.syncMultiViewMenuState(doc);
         AnnotationAdapter.multiview.bound = true;
+        return true;
+    }
+
+    static CLASSIFY_DEFAULT_CLASSES = [
+        { name: "Tumor", color: "#e6194b" },
+        { name: "Stroma", color: "#3cb44b" },
+        { name: "Immune cells", color: "#4363d8" },
+        { name: "Necrosis", color: "#911eb4" },
+        { name: "Other", color: "#f58231" },
+        { name: "Ignore*", color: "#808080" }
+    ];
+
+    static CLASSIFY_OBJECT_FEATURE_KEYS = ["area", "perimeter", "circularity", "aspect"];
+    static CLASSIFY_PIXEL_FEATURE_KEYS = ["mean0", "mean1", "mean2", "intensity"];
+    static CLASSIFY_OBJECT_STORE = "wsi.objectClassifiers";
+    static CLASSIFY_PIXEL_STORE = "wsi.pixelClassifiers";
+    static CLASSIFY_SPLIT_STORE = "wsi.classifySplit";
+    static CLASSIFY_TRAINING_STORE = "wsi.classifyTrainingImages";
+
+    static classify = {
+        dialogKind: "",
+        lastObjectModel: null,
+        lastPixelModel: null
+    };
+
+    static classifyStorage() {
+        if (AnnotationAdapter._classifyStorageApi) return AnnotationAdapter._classifyStorageApi;
+        const memory = new Map();
+        AnnotationAdapter._classifyStorageApi = {
+            getItem(key) {
+                try {
+                    if (typeof localStorage !== "undefined") return localStorage.getItem(key);
+                } catch (_error) { /* fall through */ }
+                return memory.has(key) ? memory.get(key) : null;
+            },
+            setItem(key, value) {
+                try {
+                    if (typeof localStorage !== "undefined") {
+                        localStorage.setItem(key, value);
+                        return;
+                    }
+                } catch (_error) { /* fall through */ }
+                memory.set(key, value);
+            },
+            removeItem(key) {
+                try {
+                    if (typeof localStorage !== "undefined") localStorage.removeItem(key);
+                } catch (_error) { /* ignore */ }
+                memory.delete(key);
+            }
+        };
+        return AnnotationAdapter._classifyStorageApi;
+    }
+
+    static classifyReadJson(key, fallback) {
+        try {
+            const raw = AnnotationAdapter.classifyStorage().getItem(key);
+            if (!raw) return fallback;
+            const parsed = JSON.parse(raw);
+            return parsed == null ? fallback : parsed;
+        } catch (_error) {
+            return fallback;
+        }
+    }
+
+    static classifyWriteJson(key, value) {
+        AnnotationAdapter.classifyStorage().setItem(key, JSON.stringify(value));
+        return value;
+    }
+
+    static classifyClassList() {
+        return AnnotationAdapter.CLASSIFY_DEFAULT_CLASSES.map(item => ({ ...item }));
+    }
+
+    static classifyClassColor(name) {
+        const label = String(name || "").trim();
+        if (!label) return "";
+        const found = AnnotationAdapter.CLASSIFY_DEFAULT_CLASSES.find(item =>
+            item.name.toLowerCase() === label.toLowerCase()
+        );
+        if (found) return found.color;
+        let hash = 0;
+        for (let i = 0; i < label.length; i += 1) hash = ((hash << 5) - hash) + label.charCodeAt(i);
+        const hue = Math.abs(hash) % 360;
+        return `hsl(${hue} 70% 50%)`;
+    }
+
+    static classifyIsIgnored(name) {
+        return /^\s*ignore\*/i.test(String(name || ""));
+    }
+
+    static classifyHexFill(color, alpha = 0.22) {
+        const source = String(color || "");
+        const hex = source.match(/^#([0-9a-f]{6})$/i);
+        if (hex) {
+            const n = parseInt(hex[1], 16);
+            return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+        }
+        if (source.startsWith("rgb(")) return source.replace("rgb", "rgba").replace(")", `, ${alpha})`);
+        if (source.startsWith("hsl(")) return source.replace("hsl", "hsla").replace(")", ` / ${alpha})`);
+        return `rgba(255,213,74,${alpha})`;
+    }
+
+    static listDetections() {
+        const cells = AnnotationAdapter.localizedCellObjects;
+        if (Array.isArray(cells) && cells.length) return cells;
+        return Array.isArray(AnnotationAdapter.lastNucleiCircles) ? AnnotationAdapter.lastNucleiCircles : [];
+    }
+
+    static CELL_BOUNDARY_SCALE = 1.45;
+    static cellDisplayMode = "nuclei";
+
+    static normalizeCellDisplayMode(mode) {
+        const raw = String(mode || "").trim().toLowerCase().replace(/[_ ]+/g, "-");
+        if (raw === "nuclei-boundaries" || raw === "nuclei-&-cell-boundaries"
+            || raw === "nuclei-and-cell-boundaries" || raw === "both") {
+            return "nuclei-boundaries";
+        }
+        if (raw === "boundaries" || raw === "cell-boundaries" || raw === "cells") {
+            return "boundaries";
+        }
+        if (raw === "centroids" || raw === "centroid" || raw === "cell-centroids") {
+            return "centroids";
+        }
+        return "nuclei";
+    }
+
+    static cellDisplayShowsNuclei(mode = AnnotationAdapter.cellDisplayMode) {
+        const current = AnnotationAdapter.normalizeCellDisplayMode(mode);
+        return current === "nuclei" || current === "nuclei-boundaries";
+    }
+
+    static cellDisplayShowsBoundaries(mode = AnnotationAdapter.cellDisplayMode) {
+        const current = AnnotationAdapter.normalizeCellDisplayMode(mode);
+        return current === "boundaries" || current === "nuclei-boundaries";
+    }
+
+    static cellDisplayShowsCentroids(mode = AnnotationAdapter.cellDisplayMode) {
+        return AnnotationAdapter.normalizeCellDisplayMode(mode) === "centroids";
+    }
+
+    static expandDetectionRing(ring, factor = AnnotationAdapter.CELL_BOUNDARY_SCALE) {
+        const pts = Array.isArray(ring) ? ring.map(pt => ({
+            x: Number(pt?.x ?? pt?.[0]),
+            y: Number(pt?.y ?? pt?.[1])
+        })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y)) : [];
+        if (pts.length < 2) return [];
+        const center = pts.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+        center.x /= pts.length;
+        center.y /= pts.length;
+        const scale = Number(factor) > 0 ? Number(factor) : AnnotationAdapter.CELL_BOUNDARY_SCALE;
+        return pts.map(pt => ({
+            x: center.x + (pt.x - center.x) * scale,
+            y: center.y + (pt.y - center.y) * scale
+        }));
+    }
+
+    static normalizeCellExpansionMode(value, fallback = "radial") {
+        const raw = String(value || "").trim().toLowerCase();
+        if (!raw || raw === "auto") return fallback;
+        if (raw === "none" || raw === "off" || raw === "nuclei") return "none";
+        if (raw === "offset" || raw === "perimeter" || raw === "pixels" || raw === "px") return "offset";
+        if (raw === "watershed" || raw === "qupath" || raw === "label") return "watershed";
+        if (raw === "radial" || raw === "scale") return "radial";
+        return fallback;
+    }
+
+    static constrainDetectionRing(nucleusRing, cellRing, constrainScale = 1.5) {
+        const seed = Array.isArray(nucleusRing) ? nucleusRing : [];
+        const grown = Array.isArray(cellRing) ? cellRing : [];
+        const cap = Number(constrainScale);
+        if (grown.length < 2 || !(cap > 1) || seed.length < 2) return grown;
+        const center = seed.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+        center.x /= seed.length;
+        center.y /= seed.length;
+        return grown.map((pt, index) => {
+            const origin = seed[Math.min(index, seed.length - 1)];
+            const nucleusRadius = Math.hypot(origin.x - center.x, origin.y - center.y);
+            const cellRadius = Math.hypot(pt.x - center.x, pt.y - center.y);
+            const limit = Math.max(nucleusRadius, nucleusRadius * cap);
+            if (cellRadius > limit && cellRadius > 1e-6) {
+                const t = limit / cellRadius;
+                return { x: center.x + (pt.x - center.x) * t, y: center.y + (pt.y - center.y) * t };
+            }
+            return pt;
+        });
+    }
+
+    static expandDetectionRingOffset(ring, pixels = 5, constrainScale = 1.5) {
+        const pts = Array.isArray(ring) ? ring.map(pt => ({
+            x: Number(pt?.x ?? pt?.[0]),
+            y: Number(pt?.y ?? pt?.[1])
+        })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y)) : [];
+        if (pts.length < 2) return [];
+        const center = pts.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+        center.x /= pts.length;
+        center.y /= pts.length;
+        const amount = Number(pixels);
+        const grown = pts.map(pt => {
+            const dx = pt.x - center.x;
+            const dy = pt.y - center.y;
+            const radius = Math.hypot(dx, dy);
+            const ux = radius > 1e-6 ? dx / radius : 1;
+            const uy = radius > 1e-6 ? dy / radius : 0;
+            return {
+                x: pt.x + ux * (Number.isFinite(amount) ? amount : 5),
+                y: pt.y + uy * (Number.isFinite(amount) ? amount : 5)
+            };
+        });
+        return AnnotationAdapter.constrainDetectionRing(pts, grown, constrainScale);
+    }
+
+    static expandDetectionCell(ring, mode, amount, constrainScale = 1.5) {
+        const resolved = AnnotationAdapter.normalizeCellExpansionMode(mode, "radial");
+        if (resolved === "none") return [];
+        if (resolved === "offset" || resolved === "watershed") {
+            return AnnotationAdapter.expandDetectionRingOffset(ring, amount, constrainScale);
+        }
+        return AnnotationAdapter.constrainDetectionRing(
+            ring,
+            AnnotationAdapter.expandDetectionRing(ring, amount),
+            constrainScale
+        );
+    }
+
+    static detectionCellRing(detection) {
+        const raw = detection?.cellVertices || detection?.cellRing || detection?.cytoplasm
+            || detection?.cytoVertices || detection?.cell;
+        if (raw) {
+            const ring = AnnotationAdapter.nucleusVertexList({ vertices: raw });
+            if (ring.length >= 3) return ring;
+        }
+        const mode = AnnotationAdapter.normalizeCellExpansionMode(detection?.cellExpansionMode, "");
+        if (mode === "none") return [];
+        if (mode === "offset" || mode === "radial" || mode === "watershed") {
+            return AnnotationAdapter.expandDetectionCell(
+                AnnotationAdapter.detectionRing(detection),
+                mode,
+                detection?.cellExpansion,
+                detection?.cellConstrainScale
+            );
+        }
+        return AnnotationAdapter.expandDetectionRing(
+            AnnotationAdapter.detectionRing(detection),
+            AnnotationAdapter.CELL_BOUNDARY_SCALE
+        );
+    }
+
+    static detectionCentroidRadius(detection) {
+        const radius = Number(detection?.radius ?? detection?.r);
+        if (Number.isFinite(radius) && radius > 0) return Math.max(2, radius * 0.22);
+        const ring = AnnotationAdapter.detectionRing(detection);
+        const center = AnnotationAdapter.detectionCentroid(detection);
+        if (center && ring.length) {
+            const mean = ring.reduce((sum, pt) => sum + Math.hypot(pt.x - center.x, pt.y - center.y), 0)
+                / ring.length;
+            return Math.max(2, mean * 0.22);
+        }
+        return 4;
+    }
+
+    static setCellDisplayMode(mode) {
+        AnnotationAdapter.cellDisplayMode = AnnotationAdapter.normalizeCellDisplayMode(mode);
+        AnnotationAdapter.refreshCellDisplayOverlays();
+        return AnnotationAdapter.cellDisplayMode;
+    }
+
+    static refreshCellDisplayOverlays() {
+        const list = AnnotationAdapter.listDetections();
+        if (list.length && AnnotationAdapter.aiOverlayVisible !== false) {
+            try {
+                AnnotationAdapter.paintNucleiCircleOverlays(AnnotationAdapter.viewer, list);
+            } catch (_error) { /* viewer may be absent in tests */ }
+        }
+        if (typeof AnnotationAdapter.renderSynchronizedCellObjects === "function") {
+            try { AnnotationAdapter.renderSynchronizedCellObjects(); } catch (_error) { /* optional */ }
+        }
+        try { AnnotationAdapter.syncMultiViewMenuState(); } catch (_error) { /* optional */ }
+        return AnnotationAdapter.cellDisplayMode;
+    }
+
+    static detectionOverlayNodes(index) {
+        const nodes = [];
+        const svg = AnnotationAdapter.aiNucleusOverlayElements?.[0];
+        if (svg && typeof svg.querySelectorAll === "function") {
+            nodes.push(...svg.querySelectorAll(`[data-nucleus-index="${index}"]`));
+        }
+        const part = AnnotationAdapter.aiNucleusOverlayParts?.[index];
+        if (part && !nodes.includes(part)) nodes.push(part);
+        return nodes;
+    }
+
+    static detectionRadius(detection) {
+        const stated = Number(detection?.radius ?? detection?.r);
+        if (Number.isFinite(stated) && stated > 0) return stated;
+        const center = AnnotationAdapter.detectionCentroid(detection);
+        const ring = AnnotationAdapter.detectionRing(detection);
+        if (!center || !ring.length) return 12;
+        const mean = ring.reduce((sum, pt) => sum + Math.hypot(pt.x - center.x, pt.y - center.y), 0)
+            / ring.length;
+        return Math.max(2, mean);
+    }
+
+    static detectionCentroid(detection) {
+        const x = Number(detection?.centerX ?? detection?.cx ?? detection?.x);
+        const y = Number(detection?.centerY ?? detection?.cy ?? detection?.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+        const ring = AnnotationAdapter.nucleusVertexList?.(detection)
+            || (Array.isArray(detection?.imageCoordinates)
+                ? detection.imageCoordinates.map(pt => ({
+                    x: Number(pt?.x ?? pt?.[0]),
+                    y: Number(pt?.y ?? pt?.[1])
+                }))
+                : []);
+        if (!ring.length) return null;
+        const sum = ring.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+        return { x: sum.x / ring.length, y: sum.y / ring.length };
+    }
+
+    static detectionRing(detection) {
+        if (typeof AnnotationAdapter.nucleusVertexList === "function") {
+            const ring = AnnotationAdapter.nucleusVertexList(detection);
+            if (Array.isArray(ring) && ring.length) return ring;
+        }
+        if (Array.isArray(detection?.vertices)) {
+            return detection.vertices.map(pt => ({
+                x: Number(pt?.x ?? pt?.[0]),
+                y: Number(pt?.y ?? pt?.[1])
+            })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        }
+        if (Array.isArray(detection?.imageCoordinates)) {
+            return detection.imageCoordinates.map(pt => ({
+                x: Number(pt?.x ?? pt?.[0]),
+                y: Number(pt?.y ?? pt?.[1])
+            })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        }
+        const center = AnnotationAdapter.detectionCentroid(detection);
+        const radius = Math.max(4, Number(detection?.radius ?? detection?.r) || 12);
+        if (!center) return [];
+        return [
+            { x: center.x - radius, y: center.y },
+            { x: center.x, y: center.y - radius },
+            { x: center.x + radius, y: center.y },
+            { x: center.x, y: center.y + radius }
+        ];
+    }
+
+    static polygonAreaPerimeter(ring) {
+        const pts = Array.isArray(ring) ? ring : [];
+        if (pts.length < 3) {
+            return { area: 0, perimeter: 0 };
+        }
+        let area = 0;
+        let perimeter = 0;
+        for (let i = 0; i < pts.length; i += 1) {
+            const a = pts[i];
+            const b = pts[(i + 1) % pts.length];
+            area += (a.x * b.y) - (b.x * a.y);
+            perimeter += Math.hypot(b.x - a.x, b.y - a.y);
+        }
+        return { area: Math.abs(area) / 2, perimeter };
+    }
+
+    static objectDetectionFeatures(detection) {
+        const ring = AnnotationAdapter.detectionRing(detection);
+        const { area, perimeter } = AnnotationAdapter.polygonAreaPerimeter(ring);
+        const xs = ring.map(pt => pt.x);
+        const ys = ring.map(pt => pt.y);
+        const width = xs.length ? Math.max(...xs) - Math.min(...xs) : 0;
+        const height = ys.length ? Math.max(...ys) - Math.min(...ys) : 0;
+        const circularity = perimeter > 0 ? (4 * Math.PI * area) / (perimeter * perimeter) : 0;
+        const aspect = height > 0 ? width / height : 0;
+        return {
+            area,
+            perimeter,
+            circularity,
+            aspect,
+            intensity: Number(detection?.intensity ?? detection?.key)
+        };
+    }
+
+    static pointInRing(x, y, ring) {
+        let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+            const xi = ring[i].x;
+            const yi = ring[i].y;
+            const xj = ring[j].x;
+            const yj = ring[j].y;
+            const intersect = ((yi > y) !== (yj > y))
+                && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    static annotationImageRing(annotation) {
+        const verts = Array.isArray(annotation?.vertices) ? annotation.vertices : [];
+        const fromVerts = verts.map(pt => ({
+            x: Number(pt?.image?.x ?? pt?.x ?? pt?.[0]),
+            y: Number(pt?.image?.y ?? pt?.y ?? pt?.[1])
+        })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        if (fromVerts.length >= 3) return fromVerts;
+        const x = Number(annotation?.x);
+        const y = Number(annotation?.y);
+        const width = Number(annotation?.width);
+        const height = Number(annotation?.height);
+        if (![x, y, width, height].every(Number.isFinite)) return [];
+        return [
+            { x, y },
+            { x: x + width, y },
+            { x: x + width, y: y + height },
+            { x, y: y + height }
+        ];
+    }
+
+    static detectionInsideAnnotation(detection, annotation) {
+        const center = AnnotationAdapter.detectionCentroid(detection);
+        const ring = AnnotationAdapter.annotationImageRing(annotation);
+        if (!center || ring.length < 3) return false;
+        return AnnotationAdapter.pointInRing(center.x, center.y, ring);
+    }
+
+    static annotationPathClass(annotation) {
+        if (!annotation) return "";
+        if (annotation.pathClass) return String(annotation.pathClass);
+        const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        const meta = engine?.adapter?.metadataById?.get?.(annotation.id) || annotation;
+        if (meta?.pathClass) return String(meta.pathClass);
+        const bodies = Array.isArray(meta?.bodies) ? meta.bodies : [];
+        const body = bodies.find(item => item && (item.pathClass || item.purpose === "classification"));
+        return body?.pathClass ? String(body.pathClass) : "";
+    }
+
+    static bodiesWithPathClass(bodies, pathClass) {
+        const list = Array.isArray(bodies) ? bodies.filter(item => item && typeof item === "object") : [];
+        const next = list.filter(item => item.purpose !== "classification" && !item.pathClass);
+        if (pathClass) next.push({ purpose: "classification", pathClass: String(pathClass) });
+        return next;
+    }
+
+    static setAnnotationPathClass(id, pathClass) {
+        const label = String(pathClass || "").trim();
+        const list = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        const annotation = list.find(item => item?.id === id);
+        if (annotation) annotation.pathClass = label || null;
+        const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        const adapter = engine?.adapter;
+        if (adapter?.metadataById) {
+            const existing = adapter.metadataById.get(id) || { id };
+            const color = label
+                ? AnnotationAdapter.classifyClassColor(label)
+                : (existing.color || "#ffd54a");
+            const updated = {
+                ...existing,
+                pathClass: label || null,
+                color,
+                bodies: AnnotationAdapter.bodiesWithPathClass(existing.bodies, label)
+            };
+            adapter.metadataById.set(id, updated);
+            const backendId = adapter.backendIdByClientId?.get?.(id);
+            if (backendId) adapter.metadataById.set(backendId, updated);
+            try { adapter.collectionEdited?.(); } catch (_error) { /* persist later */ }
+        }
+        AnnotationAdapter.styleAnnotationByClass(id);
+        AnnotationAdapter.refreshAnnotationListPanel();
+        return Boolean(label);
+    }
+
+    static styleAnnotationByClass(id) {
+        const doc = typeof document !== "undefined" ? document : null;
+        const node = doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`);
+        if (!node) return false;
+        AnnotationAdapter.applyOsdAnnotationStyle(node, {
+            filled: String(node.getAttribute("fill") || "") !== "none"
+        });
+        return true;
+    }
+
+    static setSelectedAnnotationClass(pathClass) {
+        const ids = AnnotationAdapter.selectedAnnotationIds();
+        ids.forEach(id => AnnotationAdapter.setAnnotationPathClass(id, pathClass));
+        return ids.length;
+    }
+
+    static resetDetectionClassifications() {
+        const detections = AnnotationAdapter.listDetections();
+        detections.forEach(detection => {
+            detection.pathClass = null;
+            if (detection.classification && detection.classification !== "nucleus") {
+                detection.classification = "nucleus";
+            }
+        });
+        AnnotationAdapter.applyDetectionClassColors();
+        return detections.length;
+    }
+
+    static applyDetectionClassColors() {
+        const detections = AnnotationAdapter.listDetections();
+        const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
+        detections.forEach((detection, index) => {
+            const label = detection.pathClass || "";
+            const color = label
+                ? AnnotationAdapter.classifyClassColor(label)
+                : "#00FF00";
+            const fill = AnnotationAdapter.classifyHexFill(color, 0.18);
+            const nodes = AnnotationAdapter.detectionOverlayNodes(index);
+            if (!nodes.length && parts[index]) nodes.push(parts[index]);
+            nodes.forEach(node => {
+                node?.setAttribute?.("stroke", color);
+                node?.setAttribute?.("fill", fill);
+            });
+        });
+        if (typeof AnnotationAdapter.renderSynchronizedCellObjects === "function") {
+            try { AnnotationAdapter.renderSynchronizedCellObjects(); } catch (_error) { /* optional */ }
+        }
+        return detections.filter(item => item.pathClass).length;
+    }
+
+    static featureVector(features, keys) {
+        return keys.map(key => {
+            const value = Number(features?.[key]);
+            return Number.isFinite(value) ? value : 0;
+        });
+    }
+
+    static trainNearestCentroid(samples, keys) {
+        const groups = new Map();
+        samples.forEach(sample => {
+            const label = String(sample.label || "").trim();
+            if (!label || AnnotationAdapter.classifyIsIgnored(label)) return;
+            if (!groups.has(label)) groups.set(label, []);
+            groups.get(label).push(AnnotationAdapter.featureVector(sample.features, keys));
+        });
+        const centroids = [];
+        groups.forEach((rows, label) => {
+            const mean = keys.map((_, index) =>
+                rows.reduce((sum, row) => sum + row[index], 0) / rows.length
+            );
+            centroids.push({ label, mean, count: rows.length });
+        });
+        return { type: "nearest-centroid", keys, centroids };
+    }
+
+    static applyNearestCentroid(model, features) {
+        const keys = model?.keys || [];
+        const vector = AnnotationAdapter.featureVector(features, keys);
+        let best = "";
+        let bestScore = Infinity;
+        (model?.centroids || []).forEach(entry => {
+            const dist = (entry.mean || []).reduce((sum, value, index) => {
+                const delta = vector[index] - Number(value || 0);
+                return sum + delta * delta;
+            }, 0);
+            if (dist < bestScore) {
+                bestScore = dist;
+                best = entry.label;
+            }
+        });
+        return best;
+    }
+
+    static collectObjectTrainingSamples() {
+        const detections = AnnotationAdapter.listDetections();
+        const annotations = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        const samples = [];
+        detections.forEach(detection => {
+            let label = detection.pathClass || "";
+            if (!label) {
+                const host = annotations.find(annotation =>
+                    AnnotationAdapter.annotationPathClass(annotation)
+                    && !AnnotationAdapter.classifyIsIgnored(AnnotationAdapter.annotationPathClass(annotation))
+                    && AnnotationAdapter.detectionInsideAnnotation(detection, annotation)
+                );
+                label = host ? AnnotationAdapter.annotationPathClass(host) : "";
+            }
+            if (!label || AnnotationAdapter.classifyIsIgnored(label)) return;
+            samples.push({
+                label,
+                features: AnnotationAdapter.objectDetectionFeatures(detection)
+            });
+        });
+        return samples;
+    }
+
+    static applyObjectClassifierModel(model, detections = AnnotationAdapter.listDetections()) {
+        if (!model?.centroids?.length) return 0;
+        let applied = 0;
+        detections.forEach(detection => {
+            const label = AnnotationAdapter.applyNearestCentroid(
+                model,
+                AnnotationAdapter.objectDetectionFeatures(detection)
+            );
+            if (!label) return;
+            detection.pathClass = label;
+            detection.classification = label;
+            applied += 1;
+        });
+        AnnotationAdapter.applyDetectionClassColors();
+        return applied;
+    }
+
+    static applyPixelClassifierModel(model, annotations = AnnotationAdapter.savedAnnotationsArray) {
+        const list = Array.isArray(annotations) ? annotations : [];
+        if (!model?.centroids?.length) return 0;
+        let applied = 0;
+        list.forEach(annotation => {
+            const features = AnnotationAdapter.annotationPixelFeatures(annotation);
+            const label = AnnotationAdapter.applyNearestCentroid(model, features);
+            if (!label || !annotation?.id) return;
+            AnnotationAdapter.setAnnotationPathClass(annotation.id, label);
+            applied += 1;
+        });
+        return applied;
+    }
+
+    static async classifySampleAnnotationPixels(annotation) {
+        const imageId = AnnotationAdapter.currentImageId;
+        if (!annotation || !imageId || typeof fetch !== "function") return annotation;
+        const ring = AnnotationAdapter.annotationImageRing(annotation);
+        const center = ring.length
+            ? {
+                x: ring.reduce((sum, pt) => sum + pt.x, 0) / ring.length,
+                y: ring.reduce((sum, pt) => sum + pt.y, 0) / ring.length
+            }
+            : {
+                x: Number(annotation.x) + Number(annotation.width || 0) / 2,
+                y: Number(annotation.y) + Number(annotation.height || 0) / 2
+            };
+        if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) return annotation;
+        const pane = AnnotationAdapter.activeMultiviewPane?.();
+        const series = pane?.currentSeries ?? AnnotationAdapter.currentSeries ?? 0;
+        const url = `/api/images/${encodeURIComponent(imageId)}/pixel-block`
+            + `?x=${Math.floor(center.x)}&y=${Math.floor(center.y)}&size=32&series=${series}`;
+        try {
+            const response = await fetch(url, { credentials: "same-origin" });
+            if (!response.ok) return annotation;
+            const block = await response.json();
+            const channels = Math.max(1, Number(block?.channels) || 1);
+            const values = Array.isArray(block?.values) ? block.values : [];
+            const plane = Math.max(1, values.length / channels);
+            const means = [];
+            for (let channel = 0; channel < Math.min(3, channels); channel += 1) {
+                let sum = 0;
+                let count = 0;
+                const offset = channel * plane;
+                for (let i = 0; i < plane; i += 1) {
+                    const value = Number(values[offset + i]);
+                    if (!Number.isFinite(value)) continue;
+                    sum += value;
+                    count += 1;
+                }
+                means[channel] = count ? sum / count : 0;
+            }
+            annotation.pixelMeans = means;
+            annotation.intensity = means.reduce((sum, value) => sum + value, 0) / Math.max(1, means.length);
+        } catch (_error) {
+            /* geometry features remain available */
+        }
+        return annotation;
+    }
+
+    static async classifyEnrichAnnotations(annotations) {
+        const list = Array.isArray(annotations) ? annotations : [];
+        await Promise.all(list.map(item => AnnotationAdapter.classifySampleAnnotationPixels(item)));
+        return list;
+    }
+
+    static annotationPixelFeatures(annotation) {
+        const ring = AnnotationAdapter.annotationImageRing(annotation);
+        const { area, perimeter } = AnnotationAdapter.polygonAreaPerimeter(ring);
+        const xs = ring.map(pt => pt.x);
+        const ys = ring.map(pt => pt.y);
+        const width = xs.length ? Math.max(...xs) - Math.min(...xs) : Number(annotation?.width) || 0;
+        const height = ys.length ? Math.max(...ys) - Math.min(...ys) : Number(annotation?.height) || 0;
+        return {
+            mean0: Number(annotation?.pixelMeans?.[0]) || area,
+            mean1: Number(annotation?.pixelMeans?.[1]) || perimeter,
+            mean2: Number(annotation?.pixelMeans?.[2]) || width,
+            intensity: Number(annotation?.intensity) || (height > 0 ? width / height : area)
+        };
+    }
+
+    static collectPixelTrainingSamples() {
+        const annotations = Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : [];
+        return annotations
+            .map(annotation => ({
+                label: AnnotationAdapter.annotationPathClass(annotation),
+                features: AnnotationAdapter.annotationPixelFeatures(annotation)
+            }))
+            .filter(sample => sample.label && !AnnotationAdapter.classifyIsIgnored(sample.label));
+    }
+
+    static savedClassifiers(kind) {
+        const key = kind === "pixel"
+            ? AnnotationAdapter.CLASSIFY_PIXEL_STORE
+            : AnnotationAdapter.CLASSIFY_OBJECT_STORE;
+        const list = AnnotationAdapter.classifyReadJson(key, []);
+        return Array.isArray(list) ? list : [];
+    }
+
+    static saveClassifier(kind, name, model) {
+        const label = String(name || "").trim();
+        if (!label || !model) return null;
+        const key = kind === "pixel"
+            ? AnnotationAdapter.CLASSIFY_PIXEL_STORE
+            : AnnotationAdapter.CLASSIFY_OBJECT_STORE;
+        const list = AnnotationAdapter.savedClassifiers(kind).filter(item => item.name !== label);
+        const record = {
+            name: label,
+            kind,
+            model,
+            savedAt: new Date().toISOString()
+        };
+        list.push(record);
+        AnnotationAdapter.classifyWriteJson(key, list);
+        return record;
+    }
+
+    static loadClassifier(kind, name) {
+        return AnnotationAdapter.savedClassifiers(kind).find(item => item.name === name) || null;
+    }
+
+    static applySingleMeasurementClassifier(options = {}) {
+        const feature = String(options.feature || "area");
+        const threshold = Number(options.threshold);
+        const above = String(options.above || "Tumor");
+        const below = String(options.below || "Stroma");
+        if (!Number.isFinite(threshold)) return 0;
+        const detections = AnnotationAdapter.listDetections();
+        detections.forEach(detection => {
+            const features = AnnotationAdapter.objectDetectionFeatures(detection);
+            const value = Number(features[feature]);
+            detection.pathClass = value >= threshold ? above : below;
+            detection.classification = detection.pathClass;
+        });
+        AnnotationAdapter.applyDetectionClassColors();
+        const model = {
+            type: "single-measurement",
+            feature,
+            threshold,
+            above,
+            below
+        };
+        if (options.saveAs) AnnotationAdapter.saveClassifier("object", options.saveAs, model);
+        AnnotationAdapter.classify.lastObjectModel = model;
+        return detections.length;
+    }
+
+    static applyCompositeClassifier(names = []) {
+        const models = names
+            .map(name => AnnotationAdapter.loadClassifier("object", name)?.model)
+            .filter(Boolean);
+        let applied = 0;
+        models.forEach(model => {
+            if (model.type === "single-measurement") {
+                applied = AnnotationAdapter.applySingleMeasurementClassifier(model);
+            } else {
+                applied = AnnotationAdapter.applyObjectClassifierModel(model);
+            }
+        });
+        if (models.length && names.length) {
+            AnnotationAdapter.classify.lastObjectModel = {
+                type: "composite",
+                names: names.slice()
+            };
+        }
+        return applied;
+    }
+
+    static applyCellIntensityClassifications(options = {}) {
+        const feature = String(options.feature || "area");
+        const t1 = Number(options.t1);
+        const t2 = Number(options.t2);
+        const t3 = Number(options.t3);
+        const detections = AnnotationAdapter.listDetections();
+        detections.forEach(detection => {
+            const value = Number(AnnotationAdapter.objectDetectionFeatures(detection)[feature]);
+            const base = detection.pathClass && !AnnotationAdapter.classifyIsIgnored(detection.pathClass)
+                ? detection.pathClass.replace(/: (Negative|1\+|2\+|3\+)$/i, "")
+                : "Tumor";
+            let suffix = "Negative";
+            if (Number.isFinite(t3) && value >= t3) suffix = "3+";
+            else if (Number.isFinite(t2) && value >= t2) suffix = "2+";
+            else if (Number.isFinite(t1) && value >= t1) suffix = "1+";
+            detection.pathClass = `${base}: ${suffix}`;
+            detection.classification = detection.pathClass;
+        });
+        AnnotationAdapter.applyDetectionClassColors();
+        return detections.length;
+    }
+
+    static applyThresholder(options = {}) {
+        const feature = String(options.feature || "intensity");
+        const threshold = Number(options.threshold);
+        const above = String(options.above || "Tumor");
+        const below = String(options.below || "Ignore*");
+        if (!Number.isFinite(threshold)) return 0;
+        const selected = new Set(AnnotationAdapter.selectedAnnotationIds());
+        const annotations = (AnnotationAdapter.savedAnnotationsArray || []).filter(item =>
+            !selected.size || selected.has(item.id)
+        );
+        annotations.forEach(annotation => {
+            const features = AnnotationAdapter.annotationPixelFeatures(annotation);
+            const value = Number(features[feature] ?? features.intensity);
+            const label = value >= threshold ? above : below;
+            if (!AnnotationAdapter.classifyIsIgnored(label)) {
+                AnnotationAdapter.setAnnotationPathClass(annotation.id, label);
+            } else {
+                AnnotationAdapter.setAnnotationPathClass(annotation.id, "");
+            }
+        });
+        const model = { type: "thresholder", feature, threshold, above, below };
+        if (options.saveAs) AnnotationAdapter.saveClassifier("pixel", options.saveAs, model);
+        AnnotationAdapter.classify.lastPixelModel = model;
+        return annotations.length;
+    }
+
+    static createRegionAnnotations(options = {}) {
+        const width = Math.max(8, Number(options.width) || 512);
+        const height = Math.max(8, Number(options.height) || 512);
+        const count = Math.max(1, Math.min(16, Number(options.count) || 1));
+        const pathClass = String(options.pathClass || "").trim();
+        const metadata = AnnotationAdapter.imageMetadata || {};
+        const imageWidth = Number(metadata.width) || 0;
+        const imageHeight = Number(metadata.height) || 0;
+        const viewer = AnnotationAdapter.viewer;
+        let originX = imageWidth > 0 ? (imageWidth - width) / 2 : 0;
+        let originY = imageHeight > 0 ? (imageHeight - height) / 2 : 0;
+        if (viewer?.viewport?.viewportToImageCoordinates) {
+            try {
+                const center = viewer.viewport.viewportToImageCoordinates(viewer.viewport.getCenter(true));
+                if (Number.isFinite(center?.x)) originX = center.x - width / 2;
+                if (Number.isFinite(center?.y)) originY = center.y - height / 2;
+            } catch (_error) { /* keep image center */ }
+        }
+        const created = [];
+        for (let index = 0; index < count; index += 1) {
+            const x = originX + (index % 4) * (width + 16);
+            const y = originY + Math.floor(index / 4) * (height + 16);
+            const shape = {
+                type: "rectangle",
+                skipNamePanel: true,
+                start: { image: { x, y } },
+                current: { image: { x: x + width, y: y + height } }
+            };
+            const entry = AnnotationAdapter.commitQuPathShape(shape);
+            if (entry?.id && pathClass) AnnotationAdapter.setAnnotationPathClass(entry.id, pathClass);
+            if (entry) created.push(entry);
+        }
+        return created;
+    }
+
+    static createTrainingImageRecord(name = "training") {
+        const annotations = (AnnotationAdapter.savedAnnotationsArray || []).filter(item =>
+            AnnotationAdapter.annotationPathClass(item)
+        );
+        const imageId = AnnotationAdapter.currentImageId;
+        const record = {
+            name: String(name || "training").trim() || "training",
+            imageId,
+            regions: annotations.map(item => ({
+                id: item.id,
+                pathClass: AnnotationAdapter.annotationPathClass(item),
+                x: item.x,
+                y: item.y,
+                width: item.width,
+                height: item.height
+            })),
+            savedAt: new Date().toISOString()
+        };
+        const list = AnnotationAdapter.classifyReadJson(AnnotationAdapter.CLASSIFY_TRAINING_STORE, []);
+        const next = (Array.isArray(list) ? list : []).filter(item => item.name !== record.name);
+        next.push(record);
+        AnnotationAdapter.classifyWriteJson(AnnotationAdapter.CLASSIFY_TRAINING_STORE, next);
+        return record;
+    }
+
+    static createDuplicateChannelTrainingImages() {
+        const metadata = AnnotationAdapter.imageMetadata || {};
+        const display = AnnotationAdapter.displayController?.getDisplay?.();
+        const channels = Array.isArray(display?.channels) ? display.channels : [];
+        const count = Math.max(Number(metadata.channels) || 0, channels.length, 1);
+        const base = AnnotationAdapter.createTrainingImageRecord(
+            `${AnnotationAdapter.currentImageId || "image"}-channels`
+        );
+        base.channels = Array.from({ length: count }, (_item, index) => ({
+            index,
+            name: channels[index]?.name || `Channel ${index + 1}`
+        }));
+        const list = AnnotationAdapter.classifyReadJson(AnnotationAdapter.CLASSIFY_TRAINING_STORE, []);
+        const next = (Array.isArray(list) ? list : []).filter(item => item.name !== base.name);
+        next.push(base);
+        AnnotationAdapter.classifyWriteJson(AnnotationAdapter.CLASSIFY_TRAINING_STORE, next);
+        return base;
+    }
+
+    static splitProjectTrainValidationTest(imageIds = [], ratios = { train: 0.7, validation: 0.15, test: 0.15 }) {
+        const ids = (imageIds || []).filter(Boolean);
+        const shuffled = ids.slice();
+        for (let i = shuffled.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const swap = shuffled[i];
+            shuffled[i] = shuffled[j];
+            shuffled[j] = swap;
+        }
+        const trainCount = Math.round(shuffled.length * Number(ratios.train || 0.7));
+        const valCount = Math.round(shuffled.length * Number(ratios.validation || 0.15));
+        const split = {
+            train: shuffled.slice(0, trainCount),
+            validation: shuffled.slice(trainCount, trainCount + valCount),
+            test: shuffled.slice(trainCount + valCount)
+        };
+        AnnotationAdapter.classifyWriteJson(AnnotationAdapter.CLASSIFY_SPLIT_STORE, split);
+        return split;
+    }
+
+    static classifyProjectImageIds(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        return Array.from(doc?.querySelectorAll?.(".image-button[data-image-id]") || [])
+            .map(button => button.dataset.imageId)
+            .filter(Boolean);
+    }
+
+    static classifyAccelLabel(kind) {
+        const platform = String(
+            (typeof navigator !== "undefined" && (navigator.userAgentData?.platform || navigator.platform)) || ""
+        );
+        const mac = /mac/i.test(platform);
+        if (kind === "pixel") return mac ? "⌘⇧P" : "Ctrl+Shift+P";
+        return mac ? "⌘⇧D" : "Ctrl+Shift+D";
+    }
+
+    static classifyClassOptionsHtml(selected = "") {
+        const current = String(selected || "");
+        const extras = current && !AnnotationAdapter.CLASSIFY_DEFAULT_CLASSES.some(item => item.name === current)
+            ? [{ name: current, color: AnnotationAdapter.classifyClassColor(current) }]
+            : [];
+        return AnnotationAdapter.classifyClassList().concat(extras).map(item =>
+            `<option value="${item.name}" ${item.name === current ? "selected" : ""}>${item.name}</option>`
+        ).join("");
+    }
+
+    static setClassifyStatus(text) {
+        const node = typeof document !== "undefined"
+            ? document.getElementById("classify-dialog-status")
+            : null;
+        if (node) node.textContent = String(text || "");
+        AnnotationAdapter.multiview?.hooks?.status?.(text);
+        return text;
+    }
+
+    static closeClassifyDialog(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const dialog = doc?.getElementById?.("classify-dialog");
+        if (!dialog) return false;
+        dialog.hidden = true;
+        dialog.setAttribute("aria-hidden", "true");
+        AnnotationAdapter.classify.dialogKind = "";
+        return true;
+    }
+
+    static openClassifyDialog(kind, root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const dialog = doc?.getElementById?.("classify-dialog");
+        const title = doc?.getElementById?.("classify-dialog-title");
+        const body = doc?.getElementById?.("classify-dialog-body");
+        if (!dialog || !body) return false;
+        AnnotationAdapter.classify.dialogKind = kind;
+        const spec = AnnotationAdapter.classifyDialogSpec(kind);
+        if (title) title.textContent = spec.title;
+        body.innerHTML = spec.html;
+        dialog.hidden = false;
+        dialog.setAttribute("aria-hidden", "false");
+        AnnotationAdapter.bindClassifyDialogActions(doc);
+        AnnotationAdapter.bindPaletteEdgeResize
+            ? AnnotationAdapter.ensurePaletteResizeHandles?.(dialog)
+            : null;
+        try {
+            AnnotationAdapter.bindMultiviewDetachedDrag?.(dialog);
+        } catch (_error) { /* drag optional */ }
+        AnnotationAdapter.setClassifyStatus(spec.status || "");
+        return true;
+    }
+
+    static classifyDialogSpec(kind) {
+        const objectNames = AnnotationAdapter.savedClassifiers("object").map(item => item.name);
+        const pixelNames = AnnotationAdapter.savedClassifiers("pixel").map(item => item.name);
+        const classOptions = AnnotationAdapter.classifyClassOptionsHtml();
+        const objectSelect = objectNames.length
+            ? objectNames.map(name => `<option value="${name}">${name}</option>`).join("")
+            : `<option value="">(none saved)</option>`;
+        const pixelSelect = pixelNames.length
+            ? pixelNames.map(name => `<option value="${name}">${name}</option>`).join("")
+            : `<option value="">(none saved)</option>`;
+        const featureOptions = AnnotationAdapter.CLASSIFY_OBJECT_FEATURE_KEYS
+            .map(key => `<option value="${key}">${key}</option>`).join("");
+        if (kind === "train-object-classifier") {
+            return {
+                title: "Train object classifier",
+                status: `${AnnotationAdapter.listDetections().length} detections · ${AnnotationAdapter.collectObjectTrainingSamples().length} labeled for training`,
+                html: `<p>Assign classes to annotations that contain detections (right-click ▸ Set class), then train. The classifier is applied to all detections.</p>`
+                    + `<label>Class for selected annotations</label><select id="classify-class-name">${classOptions}</select>`
+                    + `<label>Save as</label><input id="classify-save-name" value="object-classifier">`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="set-class">Set class</button>`
+                    + `<button type="button" data-cf-act="train-object">Train</button>`
+                    + `<button type="button" data-cf-act="apply-object">Apply</button>`
+                    + `<button type="button" data-cf-act="save-object">Save</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "load-object-classifier") {
+            return {
+                title: "Load object classifier",
+                html: `<p>Apply a saved object classifier to the current detections.</p>`
+                    + `<label>Classifier</label><select id="classify-saved-name">${objectSelect}</select>`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="apply-saved-object">Apply</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "create-single-measurement-classifier") {
+            return {
+                title: "Create single measurement classifier",
+                html: `<p>Threshold one detection measurement.</p>`
+                    + `<label>Feature</label><select id="classify-feature">${featureOptions}</select>`
+                    + `<label>Threshold</label><input id="classify-threshold" type="number" value="100">`
+                    + `<label>Above</label><select id="classify-above">${classOptions}</select>`
+                    + `<label>Below</label><select id="classify-below">${AnnotationAdapter.classifyClassOptionsHtml("Stroma")}</select>`
+                    + `<label>Save as</label><input id="classify-save-name" value="single-measurement">`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="apply-single">Apply</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "create-composite-classifier") {
+            return {
+                title: "Create composite classifier",
+                html: `<p>Apply saved object classifiers in order.</p>`
+                    + `<label>Classifiers (one per line)</label>`
+                    + `<textarea id="classify-composite-names" rows="5">${objectNames.join("\n")}</textarea>`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="apply-composite">Apply</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "set-cell-intensity-classifications") {
+            return {
+                title: "Set cell intensity classifications",
+                html: `<p>Add Negative / 1+ / 2+ / 3+ suffixes using one measurement (H-score style).</p>`
+                    + `<label>Feature</label><select id="classify-feature">${featureOptions}</select>`
+                    + `<label>Threshold 1+</label><input id="classify-t1" type="number" value="50">`
+                    + `<label>Threshold 2+</label><input id="classify-t2" type="number" value="100">`
+                    + `<label>Threshold 3+</label><input id="classify-t3" type="number" value="150">`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="apply-intensity">Apply</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "train-pixel-classifier") {
+            return {
+                title: "Train pixel classifier",
+                status: `${AnnotationAdapter.collectPixelTrainingSamples().length} classified annotations available for training`,
+                html: `<p>Classified annotations are the training regions. The trained model is applied to annotations (not detections).</p>`
+                    + `<label>Class for selected annotations</label><select id="classify-class-name">${classOptions}</select>`
+                    + `<label>Save as</label><input id="classify-save-name" value="pixel-classifier">`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="set-class">Set class</button>`
+                    + `<button type="button" data-cf-act="train-pixel">Train</button>`
+                    + `<button type="button" data-cf-act="apply-pixel">Apply to annotations</button>`
+                    + `<button type="button" data-cf-act="save-pixel">Save</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "load-pixel-classifier") {
+            return {
+                title: "Load pixel classifier",
+                html: `<p>Apply a saved pixel classifier to annotations.</p>`
+                    + `<label>Classifier</label><select id="classify-saved-name">${pixelSelect}</select>`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="apply-saved-pixel">Apply</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "create-thresholder") {
+            return {
+                title: "Create thresholder",
+                html: `<p>Classify selected annotations (or all annotations) by a single feature threshold.</p>`
+                    + `<label>Feature</label><select id="classify-feature"><option value="intensity">intensity</option><option value="mean0">mean0</option><option value="area">area (mean0 fallback)</option></select>`
+                    + `<label>Threshold</label><input id="classify-threshold" type="number" value="100">`
+                    + `<label>Above</label><select id="classify-above">${classOptions}</select>`
+                    + `<label>Below</label><select id="classify-below">${AnnotationAdapter.classifyClassOptionsHtml("Ignore*")}</select>`
+                    + `<label>Save as</label><input id="classify-save-name" value="thresholder">`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="apply-thresholder">Apply</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "create-region-annotations") {
+            return {
+                title: "Create region annotations",
+                html: `<p>Place fixed-size rectangles at the viewer center for training.</p>`
+                    + `<label>Width (px)</label><input id="classify-region-width" type="number" value="512">`
+                    + `<label>Height (px)</label><input id="classify-region-height" type="number" value="512">`
+                    + `<label>Count</label><input id="classify-region-count" type="number" value="1" min="1" max="16">`
+                    + `<label>Class</label><select id="classify-class-name">${classOptions}</select>`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="create-regions">Create</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "create-training-image") {
+            return {
+                title: "Create training image",
+                html: `<p>Store classified regions from this slide as a training-image record.</p>`
+                    + `<label>Name</label><input id="classify-save-name" value="training">`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="create-training">Create</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "create-duplicate-channel-training-images") {
+            return {
+                title: "Create duplicate channel training images",
+                html: `<p>Duplicate the current training regions once per channel so multiplex classifiers can be trained separately and later composed.</p>`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="create-channel-training">Create</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "split-project-train-validation-test") {
+            return {
+                title: "Split project train/validation/test",
+                html: `<p>Randomly assign catalog slides to training, validation, and test sets (70 / 15 / 15).</p>`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="split-project">Split</button>`
+                    + `</div>`
+            };
+        }
+        if (kind === "set-annotation-class") {
+            return {
+                title: "Set class",
+                html: `<label>Class</label><select id="classify-class-name">${classOptions}</select>`
+                    + `<div class="classify-dialog-actions">`
+                    + `<button type="button" data-cf-act="set-class">Set class</button>`
+                    + `</div>`
+            };
+        }
+        return { title: "Classify", html: "" };
+    }
+
+    static classifyDialogValue(id, root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        return doc?.getElementById?.(id)?.value;
+    }
+
+    static bindClassifyDialogActions(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const body = doc?.getElementById?.("classify-dialog-body");
+        if (!body || body.dataset.classifyActionsBound === "1") {
+            return Boolean(body);
+        }
+        body.addEventListener("click", event => {
+            const button = event.target?.closest?.("[data-cf-act]");
+            if (!button) return;
+            event.preventDefault();
+            AnnotationAdapter.runClassifyDialogAction(button.getAttribute("data-cf-act"), doc);
+        });
+        body.dataset.classifyActionsBound = "1";
+        return true;
+    }
+
+    static trainObjectClassifierFromUi() {
+        const samples = AnnotationAdapter.collectObjectTrainingSamples();
+        const model = AnnotationAdapter.trainNearestCentroid(
+            samples,
+            AnnotationAdapter.CLASSIFY_OBJECT_FEATURE_KEYS
+        );
+        AnnotationAdapter.classify.lastObjectModel = model;
+        return { samples, model };
+    }
+
+    static trainPixelClassifierFromUi() {
+        const samples = AnnotationAdapter.collectPixelTrainingSamples();
+        const model = AnnotationAdapter.trainNearestCentroid(
+            samples,
+            AnnotationAdapter.CLASSIFY_PIXEL_FEATURE_KEYS
+        );
+        AnnotationAdapter.classify.lastPixelModel = model;
+        return { samples, model };
+    }
+
+    static runClassifyDialogAction(action, root = null) {
+        const act = String(action || "");
+        if (act === "set-class") {
+            const count = AnnotationAdapter.setSelectedAnnotationClass(
+                AnnotationAdapter.classifyDialogValue("classify-class-name", root)
+            );
+            AnnotationAdapter.setClassifyStatus(`Set class on ${count} annotation(s).`);
+            return count;
+        }
+        if (act === "train-object") {
+            const { samples, model } = AnnotationAdapter.trainObjectClassifierFromUi();
+            const applied = AnnotationAdapter.applyObjectClassifierModel(model);
+            AnnotationAdapter.setClassifyStatus(
+                `Trained ${model.centroids.length} class(es) from ${samples.length} objects; applied to ${applied} detections.`
+            );
+            return applied;
+        }
+        if (act === "apply-object") {
+            const applied = AnnotationAdapter.applyObjectClassifierModel(
+                AnnotationAdapter.classify.lastObjectModel
+            );
+            AnnotationAdapter.setClassifyStatus(`Applied object classifier to ${applied} detections.`);
+            return applied;
+        }
+        if (act === "save-object") {
+            const record = AnnotationAdapter.saveClassifier(
+                "object",
+                AnnotationAdapter.classifyDialogValue("classify-save-name", root),
+                AnnotationAdapter.classify.lastObjectModel
+            );
+            AnnotationAdapter.setClassifyStatus(record ? `Saved ${record.name}.` : "Train before saving.");
+            return Boolean(record);
+        }
+        if (act === "apply-saved-object") {
+            const loaded = AnnotationAdapter.loadClassifier(
+                "object",
+                AnnotationAdapter.classifyDialogValue("classify-saved-name", root)
+            );
+            AnnotationAdapter.classify.lastObjectModel = loaded?.model || null;
+            const applied = loaded?.model
+                ? (loaded.model.type === "single-measurement"
+                    ? AnnotationAdapter.applySingleMeasurementClassifier(loaded.model)
+                    : loaded.model.type === "composite"
+                        ? AnnotationAdapter.applyCompositeClassifier(loaded.model.names)
+                        : AnnotationAdapter.applyObjectClassifierModel(loaded.model))
+                : 0;
+            AnnotationAdapter.setClassifyStatus(loaded ? `Applied ${loaded.name} to ${applied} detections.` : "No classifier selected.");
+            return applied;
+        }
+        if (act === "apply-single") {
+            const applied = AnnotationAdapter.applySingleMeasurementClassifier({
+                feature: AnnotationAdapter.classifyDialogValue("classify-feature", root),
+                threshold: AnnotationAdapter.classifyDialogValue("classify-threshold", root),
+                above: AnnotationAdapter.classifyDialogValue("classify-above", root),
+                below: AnnotationAdapter.classifyDialogValue("classify-below", root),
+                saveAs: AnnotationAdapter.classifyDialogValue("classify-save-name", root)
+            });
+            AnnotationAdapter.setClassifyStatus(`Applied single-measurement classifier to ${applied} detections.`);
+            return applied;
+        }
+        if (act === "apply-composite") {
+            const names = String(AnnotationAdapter.classifyDialogValue("classify-composite-names", root) || "")
+                .split(/\n/)
+                .map(name => name.trim())
+                .filter(Boolean);
+            const applied = AnnotationAdapter.applyCompositeClassifier(names);
+            if (names.length) {
+                AnnotationAdapter.saveClassifier("object", names.join("+") || "composite", {
+                    type: "composite",
+                    names
+                });
+            }
+            AnnotationAdapter.setClassifyStatus(`Applied composite classifier (${names.length} step(s)) to ${applied} detections.`);
+            return applied;
+        }
+        if (act === "apply-intensity") {
+            const applied = AnnotationAdapter.applyCellIntensityClassifications({
+                feature: AnnotationAdapter.classifyDialogValue("classify-feature", root),
+                t1: AnnotationAdapter.classifyDialogValue("classify-t1", root),
+                t2: AnnotationAdapter.classifyDialogValue("classify-t2", root),
+                t3: AnnotationAdapter.classifyDialogValue("classify-t3", root)
+            });
+            AnnotationAdapter.setClassifyStatus(`Set intensity classes on ${applied} detections.`);
+            return applied;
+        }
+        if (act === "train-pixel") {
+            void AnnotationAdapter.classifyEnrichAnnotations(AnnotationAdapter.savedAnnotationsArray || [])
+                .then(() => {
+                    const { samples, model } = AnnotationAdapter.trainPixelClassifierFromUi();
+                    const applied = AnnotationAdapter.applyPixelClassifierModel(model);
+                    AnnotationAdapter.setClassifyStatus(
+                        `Trained ${model.centroids.length} class(es) from ${samples.length} annotations; applied to ${applied} annotations.`
+                    );
+                });
+            return true;
+        }
+        if (act === "apply-pixel" || act === "apply-saved-pixel") {
+            if (act === "apply-saved-pixel") {
+                const loaded = AnnotationAdapter.loadClassifier(
+                    "pixel",
+                    AnnotationAdapter.classifyDialogValue("classify-saved-name", root)
+                );
+                AnnotationAdapter.classify.lastPixelModel = loaded?.model || null;
+            }
+            const model = AnnotationAdapter.classify.lastPixelModel;
+            const applied = model?.type === "thresholder"
+                ? AnnotationAdapter.applyThresholder(model)
+                : AnnotationAdapter.applyPixelClassifierModel(model);
+            AnnotationAdapter.setClassifyStatus(`Applied pixel classifier to ${applied} annotations.`);
+            return applied;
+        }
+        if (act === "save-pixel") {
+            const record = AnnotationAdapter.saveClassifier(
+                "pixel",
+                AnnotationAdapter.classifyDialogValue("classify-save-name", root),
+                AnnotationAdapter.classify.lastPixelModel
+            );
+            AnnotationAdapter.setClassifyStatus(record ? `Saved ${record.name}.` : "Train before saving.");
+            return Boolean(record);
+        }
+        if (act === "apply-thresholder") {
+            const applied = AnnotationAdapter.applyThresholder({
+                feature: AnnotationAdapter.classifyDialogValue("classify-feature", root),
+                threshold: AnnotationAdapter.classifyDialogValue("classify-threshold", root),
+                above: AnnotationAdapter.classifyDialogValue("classify-above", root),
+                below: AnnotationAdapter.classifyDialogValue("classify-below", root),
+                saveAs: AnnotationAdapter.classifyDialogValue("classify-save-name", root)
+            });
+            AnnotationAdapter.setClassifyStatus(`Thresholder classified ${applied} annotation(s).`);
+            return applied;
+        }
+        if (act === "create-regions") {
+            const created = AnnotationAdapter.createRegionAnnotations({
+                width: AnnotationAdapter.classifyDialogValue("classify-region-width", root),
+                height: AnnotationAdapter.classifyDialogValue("classify-region-height", root),
+                count: AnnotationAdapter.classifyDialogValue("classify-region-count", root),
+                pathClass: AnnotationAdapter.classifyDialogValue("classify-class-name", root)
+            });
+            AnnotationAdapter.setClassifyStatus(`Created ${created.length} region annotation(s).`);
+            return created.length;
+        }
+        if (act === "create-training") {
+            const record = AnnotationAdapter.createTrainingImageRecord(
+                AnnotationAdapter.classifyDialogValue("classify-save-name", root)
+            );
+            AnnotationAdapter.setClassifyStatus(`Training image "${record.name}" with ${record.regions.length} region(s).`);
+            return record;
+        }
+        if (act === "create-channel-training") {
+            const record = AnnotationAdapter.createDuplicateChannelTrainingImages();
+            AnnotationAdapter.setClassifyStatus(
+                `Stored ${record.channels?.length || 0} channel training image(s) from ${record.regions.length} region(s).`
+            );
+            return record;
+        }
+        if (act === "split-project") {
+            const split = AnnotationAdapter.splitProjectTrainValidationTest(
+                AnnotationAdapter.classifyProjectImageIds(root)
+            );
+            AnnotationAdapter.setClassifyStatus(
+                `Split ${split.train.length} train / ${split.validation.length} validation / ${split.test.length} test.`
+            );
+            return split;
+        }
+        return false;
+    }
+
+    static runClassifyCommand(command, root = null) {
+        const action = String(command || "");
+        if (action === "reset-detection-classifications") {
+            const count = AnnotationAdapter.resetDetectionClassifications();
+            AnnotationAdapter.setClassifyStatus(`Reset ${count} detection classification(s).`);
+            return count;
+        }
+        return AnnotationAdapter.openClassifyDialog(action, root);
+    }
+
+    static closeClassifyMenu(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("classify-menu");
+        if (!menu) return false;
+        menu.hidden = true;
+        menu.style.display = "none";
+        menu.querySelectorAll?.(".multiview-item.is-open")?.forEach(item => item.classList.remove("is-open"));
+        doc?.getElementById?.("classify-menu-button")?.setAttribute("aria-expanded", "false");
+        return true;
+    }
+
+    static openClassifyMenu(event, root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("classify-menu");
+        if (!menu) return false;
+        menu.querySelectorAll?.("[data-cf-accel='object']")?.forEach(node => {
+            node.textContent = AnnotationAdapter.classifyAccelLabel("object");
+        });
+        menu.querySelectorAll?.("[data-cf-accel='pixel']")?.forEach(node => {
+            node.textContent = AnnotationAdapter.classifyAccelLabel("pixel");
+        });
+        menu.hidden = false;
+        menu.style.display = "block";
+        const button = doc?.getElementById?.("classify-menu-button");
+        const rect = button?.getBoundingClientRect?.();
+        const width = menu.offsetWidth || 280;
+        const height = menu.offsetHeight || 160;
+        const preferredLeft = rect
+            ? Number(rect.right) - width
+            : Number(event?.clientX) || 16;
+        const preferredTop = rect
+            ? Number(rect.bottom) + 4
+            : Number(event?.clientY) || 48;
+        const x = Math.max(8, Math.min(preferredLeft, (window.innerWidth || 800) - width - 8));
+        const y = Math.max(8, Math.min(preferredTop, (window.innerHeight || 600) - height - 8));
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+        AnnotationAdapter.layoutClassifyMenu(menu);
+        button?.setAttribute("aria-expanded", "true");
+        return true;
+    }
+
+    static layoutClassifyMenu(menu) {
+        if (!menu?.style) return false;
+        const width = menu.offsetWidth || 280;
+        const height = menu.offsetHeight || 160;
+        const left = parseFloat(menu.style.left) || 0;
+        const top = parseFloat(menu.style.top) || 0;
+        const maxLeft = Math.max(8, (window.innerWidth || 800) - width - 8);
+        const maxTop = Math.max(8, (window.innerHeight || 600) - height - 8);
+        menu.style.left = `${Math.max(8, Math.min(left, maxLeft))}px`;
+        menu.style.top = `${Math.max(8, Math.min(top, maxTop))}px`;
+        return true;
+    }
+
+    static bindClassifyMenu(root = null) {
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        const menu = doc?.getElementById?.("classify-menu");
+        const button = doc?.getElementById?.("classify-menu-button");
+        if (menu && menu.dataset.classifyBound !== "1") {
+            menu.addEventListener("click", event => {
+                const submenuLabel = event.target?.closest?.(".multiview-submenu-label");
+                if (submenuLabel) {
+                    event.preventDefault();
+                    const item = submenuLabel.parentElement;
+                    menu.querySelectorAll?.(".multiview-item.is-open")?.forEach(openItem => {
+                        if (openItem !== item) openItem.classList.remove("is-open");
+                    });
+                    item?.classList.toggle("is-open");
+                    AnnotationAdapter.layoutClassifyMenu(menu);
+                    return;
+                }
+                const item = event.target?.closest?.("[data-cf]");
+                if (!item) return;
+                event.preventDefault();
+                AnnotationAdapter.runClassifyCommand(item.getAttribute("data-cf"), doc);
+                AnnotationAdapter.closeClassifyMenu(doc);
+            });
+            menu.dataset.classifyBound = "1";
+        }
+        if (button && button.dataset.classifyBound !== "1") {
+            button.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (menu && !menu.hidden && menu.style.display !== "none") {
+                    AnnotationAdapter.closeClassifyMenu(doc);
+                } else {
+                    const rect = button.getBoundingClientRect?.();
+                    AnnotationAdapter.openClassifyMenu({
+                        clientX: rect ? rect.left : 16,
+                        clientY: rect ? rect.bottom + 4 : 48
+                    }, doc);
+                }
+            });
+            button.dataset.classifyBound = "1";
+        }
+        const closeBtn = doc?.getElementById?.("classify-dialog-close");
+        if (closeBtn && closeBtn.dataset.classifyBound !== "1") {
+            closeBtn.addEventListener("click", () => AnnotationAdapter.closeClassifyDialog(doc));
+            closeBtn.dataset.classifyBound = "1";
+        }
+        const setClassBtn = doc?.getElementById?.("annotation-context-menu-set-class");
+        if (setClassBtn && setClassBtn.dataset.classifyBound !== "1") {
+            setClassBtn.addEventListener("click", event => {
+                event.preventDefault();
+                AnnotationAdapter.closeAnnotationContextMenu?.(doc);
+                AnnotationAdapter.runClassifyCommand("set-annotation-class", doc);
+            });
+            setClassBtn.dataset.classifyBound = "1";
+        }
+        if (doc && doc.documentElement.dataset.classifyMenuDismiss !== "1") {
+            doc.addEventListener("click", event => {
+                if (event.target?.closest?.("#classify-menu, #classify-menu-button, #classify-dialog")) return;
+                AnnotationAdapter.closeClassifyMenu(doc);
+            }, true);
+            doc.addEventListener("keydown", event => {
+                if (event.key === "Escape") {
+                    AnnotationAdapter.closeClassifyMenu(doc);
+                    AnnotationAdapter.closeClassifyDialog(doc);
+                }
+            });
+            doc.documentElement.dataset.classifyMenuDismiss = "1";
+        }
         return true;
     }
 
@@ -4772,7 +6522,10 @@ class AnnotationAdapter {
             icon.textContent = AnnotationAdapter.annotationListTypeGlyph(annotation.type);
             const label = doc.createElement("span");
             label.className = "qp-annotation-list-name";
-            label.textContent = AnnotationAdapter.annotationListDisplayName(annotation);
+            const pathClass = AnnotationAdapter.annotationPathClass(annotation);
+            label.textContent = pathClass
+                ? `${AnnotationAdapter.annotationListDisplayName(annotation)} [${pathClass}]`
+                : AnnotationAdapter.annotationListDisplayName(annotation);
             if (typeof li.append === "function") li.append(icon, label);
             else {
                 li.appendChild(icon);
@@ -6074,6 +7827,8 @@ class AnnotationAdapter {
     static activeImageJTool = "pan";
     /** QuPath-style annotation matrix tool (`move`, `rectangle`, `ellipse`, …). */
     static currentActiveTool = "move";
+    /** QuPath Display ▸ overlay opacity (1 = 100%). CSS opacity is clamped to 1. */
+    static overlayOpacity = 1;
     static qpDrawSession = null;
     static qpShapeDragSession = null;
     static qpDrawOverlayEl = null;
@@ -6537,9 +8292,18 @@ class AnnotationAdapter {
         const showFill = Boolean(filled) && AnnotationAdapter.annotationFillEnabled;
         // Keep fill="none" while interiors are off. Chrome otherwise paints a pale-blue
         // ::selection / tap-highlight over the fill region of browser-drawn SVG shapes.
-        node.setAttribute("fill", showFill ? AnnotationAdapter.OSD_ANNOTATION_FILL : "none");
+        const annotationId = node.getAttribute?.("data-annotation-id");
+        const pathClass = annotationId
+            ? AnnotationAdapter.annotationPathClass({ id: annotationId })
+            : "";
+        const classColor = pathClass ? AnnotationAdapter.classifyClassColor(pathClass) : "";
+        const stroke = classColor || AnnotationAdapter.OSD_ANNOTATION_STROKE;
+        const fill = classColor
+            ? AnnotationAdapter.classifyHexFill(classColor, 0.22)
+            : AnnotationAdapter.OSD_ANNOTATION_FILL;
+        node.setAttribute("fill", showFill ? fill : "none");
         node.setAttribute("fill-opacity", showFill ? "1" : "0");
-        node.setAttribute("stroke", AnnotationAdapter.OSD_ANNOTATION_STROKE);
+        node.setAttribute("stroke", stroke);
         node.setAttribute("stroke-width", "2");
         node.setAttribute("stroke-opacity", "1");
         node.setAttribute("vector-effect", "non-scaling-stroke");
@@ -6548,13 +8312,42 @@ class AnnotationAdapter {
         node.setAttribute("pointer-events", "all");
         if (node.style) {
             node.style.pointerEvents = "all";
-            node.style.cursor = "pointer";
+            node.style.cursor = AnnotationAdapter.isAnnotationLocked(annotationId) ? "grab" : "pointer";
             node.style.userSelect = "none";
             node.style.webkitUserSelect = "none";
             node.style.webkitTapHighlightColor = "transparent";
             node.style.outline = "none";
+            node.style.opacity = String(AnnotationAdapter.cssOverlayOpacity());
         }
         return node;
+    }
+
+    static cssOverlayOpacity() {
+        const value = Number(AnnotationAdapter.overlayOpacity);
+        if (!Number.isFinite(value) || value < 0) return 1;
+        return Math.min(1, value);
+    }
+
+    static setOverlayOpacity(value) {
+        const parsed = Number(value);
+        AnnotationAdapter.overlayOpacity = Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+        AnnotationAdapter.applyOverlayOpacity();
+        try { AnnotationAdapter.syncMultiViewMenuState(); } catch (_error) { /* optional */ }
+        return AnnotationAdapter.overlayOpacity;
+    }
+
+    static applyOverlayOpacity(root = null) {
+        const opacity = String(AnnotationAdapter.cssOverlayOpacity());
+        const doc = root || (typeof document !== "undefined" ? document : null);
+        doc?.querySelectorAll?.(".osd-annotation-shape").forEach(node => {
+            if (node?.style) node.style.opacity = opacity;
+        });
+        for (const element of AnnotationAdapter.aiNucleusOverlayElements || []) {
+            if (element?.style) element.style.opacity = opacity;
+        }
+        const canvas = AnnotationAdapter.aiNucleiOverlayEl;
+        if (canvas?.style) canvas.style.opacity = opacity;
+        return AnnotationAdapter.overlayOpacity;
     }
 
     static unifiedRecordToW3c(entry) {
@@ -6936,6 +8729,7 @@ class AnnotationAdapter {
         "#qp-color-chooser",
         "#qp-channel-properties",
         "#qp-custom-colors",
+        "#qp-display-range",
         "#qp-tool-wand",
         "#wand-config-dropdown",
         "#secondary-annotation-toolbar",
@@ -6990,6 +8784,8 @@ class AnnotationAdapter {
     static channelPaletteHistogramLog = false;
     static channelPaletteDrag = null;
     static channelPaletteLayout = "1";
+    static channelDisplayRangeCeiling = 0;
+    static DISPLAY_RANGE_MAX_CAP = 100000000;
 
     static setDisplayController(controller) {
         AnnotationAdapter.displayController = controller && typeof controller === "object"
@@ -7103,6 +8899,59 @@ class AnnotationAdapter {
             }, { passive: false });
         });
         if (paletteDiv.dataset) paletteDiv.dataset.fcpEventIsolateBound = "1";
+        return true;
+    }
+
+    static fitFloatingPaletteToViewport(palette, pad = 8) {
+        if (!palette?.style) return false;
+        const viewW = typeof window !== "undefined" && Number(window.innerWidth) > 0
+            ? Number(window.innerWidth) : 1280;
+        const viewH = typeof window !== "undefined" && Number(window.innerHeight) > 0
+            ? Number(window.innerHeight) : 800;
+        const gutter = Number(pad) >= 0 ? Number(pad) : 8;
+        const width = Math.max(1, Number(palette.offsetWidth) || parseFloat(palette.style.width) || 320);
+        const natural = Math.max(
+            Number(palette.scrollHeight) || 0,
+            Number(palette.offsetHeight) || 0,
+            parseFloat(palette.style.height) || 0
+        );
+        let left = parseFloat(palette.style.left);
+        let top = parseFloat(palette.style.top);
+        if (!Number.isFinite(left) || !Number.isFinite(top)) {
+            const rect = typeof palette.getBoundingClientRect === "function"
+                ? palette.getBoundingClientRect()
+                : { left: gutter, top: gutter };
+            if (!Number.isFinite(left)) left = Number(rect.left) || gutter;
+            if (!Number.isFinite(top)) top = Number(rect.top) || gutter;
+        }
+        const maxBox = Math.max(160, viewH - gutter * 2);
+        let height = Math.min(natural > 0 ? natural : maxBox, maxBox);
+        if (top + height > viewH - gutter) top = Math.max(gutter, viewH - height - gutter);
+        if (left + width > viewW - gutter) left = Math.max(gutter, viewW - width - gutter);
+        if (left < gutter) left = gutter;
+        if (top < gutter) top = gutter;
+        height = Math.min(height, Math.max(160, viewH - top - gutter));
+        palette.style.left = `${left}px`;
+        palette.style.top = `${top}px`;
+        palette.style.right = "auto";
+        palette.style.bottom = "auto";
+        palette.style.maxHeight = `${height}px`;
+        palette.style.height = `${height}px`;
+        palette.style.minHeight = "0";
+        return { left, top, width, height };
+    }
+
+    static bindFloatingPaletteViewportFit() {
+        const view = typeof window !== "undefined" ? window : null;
+        if (!view || typeof view.addEventListener !== "function" || view._wsiPaletteViewportFitBound) {
+            return Boolean(view?._wsiPaletteViewportFitBound);
+        }
+        view.addEventListener("resize", () => {
+            const doc = typeof document !== "undefined" ? document : null;
+            const palette = doc?.getElementById?.("floating-ai-labs-palette");
+            if (palette && !palette.hidden) AnnotationAdapter.fitFloatingPaletteToViewport(palette);
+        });
+        view._wsiPaletteViewportFitBound = true;
         return true;
     }
 
@@ -7475,9 +9324,29 @@ class AnnotationAdapter {
         });
         resetBtn?.addEventListener?.("click", event => {
             event.preventDefault();
+            AnnotationAdapter.channelDisplayRangeCeiling = 0;
             const controller = AnnotationAdapter.displayController;
             if (typeof controller?.resetDisplay === "function") controller.resetDisplay();
         });
+        const openDisplayRange = (which) => (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.openDisplayRangeDialog(doc, { which });
+        };
+        const maxValue = palette.querySelector?.("#fcp-max-value") || doc?.getElementById?.("fcp-max-value");
+        const maxLabel = palette.querySelector?.("label[for='fcp-max']")
+            || doc?.querySelector?.("label[for='fcp-max']");
+        max?.addEventListener?.("dblclick", openDisplayRange("max"));
+        maxValue?.addEventListener?.("dblclick", openDisplayRange("max"));
+        maxLabel?.addEventListener?.("dblclick", openDisplayRange("max"));
+        const minValue = palette.querySelector?.("#fcp-min-value") || doc?.getElementById?.("fcp-min-value");
+        const minLabel = palette.querySelector?.("label[for='fcp-min']")
+            || doc?.querySelector?.("label[for='fcp-min']");
+        min?.addEventListener?.("dblclick", openDisplayRange("min"));
+        minValue?.addEventListener?.("dblclick", openDisplayRange("min"));
+        minLabel?.addEventListener?.("dblclick", openDisplayRange("min"));
+        AnnotationAdapter.bindDisplayRangeDialog(doc);
+        AnnotationAdapter.bindChannelHistogramDrag(doc);
         layoutSelect?.addEventListener?.("change", event => {
             AnnotationAdapter.applyChannelPaletteLayout(event.target?.value || "1", doc);
         });
@@ -7497,6 +9366,11 @@ class AnnotationAdapter {
         if (doc && doc._wsiChannelDialogKeysBound !== "1") {
             doc.addEventListener("keydown", event => {
                 if (event.key !== "Escape") return;
+                const displayRange = doc.getElementById("qp-display-range");
+                if (displayRange && !displayRange.hidden) {
+                    AnnotationAdapter.closeDisplayRangeDialog(doc);
+                    return;
+                }
                 if (doc.getElementById("qp-custom-colors")) {
                     AnnotationAdapter.closeCustomColorsDialog(doc);
                     return;
@@ -7706,11 +9580,13 @@ class AnnotationAdapter {
             || AnnotationAdapter.aiLabsPaletteElement;
         if (!doc || !palette) return false;
         AnnotationAdapter.mountFloatingPaletteToBody(palette, doc);
-        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "20rem", minHeight: "25rem" });
+        AnnotationAdapter.applyLiberatedFloatingStyle(palette, { minWidth: "20rem", minHeight: "0" });
         palette.hidden = false;
         palette.removeAttribute?.("hidden");
         if (palette.style) palette.style.display = "flex";
         palette.setAttribute("aria-hidden", "false");
+        AnnotationAdapter.fitFloatingPaletteToViewport(palette);
+        AnnotationAdapter.bindFloatingPaletteViewportFit();
         AnnotationAdapter.aiLabsPaletteElement = palette;
         const toggle = doc.getElementById?.("toggle-ai-labs-palette");
         if (toggle) toggle.setAttribute("aria-pressed", "true");
@@ -8519,13 +10395,14 @@ class AnnotationAdapter {
             const maxOut = palette.querySelector?.("#fcp-max-value") || doc?.getElementById?.("fcp-max-value");
             const gammaOut = palette.querySelector?.("#fcp-gamma-value") || doc?.getElementById?.("fcp-gamma-value");
             const scaleMax = AnnotationAdapter.channelLevelScale();
+            const sliderMax = AnnotationAdapter.displayRangeCeiling(selected);
             if (min) {
-                min.max = String(scaleMax);
-                min.value = String(Math.max(0, Math.min(scaleMax, Number(selected.black) || 0)));
+                min.max = String(sliderMax);
+                min.value = String(Math.max(0, Math.min(sliderMax, Number(selected.black) || 0)));
             }
             if (max) {
-                max.max = String(scaleMax);
-                max.value = String(Math.max(1, Math.min(scaleMax, Number(selected.white) || scaleMax)));
+                max.max = String(sliderMax);
+                max.value = String(Math.max(1, Math.min(sliderMax, Number(selected.white) || sliderMax)));
             }
             if (gamma) gamma.value = String(Number(selected.gamma) || 1);
             if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min?.value || selected.black);
@@ -9576,10 +11453,348 @@ class AnnotationAdapter {
         return true;
     }
 
+    static displayRangeCeiling(channel = null) {
+        const scale = AnnotationAdapter.channelLevelScale();
+        const selected = channel || AnnotationAdapter.paletteSelectedChannel();
+        const white = Number(selected?.white);
+        const stored = Number(AnnotationAdapter.channelDisplayRangeCeiling);
+        return Math.max(
+            scale,
+            Number.isFinite(white) && white > 0 ? white : 0,
+            Number.isFinite(stored) && stored > 0 ? stored : 0
+        );
+    }
+
+    static parseDisplayRangeValue(value, options = {}) {
+        const raw = String(value ?? "").replace(/,/g, "").trim();
+        const parsed = parseFloat(raw);
+        if (!Number.isFinite(parsed) || parsed < 0) return null;
+        const allowZero = options.allowZero === true || options.which === "min";
+        if (!allowZero && parsed <= 0) return null;
+        return Math.min(AnnotationAdapter.DISPLAY_RANGE_MAX_CAP, parsed);
+    }
+
+    static formatDisplayRangeInput(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return "0.0";
+        if (Math.abs(parsed - Math.round(parsed)) < 1e-6) return `${Math.round(parsed)}.0`;
+        return String(parsed);
+    }
+
+    static ensureDisplayRangeDialog(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || AnnotationAdapter.paletteDocument?.(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc) return null;
+        let dialog = doc.getElementById?.("qp-display-range");
+        if (dialog) {
+            if (!dialog.querySelector?.("#qp-display-range-min") && dialog.querySelector?.(".qp-display-range-body")) {
+                const body = dialog.querySelector(".qp-display-range-body");
+                const minLabel = doc.createElement("label");
+                minLabel.setAttribute("for", "qp-display-range-min");
+                minLabel.setAttribute("data-dr-min-label", "");
+                minLabel.textContent = "Set display range minimum";
+                const minInput = doc.createElement("input");
+                minInput.id = "qp-display-range-min";
+                minInput.type = "text";
+                minInput.setAttribute("inputmode", "decimal");
+                minInput.autocomplete = "off";
+                minInput.hidden = true;
+                body.insertBefore(minInput, body.firstChild);
+                body.insertBefore(minLabel, minInput);
+            }
+            return dialog;
+        }
+        if (!doc.body?.appendChild || typeof doc.createElement !== "function") return null;
+        dialog = doc.createElement("div");
+        dialog.id = "qp-display-range";
+        dialog.className = "qp-display-range";
+        dialog.hidden = true;
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-labelledby", "qp-display-range-title");
+        dialog.setAttribute("aria-hidden", "true");
+        dialog.innerHTML = `
+            <div class="qp-channel-properties-title" id="qp-display-range-title">
+                <span class="qp-dialog-traffic">
+                    <button type="button" class="is-close" data-dr-close aria-label="Close display range"></button>
+                    <i class="is-min" aria-hidden="true"></i>
+                    <i class="is-max" aria-hidden="true"></i>
+                </span>
+                Display range
+            </div>
+            <div class="qp-display-range-body">
+                <label for="qp-display-range-min" data-dr-min-label>Set display range minimum</label>
+                <input id="qp-display-range-min" type="text" inputmode="decimal" autocomplete="off" hidden>
+                <label for="qp-display-range-max" data-dr-max-label>Set display range maximum</label>
+                <input id="qp-display-range-max" type="text" inputmode="decimal" autocomplete="off">
+            </div>
+            <div class="qp-dialog-actions">
+                <button type="button" data-dr-cancel>Cancel</button>
+                <button type="button" data-dr-ok>OK</button>
+            </div>
+        `;
+        doc.body.appendChild(dialog);
+        return dialog;
+    }
+
+    static bindDisplayRangeDialog(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const dialog = AnnotationAdapter.ensureDisplayRangeDialog(doc);
+        if (!dialog || dialog.dataset?.fcpDisplayRangeBound === "1") return Boolean(dialog);
+        const apply = () => {
+            const which = dialog.dataset?.displayRangeWhich === "min" ? "min" : "max";
+            const input = dialog.querySelector(
+                which === "min" ? "#qp-display-range-min" : "#qp-display-range-max"
+            );
+            const applied = which === "min"
+                ? AnnotationAdapter.setChannelDisplayMin(input?.value, doc)
+                : AnnotationAdapter.setChannelDisplayMax(input?.value, doc);
+            if (applied) AnnotationAdapter.closeDisplayRangeDialog(doc);
+        };
+        dialog.querySelector("[data-dr-ok]")?.addEventListener("click", event => {
+            event.preventDefault();
+            apply();
+        });
+        const cancel = () => AnnotationAdapter.closeDisplayRangeDialog(doc);
+        dialog.querySelector("[data-dr-cancel]")?.addEventListener("click", event => {
+            event.preventDefault();
+            cancel();
+        });
+        dialog.querySelector("[data-dr-close]")?.addEventListener("click", event => {
+            event.preventDefault();
+            cancel();
+        });
+        AnnotationAdapter.bindQuPathWindowClose(dialog, cancel);
+        const onEnter = event => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                apply();
+            }
+        };
+        dialog.querySelector("#qp-display-range-max")?.addEventListener("keydown", onEnter);
+        dialog.querySelector("#qp-display-range-min")?.addEventListener("keydown", onEnter);
+        if (dialog.dataset) dialog.dataset.fcpDisplayRangeBound = "1";
+        return true;
+    }
+
+    static openDisplayRangeDialog(root = null, options = {}) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        AnnotationAdapter.bindDisplayRangeDialog(doc);
+        const dialog = AnnotationAdapter.ensureDisplayRangeDialog(doc);
+        if (!dialog) return false;
+        const which = String(options?.which || options || "").toLowerCase() === "min" ? "min" : "max";
+        if (dialog.dataset) dialog.dataset.displayRangeWhich = which;
+        const selected = AnnotationAdapter.paletteSelectedChannel();
+        const minInput = dialog.querySelector("#qp-display-range-min");
+        const maxInput = dialog.querySelector("#qp-display-range-max");
+        const minLabel = dialog.querySelector("[data-dr-min-label]")
+            || dialog.querySelector("label[for='qp-display-range-min']");
+        const maxLabel = dialog.querySelector("[data-dr-max-label]")
+            || dialog.querySelector("label[for='qp-display-range-max']");
+        if (minInput) minInput.hidden = which !== "min";
+        if (maxInput) maxInput.hidden = which !== "max";
+        if (minLabel) minLabel.hidden = which !== "min";
+        if (maxLabel) maxLabel.hidden = which !== "max";
+        const input = which === "min" ? minInput : maxInput;
+        if (input) {
+            input.value = AnnotationAdapter.formatDisplayRangeInput(
+                which === "min"
+                    ? (selected?.black ?? 0)
+                    : (selected?.white ?? AnnotationAdapter.channelLevelScale())
+            );
+        }
+        dialog.hidden = false;
+        dialog.removeAttribute("hidden");
+        dialog.setAttribute("aria-hidden", "false");
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const anchor = which === "min"
+            ? (palette?.querySelector?.("#fcp-min-value")
+                || doc?.getElementById?.("fcp-min-value")
+                || palette?.querySelector?.("#fcp-min")
+                || doc?.getElementById?.("fcp-min"))
+            : (palette?.querySelector?.("#fcp-max-value")
+                || doc?.getElementById?.("fcp-max-value")
+                || palette?.querySelector?.("#fcp-max")
+                || doc?.getElementById?.("fcp-max"));
+        AnnotationAdapter.positionFixedNear(dialog, anchor);
+        try { input?.focus(); input?.select(); } catch (_error) { /* ignore */ }
+        return true;
+    }
+
+    static closeDisplayRangeDialog(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        const dialog = doc?.getElementById?.("qp-display-range");
+        if (!dialog) return false;
+        dialog.hidden = true;
+        dialog.setAttribute("hidden", "");
+        dialog.setAttribute("aria-hidden", "true");
+        return true;
+    }
+
+    static applyChannelHistogramBound(which, value, root = null, options = {}) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return false;
+        const channel = AnnotationAdapter.paletteSelectedChannel();
+        const ceiling = AnnotationAdapter.displayRangeCeiling(channel);
+        let min = Math.max(0, Number(channel?.black) || 0);
+        let max = Math.max(min + 1e-6, Number(channel?.white) || ceiling);
+        if (String(which) === "min") {
+            min = Math.max(0, Math.min(max - 1e-6, parsed));
+            if (channel) channel.black = min;
+        } else {
+            max = Math.max(min + 1e-6, parsed);
+            if (channel) channel.white = max;
+            AnnotationAdapter.channelDisplayRangeCeiling = Math.max(
+                Number(AnnotationAdapter.channelDisplayRangeCeiling) || 0,
+                max,
+                AnnotationAdapter.channelLevelScale()
+            );
+        }
+        const gamma = Math.max(0.2, Math.min(4, Number(channel?.gamma) || 1));
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const sliderCeiling = AnnotationAdapter.displayRangeCeiling(channel);
+        const minInput = palette?.querySelector?.("#fcp-min") || doc?.getElementById?.("fcp-min");
+        const maxInput = palette?.querySelector?.("#fcp-max") || doc?.getElementById?.("fcp-max");
+        const minOut = palette?.querySelector?.("#fcp-min-value") || doc?.getElementById?.("fcp-min-value");
+        const maxOut = palette?.querySelector?.("#fcp-max-value") || doc?.getElementById?.("fcp-max-value");
+        if (minInput) {
+            minInput.max = String(sliderCeiling);
+            minInput.value = String(min);
+        }
+        if (maxInput) {
+            maxInput.max = String(sliderCeiling);
+            maxInput.value = String(max);
+        }
+        if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min);
+        if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max);
+        const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma);
+        if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
+        if (!options.live) {
+            AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: true });
+            AnnotationAdapter.syncFloatingChannelPalette(doc, { rebuildRows: false });
+        } else {
+            AnnotationAdapter.drawChannelPaletteHistogram(doc);
+        }
+        return { min, max, gamma };
+    }
+
+    static setChannelDisplayMax(value, root = null, options = {}) {
+        const max = AnnotationAdapter.parseDisplayRangeValue(value);
+        if (max == null) return false;
+        return AnnotationAdapter.applyChannelHistogramBound("max", max, root, options);
+    }
+
+    static setChannelDisplayMin(value, root = null, options = {}) {
+        const parsed = AnnotationAdapter.parseDisplayRangeValue(value, { which: "min" });
+        if (parsed == null) return false;
+        return AnnotationAdapter.applyChannelHistogramBound("min", parsed, root, options);
+    }
+
+    static histogramDisplayScale(channel = null) {
+        return AnnotationAdapter.displayRangeCeiling(channel);
+    }
+
+    static histogramClientToValue(canvas, clientX) {
+        const rect = canvas?.getBoundingClientRect?.() || {
+            left: 0,
+            width: Number(canvas?.width) || 340
+        };
+        const width = Math.max(1, Number(rect.width) || 1);
+        const t = Math.max(0, Math.min(1, (Number(clientX) - Number(rect.left || 0)) / width));
+        return t * AnnotationAdapter.histogramDisplayScale();
+    }
+
+    static pickHistogramHandle(x, minX, maxX, slop = 10) {
+        const left = Number(x);
+        const minPos = Number(minX);
+        const maxPos = Number(maxX);
+        if (![left, minPos, maxPos].every(Number.isFinite)) return "max";
+        const distMin = Math.abs(left - minPos);
+        const distMax = Math.abs(left - maxPos);
+        const mid = (minPos + maxPos) / 2;
+        if (distMin <= slop && distMax <= slop) return left <= mid ? "min" : "max";
+        if (distMin <= slop) return "min";
+        if (distMax <= slop) return "max";
+        return left <= mid ? "min" : "max";
+    }
+
+    static bindChannelHistogramDrag(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const canvas = palette?.querySelector?.("#floating-channel-histogram")
+            || doc?.getElementById?.("floating-channel-histogram");
+        if (!canvas || canvas.dataset?.fcpHistogramDragBound === "1") return Boolean(canvas);
+        const begin = event => {
+            if (event?.button != null && event.button !== 0) return;
+            if (Number(event?.detail) >= 2) {
+                event.preventDefault?.();
+                const rect = canvas.getBoundingClientRect?.() || { left: 0, width: canvas.width || 340 };
+                const x = Number(event.clientX) - Number(rect.left || 0);
+                const channel = AnnotationAdapter.paletteSelectedChannel();
+                const scale = AnnotationAdapter.histogramDisplayScale(channel);
+                const width = Math.max(1, Number(rect.width) || 1);
+                const minX = ((Number(channel?.black) || 0) / scale) * width;
+                const maxX = ((Number(channel?.white) || scale) / scale) * width;
+                AnnotationAdapter.openDisplayRangeDialog(doc, {
+                    which: AnnotationAdapter.pickHistogramHandle(x, minX, maxX)
+                });
+                return;
+            }
+            const rect = canvas.getBoundingClientRect?.() || { left: 0, width: canvas.width || 340 };
+            const x = Number(event.clientX) - Number(rect.left || 0);
+            const channel = AnnotationAdapter.paletteSelectedChannel();
+            const scale = AnnotationAdapter.histogramDisplayScale(channel);
+            const width = Math.max(1, Number(rect.width) || 1);
+            const minX = ((Number(channel?.black) || 0) / scale) * width;
+            const maxX = ((Number(channel?.white) || scale) / scale) * width;
+            const which = AnnotationAdapter.pickHistogramHandle(x, minX, maxX);
+            AnnotationAdapter.channelPaletteDrag = {
+                kind: "histogram",
+                which,
+                pointerId: event.pointerId
+            };
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            try {
+                canvas.setPointerCapture?.(event.pointerId);
+            } catch (_error) { /* ignore */ }
+            const value = AnnotationAdapter.histogramClientToValue(canvas, event.clientX);
+            AnnotationAdapter.applyChannelHistogramBound(which, value, doc, { live: true });
+        };
+        const move = event => {
+            const drag = AnnotationAdapter.channelPaletteDrag;
+            if (!drag || drag.kind !== "histogram") return;
+            const value = AnnotationAdapter.histogramClientToValue(canvas, event.clientX);
+            AnnotationAdapter.applyChannelHistogramBound(drag.which, value, doc, { live: true });
+            event.preventDefault?.();
+        };
+        const end = event => {
+            const drag = AnnotationAdapter.channelPaletteDrag;
+            if (!drag || drag.kind !== "histogram") return;
+            AnnotationAdapter.channelPaletteDrag = null;
+            try { canvas.releasePointerCapture?.(event.pointerId); } catch (_error) { /* ignore */ }
+            const value = AnnotationAdapter.histogramClientToValue(canvas, event.clientX);
+            AnnotationAdapter.applyChannelHistogramBound(drag.which, value, doc, { live: false });
+        };
+        canvas.addEventListener("pointerdown", begin);
+        canvas.addEventListener("pointermove", move);
+        canvas.addEventListener("pointerup", end);
+        canvas.addEventListener("pointercancel", end);
+        canvas.style.cursor = "ew-resize";
+        canvas.title = "Drag to set channel min or max";
+        if (canvas.dataset) canvas.dataset.fcpHistogramDragBound = "1";
+        return true;
+    }
+
     static readChannelPaletteSliders(root = null) {
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const palette = AnnotationAdapter.resolvePaletteNode(doc);
-        const scaleMax = AnnotationAdapter.channelLevelScale();
+        const scaleMax = AnnotationAdapter.displayRangeCeiling();
         let min = parseFloat(palette?.querySelector?.("#fcp-min")?.value
             ?? doc?.getElementById?.("fcp-min")?.value
             ?? 0);
@@ -9593,7 +11808,7 @@ class AnnotationAdapter {
         if (!Number.isFinite(max)) max = scaleMax;
         if (!Number.isFinite(gamma) || gamma <= 0) gamma = 1;
         min = Math.max(0, Math.min(scaleMax - 1, min));
-        max = Math.max(min + (1 / scaleMax), Math.min(scaleMax, max));
+        max = Math.max(min + (1 / Math.max(scaleMax, 1)), Math.min(scaleMax, max));
         gamma = Math.max(0.2, Math.min(4, gamma));
         return { min, max, gamma };
     }
@@ -9640,8 +11855,11 @@ class AnnotationAdapter {
      */
     static mapChannelWindowToFloatFilter(min, max, gamma, scale) {
         const resolved = Number(scale) > 0 ? Number(scale) : AnnotationAdapter.channelLevelScale();
-        const lo = Math.max(0, Math.min(1, parseFloat(min) / resolved));
-        const hi = Math.max(lo + (1 / resolved), Math.min(1, parseFloat(max) / resolved));
+        const rawMin = parseFloat(min);
+        const rawMax = parseFloat(max);
+        const lo = Math.max(0, (Number.isFinite(rawMin) ? rawMin : 0) / resolved);
+        let hi = (Number.isFinite(rawMax) ? rawMax : resolved) / resolved;
+        if (!Number.isFinite(hi) || hi <= lo) hi = lo + (1 / Math.max(resolved, 1));
         const slope = 1 / (hi - lo);
         const intercept = -lo * slope;
         const exponent = Math.max(0.2, Math.min(4, parseFloat(gamma) || 1));
@@ -9973,26 +12191,38 @@ class AnnotationAdapter {
         const log = Boolean(AnnotationAdapter.channelPaletteHistogramLog);
         const { values, max: maxBin } = AnnotationAdapter.histogramBarHeights(bins, log);
         const color = AnnotationAdapter.channelPaletteColor(channel);
+        const dataScale = AnnotationAdapter.channelLevelScale();
+        const axisScale = AnnotationAdapter.histogramDisplayScale(channel);
+        const plottedWidth = width * Math.min(1, dataScale / Math.max(axisScale, 1));
+        const barWidth = plottedWidth / Math.max(1, values.length);
         ctx.clearRect(0, 0, width, height);
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, width, height);
         ctx.fillStyle = color;
-        const barWidth = width / Math.max(1, values.length);
         for (let i = 0; i < values.length; i += 1) {
             const h = (values[i] / maxBin) * (height - 2);
             ctx.fillRect(i * barWidth, height - h, Math.max(1, barWidth), h);
         }
-        const scale = AnnotationAdapter.channelLevelScale();
-        const minX = ((Number(channel?.black) || 0) / scale) * width;
-        const maxX = ((Number(channel?.white) || scale) / scale) * width;
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(minX, 0);
-        ctx.lineTo(minX, height);
-        ctx.moveTo(maxX, 0);
-        ctx.lineTo(maxX, height);
-        ctx.stroke();
+        const minX = ((Number(channel?.black) || 0) / axisScale) * width;
+        const maxX = ((Number(channel?.white) || axisScale) / axisScale) * width;
+        const drawHandle = (x, fill) => {
+            const px = Math.max(0.5, Math.min(width - 0.5, x));
+            ctx.strokeStyle = fill;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(px, 0);
+            ctx.lineTo(px, height);
+            ctx.stroke();
+            ctx.fillStyle = fill;
+            ctx.beginPath();
+            ctx.moveTo(px - 5, 0);
+            ctx.lineTo(px + 5, 0);
+            ctx.lineTo(px, 8);
+            ctx.closePath();
+            ctx.fill();
+        };
+        drawHandle(minX, "#f4f4f4");
+        drawHandle(maxX, "#ffffff");
         return true;
     }
 
@@ -10706,6 +12936,16 @@ class AnnotationAdapter {
                 AnnotationAdapter.toggleSynchronizeViewers();
                 return;
             }
+            if (AnnotationAdapter.isClassifyObjectShortcut(e)) {
+                e.preventDefault();
+                AnnotationAdapter.runClassifyCommand("train-object-classifier");
+                return;
+            }
+            if (AnnotationAdapter.isClassifyPixelShortcut(e)) {
+                e.preventDefault();
+                AnnotationAdapter.runClassifyCommand("train-pixel-classifier");
+                return;
+            }
             if (e.ctrlKey || e.metaKey || e.altKey) return;
 
             // Enter/Return finishing an in-progress polygon/polyline/wand shape is handled by
@@ -11218,7 +13458,7 @@ class AnnotationAdapter {
             if (!handled) return;
             if (typeof event.stopPropagation === "function") event.stopPropagation();
             const hit = AnnotationAdapter.annotationShapeFromEvent(event);
-            if (hit || AnnotationAdapter.qpShapeDragSession
+            if (hit || AnnotationAdapter.qpShapeDragSession || AnnotationAdapter.qpLockedPanSession
                 || AnnotationAdapter.annotationToolBlocksDragPan(AnnotationAdapter.currentActiveTool)) {
                 if (typeof event.preventDefault === "function") event.preventDefault();
             }
@@ -11228,11 +13468,14 @@ class AnnotationAdapter {
             if (AnnotationAdapter.isEchoedMouseEvent(event)) return;
             AnnotationAdapter.rememberPointerEvent(event);
             if (!AnnotationAdapter.onQuPathPointerMove(event)) return;
-            if ((AnnotationAdapter.qpDrawSession?.dragging || AnnotationAdapter.qpShapeDragSession)
+            if ((AnnotationAdapter.qpDrawSession?.dragging
+                || AnnotationAdapter.qpShapeDragSession
+                || AnnotationAdapter.qpLockedPanSession)
                 && typeof event.stopPropagation === "function") {
                 event.stopPropagation();
             }
-            if (AnnotationAdapter.qpShapeDragSession && typeof event.preventDefault === "function") {
+            if ((AnnotationAdapter.qpShapeDragSession || AnnotationAdapter.qpLockedPanSession)
+                && typeof event.preventDefault === "function") {
                 event.preventDefault();
             }
         };
@@ -11524,8 +13767,9 @@ class AnnotationAdapter {
         else AnnotationAdapter.lockedAnnotationIds.delete(id);
         AnnotationAdapter.persistLockedAnnotationIds();
         const doc = typeof document !== "undefined" ? document : null;
-        doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`)
-            ?.classList?.toggle?.("is-annotation-locked", Boolean(locked));
+        const node = doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`);
+        node?.classList?.toggle?.("is-annotation-locked", Boolean(locked));
+        if (node?.style) node.style.cursor = locked ? "grab" : "pointer";
         return true;
     }
 
@@ -11721,8 +13965,15 @@ class AnnotationAdapter {
             if (!event.shiftKey) {
                 AnnotationAdapter.selectNativeAnnotationShape(AnnotationAdapter.annotationIdFromNode(hit));
             }
+            if (AnnotationAdapter.beginNativeAnnotationDrag(event, hit)) {
+                if (typeof event.preventDefault === "function") event.preventDefault();
+                return true;
+            }
+            if (AnnotationAdapter.beginLockedAnnotationPan(event, hit)) {
+                if (typeof event.preventDefault === "function") event.preventDefault();
+                return true;
+            }
             if (typeof event.preventDefault === "function") event.preventDefault();
-            AnnotationAdapter.beginNativeAnnotationDrag(event, hit);
             return true;
         }
         if (tool === "move" || tool === "selection" || tool === "browser" || tool === "contrast") {
@@ -11788,6 +14039,9 @@ class AnnotationAdapter {
     }
 
     static onQuPathPointerMove(event) {
+        if (AnnotationAdapter.qpLockedPanSession) {
+            return AnnotationAdapter.onLockedAnnotationPanMove(event);
+        }
         if (AnnotationAdapter.qpShapeDragSession) {
             return AnnotationAdapter.onNativeAnnotationDragMove(event);
         }
@@ -11906,6 +14160,9 @@ class AnnotationAdapter {
     }
 
     static onQuPathPointerUp(event) {
+        if (AnnotationAdapter.qpLockedPanSession) {
+            return AnnotationAdapter.finishLockedAnnotationPan(event);
+        }
         if (AnnotationAdapter.qpShapeDragSession) {
             return AnnotationAdapter.finishNativeAnnotationDrag(event);
         }
@@ -12314,7 +14571,7 @@ class AnnotationAdapter {
         const fromToolbar = Boolean(event?.target?.closest?.(
             "#secondary-annotation-toolbar, header, #qp-tool-wand, #wand-config-dropdown, #floating-wand-palette, button.qp-tool, button.toolbar-btn"
         ));
-        if (!fromToolbar) AnnotationAdapter.openAnnotationNamePanelForShape(id, event);
+        if (!fromToolbar && !shape.skipNamePanel) AnnotationAdapter.openAnnotationNamePanelForShape(id, event);
         return entry;
     }
 
@@ -12478,6 +14735,7 @@ class AnnotationAdapter {
             .map(shapeId => AnnotationAdapter.shapeObjectForId(shapeId, shapeId === id ? host : null))
             .filter(shape => shape && !AnnotationAdapter.isAnnotationLocked(shape.id));
         if (!shapes.length) return false;
+        AnnotationAdapter.qpLockedPanSession = null;
         AnnotationAdapter.qpShapeDragSession = {
             lastX: x,
             lastY: y,
@@ -12511,6 +14769,89 @@ class AnnotationAdapter {
         drag.moved = true;
         if (typeof event.preventDefault === "function") event.preventDefault();
         if (typeof event.stopPropagation === "function") event.stopPropagation();
+        return true;
+    }
+
+    static panViewportByPixels(dx, dy, viewer = null) {
+        const host = viewer
+            || AnnotationAdapter.displayController?.getViewer?.()
+            || AnnotationAdapter.viewer;
+        const viewport = host?.viewport;
+        if (!viewport || typeof viewport.deltaPointsFromPixels !== "function") return false;
+        const OSD = AnnotationAdapter._openSeadragon();
+        const pixel = (OSD && typeof OSD.Point === "function")
+            ? new OSD.Point(Number(dx) || 0, Number(dy) || 0)
+            : { x: Number(dx) || 0, y: Number(dy) || 0 };
+        let delta;
+        try {
+            delta = viewport.deltaPointsFromPixels(pixel);
+        } catch (_error) {
+            return false;
+        }
+        const pan = (OSD && typeof OSD.Point === "function")
+            ? new OSD.Point(-(Number(delta?.x) || 0), -(Number(delta?.y) || 0))
+            : { x: -(Number(delta?.x) || 0), y: -(Number(delta?.y) || 0) };
+        if (typeof viewport.panBy !== "function") return false;
+        try {
+            viewport.panBy(pan, true);
+        } catch (_error) {
+            return false;
+        }
+        return true;
+    }
+
+    static beginLockedAnnotationPan(event, hit = null) {
+        if (event?.button != null && event.button !== 0) return false;
+        const host = hit ? (AnnotationAdapter.annotationHostFromNode(hit) || hit) : null;
+        const id = host ? AnnotationAdapter.annotationIdFromNode(host) : null;
+        if (id && !AnnotationAdapter.isAnnotationLocked(id)) return false;
+        const x = Number(event?.clientX);
+        const y = Number(event?.clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+        const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        if (!viewer?.viewport) return false;
+        AnnotationAdapter.qpShapeDragSession = null;
+        AnnotationAdapter.qpLockedPanSession = {
+            lastX: x,
+            lastY: y,
+            viewer,
+            moved: false
+        };
+        if (host?.style) host.style.cursor = "grabbing";
+        try {
+            if (typeof event.target?.setPointerCapture === "function" && event.pointerId != null) {
+                event.target.setPointerCapture(event.pointerId);
+            }
+        } catch (_error) { /* ignore */ }
+        return true;
+    }
+
+    static onLockedAnnotationPanMove(event) {
+        const drag = AnnotationAdapter.qpLockedPanSession;
+        if (!drag) return false;
+        const x = Number(event?.clientX);
+        const y = Number(event?.clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return true;
+        const dx = x - drag.lastX;
+        const dy = y - drag.lastY;
+        if (dx === 0 && dy === 0) return true;
+        drag.lastX = x;
+        drag.lastY = y;
+        if (AnnotationAdapter.panViewportByPixels(dx, dy, drag.viewer)) drag.moved = true;
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        return true;
+    }
+
+    static finishLockedAnnotationPan(event = null) {
+        const drag = AnnotationAdapter.qpLockedPanSession;
+        AnnotationAdapter.qpLockedPanSession = null;
+        if (!drag) return false;
+        try {
+            if (typeof event?.target?.releasePointerCapture === "function" && event.pointerId != null) {
+                event.target.releasePointerCapture(event.pointerId);
+            }
+        } catch (_error) { /* ignore */ }
         return true;
     }
 
@@ -15262,7 +17603,9 @@ class AnnotationAdapter {
             name: typeof existing?.name === "string" && existing.name.length > 0 ? existing.name : null,
             visible: existing?.visible !== false,
             locked: existing?.locked === true,
-            color: existing?.color || "#ffd54a",
+            color: existing?.pathClass
+                ? AnnotationAdapter.classifyClassColor(existing.pathClass) || existing?.color || "#ffd54a"
+                : existing?.color || "#ffd54a",
             lineWidth: this.positiveNumber(existing?.lineWidth, 2),
             x: Math.max(0, x),
             y: Math.max(0, y),
@@ -15271,11 +17614,17 @@ class AnnotationAdapter {
             rotation: Number.isFinite(Number(existing?.rotation)) ? Number(existing.rotation) : 0,
             createdAt: existing?.createdAt || null,
             modifiedAt: existing?.modifiedAt || null,
-            bodies: Array.isArray(annotation?.bodies)
-                ? annotation.bodies.filter(body => body && typeof body === "object")
-                : (Array.isArray(existing?.bodies) ? existing.bodies : []),
+            bodies: AnnotationAdapter.bodiesWithPathClass(
+                Array.isArray(annotation?.bodies)
+                    ? annotation.bodies
+                    : (Array.isArray(existing?.bodies) ? existing.bodies : []),
+                existing?.pathClass || annotation?.pathClass
+            ),
             vertices
         };
+        if (existing?.pathClass || annotation?.pathClass) {
+            backend.pathClass = existing?.pathClass || annotation?.pathClass;
+        }
         // Keep metadata for a freshly drawn client ID so it can be named before
         // the first debounced server response assigns a canonical UUID.
         if (annotation?.id) this.metadataById.set(annotation.id, backend);
@@ -15363,6 +17712,11 @@ class AnnotationAdapter {
     static AI_DEFAULT_QUPATH_MIN_AREA = 10;
     static AI_DEFAULT_QUPATH_MAX_AREA = 400;
     static AI_DEFAULT_QUPATH_CELL_EXPANSION = 4;
+    static AI_DEFAULT_CELL_EXPANSION_MODE = "radial";
+    static AI_DEFAULT_QUPATH_CELL_EXPANSION_MODE = "watershed";
+    static AI_DEFAULT_CELL_EXPANSION_SCALE = 1.45;
+    static AI_DEFAULT_CELL_EXPANSION_PX = 5;
+    static AI_DEFAULT_CELL_CONSTRAIN_SCALE = 1.5;
     static AI_HIGH_DENSITY_PROB_DELTA = 0.15;
     static AI_HIGH_DENSITY_NMS_DELTA = 0.15;
     static AI_HIGH_DENSITY_VARIANCE_LIMIT = 0.045;
@@ -15466,6 +17820,17 @@ class AnnotationAdapter {
         const qupathMinAreaEl = get("ai-qupath-min-area");
         const qupathMaxAreaEl = get("ai-qupath-max-area");
         const qupathExpansionEl = get("ai-qupath-cell-expansion");
+        const stardistModeEl = get("ai-stardist-cell-expansion-mode");
+        const stardistScaleEl = get("ai-stardist-cell-expansion-scale");
+        const stardistPxEl = get("ai-stardist-cell-expansion");
+        const stardistConstrainEl = get("ai-stardist-cell-constrain");
+        const cellposeModeEl = get("ai-cellpose-cell-expansion-mode");
+        const cellposeScaleEl = get("ai-cellpose-cell-expansion-scale");
+        const cellposePxEl = get("ai-cellpose-cell-expansion");
+        const cellposeConstrainEl = get("ai-cellpose-cell-constrain");
+        const qupathModeEl = get("ai-qupath-cell-expansion-mode");
+        const qupathScaleEl = get("ai-qupath-cell-expansion-scale");
+        const qupathConstrainEl = get("ai-qupath-cell-constrain");
         const channel = options.channel ?? channelEl?.value ?? "default";
         const segTarget = options.segTarget ?? targetEl?.value ?? "viewport";
         const probability = AnnotationAdapter.clampAiParam(
@@ -15536,17 +17901,64 @@ class AnnotationAdapter {
             40,
             2000
         );
-        const cellExpansion = AnnotationAdapter.clampAiParam(
-            options.cellExpansion ?? qupathExpansionEl?.value,
-            AnnotationAdapter.AI_DEFAULT_QUPATH_CELL_EXPANSION,
-            0,
-            20
+        const detectorForExpansion = AnnotationAdapter.normalizeAiDetector(
+            options.pluginId ?? options.detector ?? detectorEl?.value
+        );
+        const defaultMode = detectorForExpansion === AnnotationAdapter.AI_DETECTOR_QUPATH
+            ? AnnotationAdapter.AI_DEFAULT_QUPATH_CELL_EXPANSION_MODE
+            : AnnotationAdapter.AI_DEFAULT_CELL_EXPANSION_MODE;
+        const modeEl = detectorForExpansion === AnnotationAdapter.AI_DETECTOR_CELLPOSE
+            ? cellposeModeEl
+            : detectorForExpansion === AnnotationAdapter.AI_DETECTOR_QUPATH
+                ? qupathModeEl
+                : stardistModeEl;
+        const scaleEl = detectorForExpansion === AnnotationAdapter.AI_DETECTOR_CELLPOSE
+            ? cellposeScaleEl
+            : detectorForExpansion === AnnotationAdapter.AI_DETECTOR_QUPATH
+                ? qupathScaleEl
+                : stardistScaleEl;
+        const pxEl = detectorForExpansion === AnnotationAdapter.AI_DETECTOR_CELLPOSE
+            ? cellposePxEl
+            : stardistPxEl || qupathExpansionEl;
+        const pxFallbackEl = detectorForExpansion === AnnotationAdapter.AI_DETECTOR_QUPATH
+            ? qupathExpansionEl
+            : pxEl;
+        const constrainEl = detectorForExpansion === AnnotationAdapter.AI_DETECTOR_CELLPOSE
+            ? cellposeConstrainEl
+            : detectorForExpansion === AnnotationAdapter.AI_DETECTOR_QUPATH
+                ? qupathConstrainEl
+                : stardistConstrainEl;
+        const cellExpansionMode = AnnotationAdapter.normalizeCellExpansionMode(
+            options.cellExpansionMode ?? modeEl?.value,
+            defaultMode
+        );
+        const cellExpansion = cellExpansionMode === "radial"
+            ? AnnotationAdapter.clampAiParam(
+                options.cellExpansion ?? scaleEl?.value,
+                AnnotationAdapter.AI_DEFAULT_CELL_EXPANSION_SCALE,
+                1,
+                2.5
+            )
+            : AnnotationAdapter.clampAiParam(
+                options.cellExpansion ?? pxFallbackEl?.value ?? qupathExpansionEl?.value,
+                detectorForExpansion === AnnotationAdapter.AI_DETECTOR_QUPATH
+                    ? AnnotationAdapter.AI_DEFAULT_QUPATH_CELL_EXPANSION
+                    : AnnotationAdapter.AI_DEFAULT_CELL_EXPANSION_PX,
+                0,
+                20
+            );
+        const cellConstrainScale = AnnotationAdapter.clampAiParam(
+            options.cellConstrainScale ?? constrainEl?.value,
+            AnnotationAdapter.AI_DEFAULT_CELL_CONSTRAIN_SCALE,
+            1,
+            3
         );
         const overlayVisible = options.overlayVisible ?? (overlayEl ? overlayEl.checked !== false : AnnotationAdapter.aiOverlayVisible);
         return {
             channel, probability, nms, overlayVisible, segTarget,
             maxNucleusRadius, rayCount, boundaryTightness, modelOverride,
-            detector, cellposeModel, diameter, backgroundRadius, sigma, minArea, maxArea, cellExpansion,
+            detector, cellposeModel, diameter, backgroundRadius, sigma, minArea, maxArea,
+            cellExpansion, cellExpansionMode, cellConstrainScale,
             channelEl, probEl, nmsEl, overlayEl, targetEl,
             maxNucleusRadiusEl, rayCountEl, boundaryTightnessEl, modelOverrideEl, detectorEl
         };
@@ -15575,6 +17987,27 @@ class AnnotationAdapter {
             if (panel.hidden !== undefined) panel.hidden = !match;
             if (match) panel.removeAttribute?.("hidden");
             else panel.setAttribute?.("hidden", "");
+        });
+        AnnotationAdapter.syncAiCellExpansionControls(host);
+        return true;
+    }
+
+    static syncAiCellExpansionControls(root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        if (!host || typeof host.querySelectorAll !== "function") return false;
+        const fields = host.querySelectorAll?.("[data-cell-expansion-for]") || [];
+        fields.forEach(field => {
+            const modeEl = host.getElementById?.(field.getAttribute("data-cell-expansion-for"));
+            const mode = AnnotationAdapter.normalizeCellExpansionMode(modeEl?.value, "none");
+            const amountKind = field.getAttribute("data-cell-expansion-amount");
+            const isConstrain = field.hasAttribute("data-cell-expansion-constrain");
+            let show = mode !== "none";
+            if (amountKind === "radial") show = mode === "radial";
+            else if (amountKind === "offset") show = mode === "offset" || mode === "watershed";
+            else if (isConstrain) show = mode !== "none";
+            if (field.hidden !== undefined) field.hidden = !show;
+            if (show) field.removeAttribute?.("hidden");
+            else field.setAttribute?.("hidden", "");
         });
         return true;
     }
@@ -15657,6 +18090,22 @@ class AnnotationAdapter {
         bindSlider("ai-qupath-min-area", "ai-qupath-min-area-value");
         bindSlider("ai-qupath-max-area", "ai-qupath-max-area-value");
         bindSlider("ai-qupath-cell-expansion", "ai-qupath-cell-expansion-value");
+        bindSlider("ai-stardist-cell-expansion-scale", "ai-stardist-cell-expansion-scale-value");
+        bindSlider("ai-stardist-cell-expansion", "ai-stardist-cell-expansion-value");
+        bindSlider("ai-stardist-cell-constrain", "ai-stardist-cell-constrain-value");
+        bindSlider("ai-cellpose-cell-expansion-scale", "ai-cellpose-cell-expansion-scale-value");
+        bindSlider("ai-cellpose-cell-expansion", "ai-cellpose-cell-expansion-value");
+        bindSlider("ai-cellpose-cell-constrain", "ai-cellpose-cell-constrain-value");
+        bindSlider("ai-qupath-cell-expansion-scale", "ai-qupath-cell-expansion-scale-value");
+        bindSlider("ai-qupath-cell-constrain", "ai-qupath-cell-constrain-value");
+        ["ai-stardist-cell-expansion-mode", "ai-cellpose-cell-expansion-mode", "ai-qupath-cell-expansion-mode"]
+            .forEach(id => {
+                const select = host.getElementById(id);
+                if (!select || typeof select.addEventListener !== "function" || select.dataset?.aiBound === "1") return;
+                select.addEventListener("change", () => AnnotationAdapter.syncAiCellExpansionControls(host));
+                if (select.dataset) select.dataset.aiBound = "1";
+            });
+        AnnotationAdapter.syncAiCellExpansionControls(host);
         const detectorEl = host.getElementById("ai-detector-selector");
         if (detectorEl && typeof detectorEl.addEventListener === "function"
             && detectorEl.dataset?.aiBound !== "1") {
@@ -15882,8 +18331,17 @@ class AnnotationAdapter {
             || (typeof document !== "undefined" ? document : null);
         AnnotationAdapter.detectionFillEnabled = !AnnotationAdapter.detectionFillEnabled;
         const opacity = AnnotationAdapter.detectionFillEnabled ? "1" : "0";
+        const marked = new Set();
         for (const part of AnnotationAdapter.aiNucleusOverlayParts || []) {
             part?.setAttribute?.("fill-opacity", opacity);
+            if (part) marked.add(part);
+        }
+        const svg = AnnotationAdapter.aiNucleusOverlayElements?.[0];
+        if (svg && typeof svg.querySelectorAll === "function") {
+            svg.querySelectorAll("[data-nucleus-index]").forEach(node => {
+                if (marked.has(node)) return;
+                node.setAttribute?.("fill-opacity", opacity);
+            });
         }
         if (typeof AnnotationAdapter.renderSynchronizedCellObjects === "function") {
             AnnotationAdapter.renderSynchronizedCellObjects();
@@ -16703,7 +19161,47 @@ class AnnotationAdapter {
         ctx.lineWidth = 1.5;
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
+        const showNuclei = AnnotationAdapter.cellDisplayShowsNuclei();
+        const showBounds = AnnotationAdapter.cellDisplayShowsBoundaries();
+        const showCentroids = AnnotationAdapter.cellDisplayShowsCentroids();
         for (const obj of localizedCellObjects) {
+            const classColor = obj?.pathClass
+                ? AnnotationAdapter.classifyClassColor(obj.pathClass)
+                : "";
+            ctx.strokeStyle = classColor || AnnotationAdapter.AI_NUCLEI_STROKE;
+            const fillStyle = classColor
+                ? AnnotationAdapter.classifyHexFill(classColor, 0.18)
+                : "rgba(57,255,20,.14)";
+            const paintPath = () => {
+                if (AnnotationAdapter.detectionFillEnabled) {
+                    ctx.fillStyle = fillStyle;
+                    ctx.fill();
+                }
+                ctx.stroke();
+            };
+            const drawRing = (ring) => {
+                const pts = Array.isArray(ring) ? ring : [];
+                if (pts.length < 2) return;
+                ctx.beginPath();
+                let started = false;
+                for (let i = 0; i < pts.length; i += 1) {
+                    const raw = pts[i];
+                    const mapped = AnnotationAdapter.imagePointToViewerElement(
+                        Array.isArray(raw) ? raw : [raw?.x, raw?.y],
+                        viewer
+                    );
+                    if (!mapped) continue;
+                    if (!started) {
+                        ctx.moveTo(mapped.x, mapped.y);
+                        started = true;
+                    } else {
+                        ctx.lineTo(mapped.x, mapped.y);
+                    }
+                }
+                if (!started) return;
+                ctx.closePath();
+                paintPath();
+            };
             if (obj?.type === "Circle" || Number.isFinite(Number(obj?.cx ?? obj?.x))) {
                 const mapped = AnnotationAdapter.imagePointToViewerElement(
                     [obj.cx ?? obj.x, obj.cy ?? obj.y],
@@ -16711,26 +19209,51 @@ class AnnotationAdapter {
                 );
                 if (!mapped) continue;
                 const radius = Math.max(4, Number(obj.r ?? obj.radius) || 12);
-                ctx.beginPath();
-                ctx.arc(mapped.x, mapped.y, radius, 0, Math.PI * 2);
-                if (AnnotationAdapter.detectionFillEnabled) {
-                    ctx.fillStyle = "rgba(57,255,20,.14)";
-                    ctx.fill();
+                if (showBounds) {
+                    ctx.beginPath();
+                    ctx.arc(
+                        mapped.x,
+                        mapped.y,
+                        radius * AnnotationAdapter.CELL_BOUNDARY_SCALE,
+                        0,
+                        Math.PI * 2
+                    );
+                    paintPath();
                 }
-                ctx.stroke();
+                if (showNuclei) {
+                    ctx.beginPath();
+                    ctx.arc(mapped.x, mapped.y, radius, 0, Math.PI * 2);
+                    paintPath();
+                }
+                if (showCentroids) {
+                    ctx.beginPath();
+                    ctx.arc(mapped.x, mapped.y, Math.max(2, radius * 0.22), 0, Math.PI * 2);
+                    paintPath();
+                }
                 continue;
             }
-            const ring = obj?.imageCoordinates || [];
-            if (ring.length < 2) continue;
-            ctx.beginPath();
-            for (let i = 0; i < ring.length; i += 1) {
-                const mapped = AnnotationAdapter.imagePointToViewerElement(ring[i], viewer);
-                if (!mapped) continue;
-                if (i === 0) ctx.moveTo(mapped.x, mapped.y);
-                else ctx.lineTo(mapped.x, mapped.y);
+            if (showBounds) drawRing(AnnotationAdapter.detectionCellRing(obj));
+            if (showNuclei) drawRing(AnnotationAdapter.detectionRing(obj));
+            if (showCentroids) {
+                const center = AnnotationAdapter.detectionCentroid(obj);
+                if (center) {
+                    const mapped = AnnotationAdapter.imagePointToViewerElement(
+                        [center.x, center.y],
+                        viewer
+                    );
+                    if (mapped) {
+                        ctx.beginPath();
+                        ctx.arc(
+                            mapped.x,
+                            mapped.y,
+                            Math.max(2, AnnotationAdapter.detectionCentroidRadius(obj)),
+                            0,
+                            Math.PI * 2
+                        );
+                        paintPath();
+                    }
+                }
             }
-            ctx.closePath();
-            ctx.stroke();
         }
         return canvas;
     }
@@ -17120,6 +19643,15 @@ class AnnotationAdapter {
             const ring = vertices.length >= 3
                 ? vertices
                 : AnnotationAdapter.starVerticesFromCircle(cx, cy, nucleus?.r ?? nucleus?.radius);
+            const cellRing = AnnotationAdapter.nucleusVertexList({
+                vertices: nucleus?.cellVertices || nucleus?.cellRing || nucleus?.cytoplasm
+            });
+            const radius = AnnotationAdapter.detectionRadius({
+                cx,
+                cy,
+                radius: nucleus?.radius ?? nucleus?.r,
+                vertices: ring
+            });
             overlays.push({
                 id: overlays.length + 1,
                 type: "Polygon",
@@ -17129,7 +19661,13 @@ class AnnotationAdapter {
                 cy,
                 x: cx,
                 y: cy,
+                r: radius,
+                radius,
                 vertices: ring,
+                cellVertices: cellRing.length >= 3 ? cellRing : undefined,
+                cellExpansionMode: nucleus?.cellExpansionMode,
+                cellExpansion: nucleus?.cellExpansion,
+                cellConstrainScale: nucleus?.cellConstrainScale,
                 imageCoordinates: ring.map((vertex) => [vertex.x, vertex.y]),
                 classification: "nucleus"
             });
@@ -17397,6 +19935,21 @@ class AnnotationAdapter {
         return AnnotationAdapter.paintStarConvexNucleiLayer(host, polygons, doc);
     }
 
+    static styleDetectionOverlayPart(node, { index, part = "nucleus" } = {}) {
+        if (!node?.setAttribute) return node;
+        node.setAttribute("fill", "rgba(0,255,0,.15)");
+        // Independent on/off knob (plain "F" key, see toggleDetectionFill) that never
+        // touches the fill color itself, so heat-map/IHC recoloring (which sets "fill"
+        // directly) keeps working no matter which state this is in.
+        node.setAttribute("fill-opacity", AnnotationAdapter.detectionFillEnabled ? "1" : "0");
+        node.setAttribute("stroke", "#00FF00");
+        node.setAttribute("stroke-width", part === "boundary" ? "1.5" : part === "centroid" ? "1.25" : "2");
+        node.setAttribute("vector-effect", "non-scaling-stroke");
+        node.setAttribute("data-nucleus-index", String(index));
+        node.setAttribute("data-cell-part", part);
+        return node;
+    }
+
     static paintStarConvexNucleiLayer(viewer, nuclei, doc) {
         const host = viewer || AnnotationAdapter.viewer;
         const primaryTiledImage = AnnotationAdapter.primaryTiledImage(host);
@@ -17404,16 +19957,36 @@ class AnnotationAdapter {
             ? primaryTiledImage
             : null;
         if (!mapper || typeof mapper.imageToViewportRectangle !== "function") return 0;
+        const showNuclei = AnnotationAdapter.cellDisplayShowsNuclei();
+        const showBounds = AnnotationAdapter.cellDisplayShowsBoundaries();
+        const showCentroids = AnnotationAdapter.cellDisplayShowsCentroids();
         let minX = Infinity;
         let minY = Infinity;
         let maxX = -Infinity;
         let maxY = -Infinity;
+        const includePoint = (point) => {
+            const x = Number(point?.x ?? point?.[0]);
+            const y = Number(point?.y ?? point?.[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+        };
         for (const nucleus of nuclei) {
-            for (const point of AnnotationAdapter.nucleusVertexList(nucleus)) {
-                if (point.x < minX) minX = point.x;
-                if (point.y < minY) minY = point.y;
-                if (point.x > maxX) maxX = point.x;
-                if (point.y > maxY) maxY = point.y;
+            if (showNuclei || showBounds) {
+                for (const point of AnnotationAdapter.nucleusVertexList(nucleus)) includePoint(point);
+            }
+            if (showBounds) {
+                for (const point of AnnotationAdapter.detectionCellRing(nucleus)) includePoint(point);
+            }
+            if (showCentroids) {
+                const center = AnnotationAdapter.detectionCentroid(nucleus);
+                const radius = AnnotationAdapter.detectionCentroidRadius(nucleus);
+                if (center) {
+                    includePoint({ x: center.x - radius, y: center.y - radius });
+                    includePoint({ x: center.x + radius, y: center.y + radius });
+                }
             }
         }
         if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return 0;
@@ -17429,29 +20002,48 @@ class AnnotationAdapter {
         svg.setAttribute("class", "nucleus-vector-ring nucleus-stardist-layer");
         svg.setAttribute("viewBox", `${minX} ${minY} ${width} ${height}`);
         svg.setAttribute("preserveAspectRatio", "none");
+        svg.setAttribute(
+            "data-cell-display",
+            AnnotationAdapter.normalizeCellDisplayMode(AnnotationAdapter.cellDisplayMode)
+        );
         svg.style.width = "100%";
         svg.style.height = "100%";
         svg.style.overflow = "visible";
         svg.style.pointerEvents = "none";
+        svg.style.opacity = String(AnnotationAdapter.cssOverlayOpacity());
         const polygons = new Array(nuclei.length);
         for (let index = 0; index < nuclei.length; index += 1) {
             const nucleus = nuclei[index];
             const ring = AnnotationAdapter.nucleusVertexList(nucleus);
-            if (ring.length < 3) continue;
-            const polygon = doc.createElementNS(svgNs, "polygon");
-            const pointsString = AnnotationAdapter.verticesToPointsString(ring);
-            polygon.setAttribute("points", pointsString);
-            polygon.setAttribute("fill", "rgba(0,255,0,.15)");
-            // Independent on/off knob (plain "F" key, see toggleDetectionFill) that never
-            // touches the fill color itself, so heat-map/IHC recoloring (which sets "fill"
-            // directly) keeps working no matter which state this is in.
-            polygon.setAttribute("fill-opacity", AnnotationAdapter.detectionFillEnabled ? "1" : "0");
-            polygon.setAttribute("stroke", "#00FF00");
-            polygon.setAttribute("stroke-width", "2");
-            polygon.setAttribute("vector-effect", "non-scaling-stroke");
-            polygon.setAttribute("data-nucleus-index", String(index));
-            svg.appendChild(polygon);
-            polygons[index] = polygon;
+            if (showBounds) {
+                const cellRing = AnnotationAdapter.detectionCellRing(nucleus);
+                if (cellRing.length >= 3) {
+                    const boundary = doc.createElementNS(svgNs, "polygon");
+                    boundary.setAttribute("points", AnnotationAdapter.verticesToPointsString(cellRing));
+                    AnnotationAdapter.styleDetectionOverlayPart(boundary, { index, part: "boundary" });
+                    svg.appendChild(boundary);
+                    polygons[index] = boundary;
+                }
+            }
+            if (showNuclei && ring.length >= 3) {
+                const polygon = doc.createElementNS(svgNs, "polygon");
+                polygon.setAttribute("points", AnnotationAdapter.verticesToPointsString(ring));
+                AnnotationAdapter.styleDetectionOverlayPart(polygon, { index, part: "nucleus" });
+                svg.appendChild(polygon);
+                polygons[index] = polygon;
+            }
+            if (showCentroids) {
+                const center = AnnotationAdapter.detectionCentroid(nucleus);
+                if (center) {
+                    const dot = doc.createElementNS(svgNs, "circle");
+                    dot.setAttribute("cx", String(center.x));
+                    dot.setAttribute("cy", String(center.y));
+                    dot.setAttribute("r", String(AnnotationAdapter.detectionCentroidRadius(nucleus)));
+                    AnnotationAdapter.styleDetectionOverlayPart(dot, { index, part: "centroid" });
+                    svg.appendChild(dot);
+                    if (!polygons[index]) polygons[index] = dot;
+                }
+            }
         }
         let location;
         try {
@@ -17470,6 +20062,7 @@ class AnnotationAdapter {
         AnnotationAdapter.aiNucleusOverlayElements = [svg];
         AnnotationAdapter.aiNucleusOverlayParts = polygons;
         AnnotationAdapter.syncNucleiVisibilityButton();
+        AnnotationAdapter.applyDetectionClassColors();
         return 1;
     }
 
@@ -17497,6 +20090,16 @@ class AnnotationAdapter {
     }
 
     static visiblePluginChannels() {
+        const display = AnnotationAdapter.displayController?.getDisplay?.();
+        const live = Array.isArray(display?.channels) ? display.channels : [];
+        if (live.length) {
+            const selected = live
+                .filter(channel => channel && channel.visible !== false)
+                .map(channel => String(channel.name || channel.nameOverride || "").trim()
+                    || (Number.isInteger(channel.index) ? String(channel.index) : ""))
+                .filter(Boolean);
+            if (selected.length) return selected;
+        }
         const names = AnnotationAdapter.FLUORESCENT_CHANNEL_NAMES.slice();
         const visibility = AnnotationAdapter.channelLayerState?.visibility;
         if (!visibility) return names;
@@ -17508,13 +20111,14 @@ class AnnotationAdapter {
 
     /**
      * Resolves the "Segmentation Channel" AI Labs dropdown (`#ai-seg-channel`) to the
-     * channel list sent to the backend StarDist plugin. "default" preserves the prior
-     * behavior of segmenting on whatever channels are currently visible in the
-     * Brightness & Contrast panel; a specific "1"/"2"/"3" choice restricts detection to
-     * that single channel by name so it survives BioFormatsTileService's channel
-     * resolution unambiguously (a bare numeric token there is read as a raw 0-based
-     * channel index, not this 1-based dropdown's index, so we must send the channel
-     * *name* instead of the raw dropdown value).
+     * channel list sent to the backend StarDist plugin. "default" sends the nuclear
+     * band only (DAPI / Hoechst / Blue, else the first visible channel). Sending every
+     * visible band made fluorescence membrane/cytoplasm signal count as nuclei.
+     * A specific "1"/"2"/"3" choice restricts detection to that single channel by name
+     * so it survives BioFormatsTileService's channel resolution unambiguously (a bare
+     * numeric token there is read as a raw 0-based channel index, not this 1-based
+     * dropdown's index, so we must send the channel *name* instead of the raw dropdown
+     * value).
      */
     static resolveSegmentationChannels(channelValue) {
         const raw = channelValue == null ? "default" : String(channelValue).trim().toLowerCase();
@@ -17523,22 +20127,28 @@ class AnnotationAdapter {
             const name = AnnotationAdapter.FLUORESCENT_CHANNEL_NAMES[byDropdownValue[raw]];
             if (name) return [name];
         }
-        return AnnotationAdapter.visiblePluginChannels();
+        return [AnnotationAdapter.nuclearPluginChannel()];
+    }
+
+    static nuclearPluginChannel() {
+        const visible = AnnotationAdapter.visiblePluginChannels();
+        const nuclear = visible.find(name => /dapi|hoechst|hoech|nuclei|\bblue\b/i.test(String(name || "")));
+        if (nuclear) return nuclear;
+        if (visible.length) return visible[0];
+        return AnnotationAdapter.FLUORESCENT_CHANNEL_NAMES[0];
     }
 
     static nucleiFootprintsForPlugin(circles) {
         const list = Array.isArray(circles) ? circles : AnnotationAdapter.lastNucleiCircles || [];
         const footprints = [];
         for (const nucleus of list) {
-            const cx = Number(nucleus?.centerX ?? nucleus?.cx ?? nucleus?.x);
-            const cy = Number(nucleus?.centerY ?? nucleus?.cy ?? nucleus?.y);
-            const radius = Number(nucleus?.radius ?? nucleus?.r);
-            if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+            const center = AnnotationAdapter.detectionCentroid(nucleus);
+            if (!center) continue;
             const vertices = AnnotationAdapter.nucleusVertexList(nucleus);
             footprints.push({
-                cx,
-                cy,
-                r: Math.max(1, Number.isFinite(radius) ? radius : 12),
+                cx: center.x,
+                cy: center.y,
+                r: AnnotationAdapter.detectionRadius({ ...nucleus, ...center, vertices }),
                 vertices
             });
         }
@@ -17558,7 +20168,7 @@ class AnnotationAdapter {
         const n = Number(result?.sampleCount) || 0;
         const nuclei = Number(result?.nucleusCount) || 0;
         const caption = nuclei
-            ? `n=${n} samples inside ${nuclei} nuclear circles`
+            ? `n=${n} samples inside ${nuclei} nuclear footprints`
             : `n=${n} samples across viewport footprint`;
         return `<table><caption>${caption}</caption><thead><tr><th>Band</th><th>Mean</th><th>SD</th><th>Max</th><th>Min</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
@@ -17571,6 +20181,19 @@ class AnnotationAdapter {
         if (!mount) return false;
         mount.innerHTML = AnnotationAdapter.pluginStatsTableHtml(result);
         mount.hidden = false;
+        return true;
+    }
+
+    static revealPluginStats(root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const mount = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-plugin-stats")
+            : null;
+        if (!mount) return false;
+        mount.hidden = false;
+        if (typeof mount.scrollIntoView === "function") {
+            mount.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
         return true;
     }
 
@@ -17667,8 +20290,14 @@ class AnnotationAdapter {
             const result = await response.json();
             AnnotationAdapter.renderPluginStatsTable(result, root);
             AnnotationAdapter.paintPluginStatsOverlay(viewer, result);
+            AnnotationAdapter.revealPluginStats(root);
             const n = Number(result?.sampleCount) || 0;
-            AnnotationAdapter.setAiStatus(`AI Pipeline: Pixel plugin complete (n=${n}).`, root);
+            AnnotationAdapter.setAiStatus(
+                n > 0
+                    ? `AI Pipeline: Pixel plugin complete (n=${n}).`
+                    : "AI Pipeline: Pixel plugin returned no samples. Segment nuclei and retry.",
+                root
+            );
             return result;
         } catch (error) {
             AnnotationAdapter.setAiStatus(
@@ -17769,7 +20398,7 @@ class AnnotationAdapter {
         }
         const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
         for (const item of list) {
-            const index = Number(item?.index);
+            const index = Number(item?.index ?? item?.objectId);
             if (!Number.isInteger(index) || index < 0 || index >= parts.length) continue;
             const computedObjectColor = AnnotationAdapter.rainbowColorFromKeys(Number(item.key), min, max);
             AnnotationAdapter.applyNucleusRainbowStyle(parts[index], computedObjectColor);
@@ -17829,7 +20458,11 @@ class AnnotationAdapter {
         // runPerObjectPixelQuantifier already reports a specific status for every
         // failure mode (no slide open, no nuclei segmented, request failed); don't
         // stomp on that with a generic message here.
-        const result = await AnnotationAdapter.runPerObjectPixelQuantifier({ root, viewer });
+        const result = await AnnotationAdapter.runPerObjectPixelQuantifier({
+            root,
+            viewer,
+            skipAutoSegment: true
+        });
         AnnotationAdapter.heatMapActive = !!(result && (result.objects || []).length);
         AnnotationAdapter.syncHeatMapButton(root);
         return AnnotationAdapter.heatMapActive;
@@ -17839,10 +20472,14 @@ class AnnotationAdapter {
         const root = options.root || options.document || (typeof document !== "undefined" ? document : null);
         const viewer = options.viewer || AnnotationAdapter.viewer;
         const imageId = options.imageId || AnnotationAdapter.currentImageId;
-        const nuclei = AnnotationAdapter.nucleiFootprintsForPlugin(options.nuclei);
+        let nuclei = AnnotationAdapter.nucleiFootprintsForPlugin(options.nuclei);
         if (!imageId) {
             AnnotationAdapter.setAiStatus("AI Pipeline: Open a slide before color coding objects.", root);
             return null;
+        }
+        if (!nuclei.length && !options.skipAutoSegment) {
+            await AnnotationAdapter.segmentCellNuclei({ root, viewer });
+            nuclei = AnnotationAdapter.nucleiFootprintsForPlugin();
         }
         if (!nuclei.length) {
             AnnotationAdapter.setAiStatus("AI Pipeline: Segment nuclei before color coding objects.", root);
@@ -17876,14 +20513,25 @@ class AnnotationAdapter {
                 body: JSON.stringify(payload)
             });
             if (!response || !response.ok) {
-                throw new Error("plugin request failed");
+                const text = response && typeof response.text === "function"
+                    ? await response.text()
+                    : "";
+                throw new Error(text || `plugin ${response ? response.status : "failed"}`);
             }
             const result = await response.json();
-            AnnotationAdapter.applyObjectRainbowColors(result?.objects);
-            AnnotationAdapter.setAiStatus("AI Pipeline: Object color coding complete.", root);
+            const colored = AnnotationAdapter.applyObjectRainbowColors(result?.objects);
+            AnnotationAdapter.setAiStatus(
+                colored
+                    ? `AI Pipeline: Object color coding complete (${colored} objects).`
+                    : "AI Pipeline: Object color coding returned no samples. Segment nuclei and retry.",
+                root
+            );
             return result;
-        } catch (_error) {
-            AnnotationAdapter.setAiStatus("AI Pipeline: Object color coding failed.", root);
+        } catch (error) {
+            AnnotationAdapter.setAiStatus(
+                `AI Pipeline: Object color coding failed (${error?.message || error}).`,
+                root
+            );
             return null;
         }
     }
@@ -18003,7 +20651,9 @@ class AnnotationAdapter {
             sigma: config.sigma,
             minArea: config.minArea,
             maxArea: config.maxArea,
-            cellExpansion: config.cellExpansion
+            cellExpansion: config.cellExpansion,
+            cellExpansionMode: config.cellExpansionMode,
+            cellConstrainScale: config.cellConstrainScale
         };
         AnnotationAdapter.setAiStatus(`AI Pipeline: Running ${detectorName}…`, root);
         try {
@@ -18018,19 +20668,33 @@ class AnnotationAdapter {
                 const text = response && typeof response.text === "function"
                     ? await response.text()
                     : "";
-                throw new Error(text || `plugin ${response ? response.status : "failed"}`);
+                const error = new Error(text || `plugin ${response ? response.status : "failed"}`);
+                error.status = response ? response.status : 0;
+                throw error;
             }
             const result = await response.json();
             const polygons = AnnotationAdapter.mapPluginNucleiToOverlays(result);
-            if (!polygons.length) throw new Error("no contours");
             AnnotationAdapter.replaceLocalizedCellObjects(polygons);
             AnnotationAdapter.lastNucleiCircles = polygons;
-            if (AnnotationAdapter.aiOverlayVisible !== false) {
+            if (polygons.length && AnnotationAdapter.aiOverlayVisible !== false) {
                 AnnotationAdapter.paintNucleiCircleOverlays(viewer, polygons);
             } else {
                 AnnotationAdapter.clearNucleiCircleOverlays(viewer);
             }
             AnnotationAdapter.restoreViewerMouseNavUnlessModal(viewer);
+            if (!polygons.length) {
+                AnnotationAdapter.setAiStatus(
+                    `AI Pipeline: ${detectorName} found no nuclei in this viewport.`,
+                    root
+                );
+                return {
+                    count: 0,
+                    nuclei: [],
+                    objects: [],
+                    localizedCellObjects: [],
+                    result
+                };
+            }
             const model = String(result?.title || detectorName).replace(/^.*\(([^)]+)\).*$/, "$1");
             AnnotationAdapter.setAiStatus(
                 `AI Pipeline: Locked ${polygons.length} ${detectorName} polygons (${model}).`,
@@ -18044,12 +20708,29 @@ class AnnotationAdapter {
                 result
             };
         } catch (error) {
+            const transport = AnnotationAdapter.isPluginTransportFailure(error);
             AnnotationAdapter.setAiStatus(
-                `AI Pipeline: ${detectorName} plugin unavailable (${error?.message || error}); using local contours.`,
+                transport
+                    ? `AI Pipeline: ${detectorName} plugin unavailable (${error?.message || error}); using local contours.`
+                    : `AI Pipeline: ${detectorName} failed (${error?.message || error}).`,
                 root
             );
-            return null;
+            return transport ? null : {
+                count: 0,
+                nuclei: [],
+                objects: [],
+                localizedCellObjects: [],
+                failed: true
+            };
         }
+    }
+
+    static isPluginTransportFailure(error) {
+        const status = Number(error?.status);
+        if (Number.isFinite(status) && status >= 500) return true;
+        const message = String(error?.message || error || "");
+        if (/fetch is unavailable|failed to fetch|networkerror|load failed/i.test(message)) return true;
+        return /plugin 5\d\d\b/.test(message);
     }
 
     static async segmentCellNuclei(options = {}) {
@@ -18058,7 +20739,10 @@ class AnnotationAdapter {
             options.pluginId || options.detector || AnnotationAdapter.readAiLabConfig(root, options).detector
         );
         const plugin = await AnnotationAdapter.runNucleiDetectionPlugin({ ...options, pluginId });
-        if (plugin && plugin.count > 0) return plugin;
+        // Local canvas contours are a last resort for network / 5xx only.
+        // An empty or 4xx plugin result used to fall through here and paint
+        // the heuristic "terrible" overlays on top of a real (empty) detection.
+        if (plugin) return plugin;
         return AnnotationAdapter.paintViewportNucleiCircles(options);
     }
 
