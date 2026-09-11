@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Fabric annotation spike</title>
+    <!-- Exact investigated runtime pins; see docs/FABRIC-SPIKE-VALIDATION.md. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+    <script src="/fabric-spike-adapter.js"></script>
+    <script src="/fabric-osd-overlay.js" data-overlay-version="1.0.0"></script>
+    <script src="/fabric-spike-drawing.js"></script>
+    <script src="/fabric-spike.js" defer></script>
+    <style>
+        *{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;background:#10151c;color:#f5f7fa}body{display:grid;grid-template-rows:auto auto 1fr}
+        .warning{padding:10px;text-align:center;background:#ffd400;color:#171000;border-bottom:3px solid #000;font-weight:900;letter-spacing:.08em}
+        header{display:flex;gap:12px;align-items:center;padding:10px 14px;background:#19222d;border-bottom:1px solid #344253}button,input,select,textarea{font:inherit}button,select,input{padding:7px 9px;background:#263445;color:#fff;border:1px solid #52667c;border-radius:5px}button[aria-pressed=true]{background:#ad7200}button:disabled,input:disabled{opacity:.45}.workspace{min-height:0;display:grid;grid-template-columns:1fr 330px}main{position:relative;min-width:0}#fabric-viewer{position:absolute;inset:0;background:#000}.fabric-spike-overlay{position:absolute!important;inset:0;z-index:20;pointer-events:auto}.panel{padding:14px;overflow:auto;border-left:1px solid #344253}.row{display:flex;gap:8px;align-items:center;margin:9px 0}.row>*{min-width:0}.row input[type=text]{flex:1}textarea{width:100%;height:180px;background:#0b0f14;color:#d8e2ed;border:1px solid #52667c}.counters{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font:12px ui-monospace,monospace;background:#0b0f14;padding:10px}.error{color:#ff9494}h2{font-size:15px;margin:17px 0 6px}#status{margin-left:auto;color:#b9c8d6}
+    </style>
+</head>
+<body>
+<div class="warning">FABRIC ANNOTATION SPIKE — NOT PERSISTED</div>
+<header><label>Sample image <select id="images" aria-label="Sample image"></select></label><button id="draw" aria-pressed="false">Draw rectangle</button><button id="delete" disabled>Delete selected</button><span id="status">Starting…</span></header>
+<div class="workspace"><main><div id="fabric-viewer"></div></main><aside class="panel">
+    <h2>Selected annotation</h2><div class="row"><label for="annotation-name">Plain-text name</label><input id="annotation-name" type="text" maxlength="200" disabled></div>
+    <div class="row"><label><input id="geometry-visible" type="checkbox" checked> Geometry</label><label><input id="names-visible" type="checkbox" checked> Names</label></div>
+    <h2>In-memory JSON</h2><div class="row"><button id="export">Export</button><button id="import">Import (replace by ID)</button></div><textarea id="json" spellcheck="false" aria-label="Annotation JSON"></textarea>
+    <h2>Lifecycle counters</h2><div class="counters">
+      <span>object:moving</span><output id="counter-object-moving">0</output><span>object:scaling</span><output id="counter-object-scaling">0</output><span>object:modified</span><output id="counter-object-modified">0</output>
+      <span>selection:created</span><output id="counter-selection-created">0</output><span>selection:updated</span><output id="counter-selection-updated">0</output><span>selection:cleared</span><output id="counter-selection-cleared">0</output>
+      <span>object:added</span><output id="counter-object-added">0</output><span>object:removed</span><output id="counter-object-removed">0</output><strong>logical:commit</strong><output id="counter-logical-commit">0</output>
+    </div>
+</aside></div>
+</body></html>
