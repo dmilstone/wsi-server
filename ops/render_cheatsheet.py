@@ -189,7 +189,7 @@ def page_one():
             P("Environments", h2), environment_table(),
             P("Normal release", h2), columns,
             Spacer(1, 5),
-            callout("<b>Every browser gate:</b> banner/title, login, image discovery/open/switch, tiles/pan/zoom, channel/display controls, Show channel viewer, Multi-view (fit-to-pane, per-pane scale bars, synchronize once two panes have images), full annotation naming/edit/delete/persistence and global Show/Hide, exports, isolated annotations, clean console/network, and no sustained delay.")]
+            callout("<b>Every browser gate:</b> banner/title, login, image discovery/open/switch, tiles/pan/zoom, channel/display controls, Show channel viewer, Multi-view (fit-to-pane, per-pane scale bars, synchronize once two panes have images), Cell display, Hierarchy, annotation delete (keep/remove descendants), full annotation naming/edit/delete/persistence and global Show/Hide, AI Labs selected-annotation clip, exports, isolated annotations, clean console/network, and no sustained delay.")]
 
 
 def page_two():

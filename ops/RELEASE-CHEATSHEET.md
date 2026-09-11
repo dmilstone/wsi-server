@@ -63,7 +63,8 @@ Type `STAGE` only after reviewing the commit, build, SHA-256, paths and backup.
 
 **Browser gate - 8082:** yellow staging banner; correct deidentified slides;
 open, pan, zoom and change channels; open the channel viewer; test Multi-view
-fit-to-pane, per-pane scale bars, and synchronize; test annotations and exports; no CSRF `403`,
+fit-to-pane, per-pane scale bars, and synchronize; test Cell display, Hierarchy,
+and annotation delete (Yes keeps descendants, No deletes them); test annotations and exports; no CSRF `403`,
 HTTP `500` or unhandled JavaScript errors. Close/reopen the browser and verify
 existing annotations appear, can be edited, and persist after switching.
 
@@ -102,7 +103,7 @@ Promotion must report the same commit and SHA-256 for staging and rehearsal.
 Type `PROMOTE` only after preflight succeeds and the rollback backup verifies.
 
 **Browser gate - 8080:** normal production layout and title; authorized slides;
-pan, zoom, channels, channel viewer, Multi-view, annotations and exports; no CSRF `403`, HTTP `500`, layout
+pan, zoom, channels, channel viewer, Multi-view, Cell display, Hierarchy, annotations and exports; no CSRF `403`, HTTP `500`, layout
 or persistence regression. Confirm `8081`, `8082` and `8083` remain isolated.
 
 ### 5. Tag only after production validation

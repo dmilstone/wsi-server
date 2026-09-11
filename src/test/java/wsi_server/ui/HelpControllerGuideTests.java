@@ -28,6 +28,10 @@ class HelpControllerGuideTests {
         assertTrue(html.contains("Viewer Multi-view, channel viewer, and shortcuts"));
         assertTrue(html.contains("Show channel viewer"));
         assertTrue(html.contains("Synchronize viewers"));
+        assertTrue(html.contains("Left pane and Hierarchy"));
+        assertTrue(html.contains("Delete object"));
+        assertTrue(html.contains("Nuclear channel"));
+        assertTrue(html.contains("Heat Map"));
         assertTrue(html.contains("authorized research and image-server administration only"));
         assertTrue(html.contains("Legal disclaimer"));
     }
@@ -42,6 +46,8 @@ class HelpControllerGuideTests {
         assertTrue(extracted.contains("WSI Comprehensive User"));
         assertTrue(extracted.contains("X-WSI-User"));
         assertTrue(extracted.contains("Show channel viewer"));
+        assertTrue(extracted.contains("Hierarchy"));
+        assertTrue(extracted.contains("Heat Map"));
         assertTrue(extracted.contains("LEGAL DISCLAIMER"));
         assertTrue(extracted.contains("authorized research"));
         assertFalse(extracted.contains("**"));

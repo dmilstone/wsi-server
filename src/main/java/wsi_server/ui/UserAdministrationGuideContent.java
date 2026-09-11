@@ -98,19 +98,29 @@ final class UserAdministrationGuideContent {
                                 new Bullet("Show channel viewer",
                                         "Opens a detached window of each visible channel plus Composite, following the cursor by default. Right-click that window to sync to cursor or viewer center, change zoom, or show all channels."),
                                 new Bullet("Scale bars and Z-stack",
-                                        "Each occupied pane shows its own scale bar when calibrated. Alt+wheel or arrow keys change focal plane. Double-click the magnification readout to type an exact value."),
+                                        "Each occupied pane shows its own scale bar when calibrated. View ▸ Open Z-stack controller reopens the focal-plane window. Alt+wheel or arrow keys change focal plane. Double-click the magnification readout to type an exact value."),
+                                new Bullet("Left pane and Hierarchy",
+                                        "Tabs are Slides, Image, Annotations, and Hierarchy. Hierarchy lists the image, annotations, and detections as a tree. Select a row for measurements or description; expand, collapse, lock, or delete from the toolbar; filter the Key/Value table by key."),
+                                new Bullet("Cell display",
+                                        "View ▸ Cell display switches detections among nuclei and cell boundaries, nuclei only, boundaries only, and centroids."),
+                                new Bullet("Delete object",
+                                        "Delete or Backspace removes selected annotations and cannot be undone. If the annotation contains detections or nested objects, Yes keeps those descendants, No deletes them too, and Cancel leaves everything."),
+                                new Bullet("AI Labs",
+                                        "Selected annotation clips detections to the real outline, not the bounding box. Choose whether nuclei that cross the border are excluded, included, or truncated. Prefer Nuclear channel for fluorescence StarDist. Heat Map shows Quantify colors after a successful run."),
+                                new Bullet("Brightness & Contrast",
+                                        "Double-click Channel min or max to type a value. Drag the histogram min/max lines. An empty colored checkbox outline means the channel is off; a × means it is on."),
                                 new Bullet("Keyboard shortcuts",
-                                        "A/N/D visibility; F and Shift+F fills; H left browser; M/S/R/O/L/P/V/B/W/./Z/C tools; Enter seals a polygon; Delete removes selected annotations. Full list is on the ? legend.")
+                                        "A/N/D visibility; F and Shift+F fills; H left browser (Slides/Image/Annotations/Hierarchy); M/S/R/O/L/P/V/B/W/./Z/C tools; Enter seals a polygon; Delete removes selected annotations (with the descendant prompt when needed). Full list is on the ? legend.")
                         ),
                         null,
                         List.of()
                 ),
                 new Section(
                         "5. Related viewer help",
-                        "This User Guide covers ingestion, workstation isolation, the ops LaunchAgent, and the current viewer Multi-view / channel-viewer behavior. The release cycle lives in the Admin & Ops Guide.",
+                        "This User Guide covers ingestion, workstation isolation, the ops LaunchAgent, and the current viewer Multi-view, Hierarchy, and channel-viewer behavior. The release cycle lives in the Admin & Ops Guide.",
                         List.of(
                                 new Bullet("Viewer Quick Guide",
-                                        "Open /help/viewer-guide.html for pan, zoom, Multi-view, channel viewer, annotations, and export."),
+                                        "Open /help/viewer-guide.html for pan, zoom, Multi-view, Hierarchy, channel viewer, annotations, and export."),
                                 new Bullet("Admin & Ops Guide",
                                         "Open /help/admin-ops-guide.html for environments, the monitored release cycle, logs, and rollback.")
                         ),
