@@ -44,7 +44,7 @@ assert.match(html, />Match viewer resolutions</);
 assert.match(html, />Close viewer</);
 assert.match(html, />Detach viewer from grid</);
 assert.match(html, />Attach viewer to grid</);
-assert.match(html, /annotation-adapter\.js\?v=20260911-ai-plugins-fix/);
+assert.match(html, /annotation-adapter\.js\?v=20260911-ai-hierarchy/);
 assert.match(html, /Synchronize multi-view pan and zoom/);
 
 assert.match(adapterSource, /static setGridSize\(/);

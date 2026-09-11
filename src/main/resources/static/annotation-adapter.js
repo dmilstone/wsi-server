@@ -2768,11 +2768,14 @@ class AnnotationAdapter {
     }
 
     static annotationImageRing(annotation) {
+        const id = annotation?.id;
+        const saved = id
+            ? (AnnotationAdapter.savedAnnotationsArray || []).find(item => item?.id === id)
+            : null;
+        const shape = AnnotationAdapter.annotationShapeFromSources(annotation, saved);
+        if (shape?.ring?.length >= 3) return shape.ring;
         const verts = Array.isArray(annotation?.vertices) ? annotation.vertices : [];
-        const fromVerts = verts.map(pt => ({
-            x: Number(pt?.image?.x ?? pt?.x ?? pt?.[0]),
-            y: Number(pt?.image?.y ?? pt?.y ?? pt?.[1])
-        })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        const fromVerts = AnnotationAdapter.ringFromPoints(verts);
         if (fromVerts.length >= 3) return fromVerts;
         const x = Number(annotation?.x);
         const y = Number(annotation?.y);
@@ -2785,6 +2788,287 @@ class AnnotationAdapter {
             { x: x + width, y: y + height },
             { x, y: y + height }
         ];
+    }
+
+    static ringFromPoints(points) {
+        if (!Array.isArray(points)) return [];
+        return points.map(pt => ({
+            x: Number(pt?.image?.x ?? pt?.x ?? pt?.[0]),
+            y: Number(pt?.image?.y ?? pt?.y ?? pt?.[1])
+        })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+    }
+
+    static ellipseRing(cx, cy, rx, ry, count = 64) {
+        const ring = [];
+        const n = Math.max(16, Number(count) || 64);
+        for (let i = 0; i < n; i += 1) {
+            const angle = (i / n) * Math.PI * 2;
+            ring.push({
+                x: cx + Math.cos(angle) * rx,
+                y: cy + Math.sin(angle) * ry
+            });
+        }
+        return ring;
+    }
+
+    static ensureCcwRing(ring) {
+        const pts = Array.isArray(ring) ? ring.slice() : [];
+        if (pts.length < 3) return pts;
+        let signed = 0;
+        for (let i = 0; i < pts.length; i += 1) {
+            const a = pts[i];
+            const b = pts[(i + 1) % pts.length];
+            signed += (a.x * b.y) - (b.x * a.y);
+        }
+        if (signed < 0) pts.reverse();
+        return pts;
+    }
+
+    static annotationBoxFromSources(live, saved, geometry) {
+        const geom = geometry || live?.target?.selector?.geometry || {};
+        const x = Number(saved?.x ?? geom.x ?? geom.bounds?.minX ?? live?.x);
+        const y = Number(saved?.y ?? geom.y ?? geom.bounds?.minY ?? live?.y);
+        const width = Number(saved?.width ?? geom.w ?? geom.width
+            ?? ((geom.bounds?.maxX - geom.bounds?.minX) || live?.width));
+        const height = Number(saved?.height ?? geom.h ?? geom.height
+            ?? ((geom.bounds?.maxY - geom.bounds?.minY) || live?.height));
+        if (![x, y, width, height].every(Number.isFinite) || !(width > 0) || !(height > 0)) return null;
+        return { x, y, width, height };
+    }
+
+    static annotationShapeFromSources(live, saved) {
+        const geometry = live?.target?.selector?.geometry || {};
+        const selectorType = String(live?.target?.selector?.type || "").toUpperCase();
+        const type = String(saved?.type || live?.type || "").toLowerCase();
+        const isEllipse = type === "ellipse" || type === "circle" || selectorType === "ELLIPSE";
+        const points = AnnotationAdapter.ringFromPoints(geometry.points || saved?.vertices || live?.vertices);
+        if (points.length >= 3 && !isEllipse) {
+            return { type: type || "polygon", ring: AnnotationAdapter.ensureCcwRing(points) };
+        }
+        const box = AnnotationAdapter.annotationBoxFromSources(live, saved, geometry);
+        if (!box) return points.length >= 3
+            ? { type: type || "polygon", ring: AnnotationAdapter.ensureCcwRing(points) }
+            : null;
+        if (isEllipse) {
+            const cx = box.x + box.width / 2;
+            const cy = box.y + box.height / 2;
+            const rx = box.width / 2;
+            const ry = box.height / 2;
+            return {
+                type: "ellipse",
+                cx,
+                cy,
+                rx,
+                ry,
+                ring: AnnotationAdapter.ellipseRing(cx, cy, rx, ry)
+            };
+        }
+        return {
+            type: type || "rectangle",
+            ring: AnnotationAdapter.ensureCcwRing([
+                { x: box.x, y: box.y },
+                { x: box.x + box.width, y: box.y },
+                { x: box.x + box.width, y: box.y + box.height },
+                { x: box.x, y: box.y + box.height }
+            ])
+        };
+    }
+
+    static selectedAnnotationShape() {
+        const engine = AnnotationAdapter.annotationEngine || AnnotationAdapter.annotationSpike;
+        const live = engine?.getSelectedAnnotations?.()?.[0] || null;
+        const id = live?.id || AnnotationAdapter.selectedNativeAnnotationId;
+        const saved = id
+            ? (AnnotationAdapter.savedAnnotationsArray || []).find(item => item?.id === id)
+            : null;
+        return AnnotationAdapter.annotationShapeFromSources(live || saved, saved);
+    }
+
+    static pointInAnnotationShape(x, y, shape) {
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !shape) return false;
+        if (shape.type === "ellipse" && shape.rx > 0 && shape.ry > 0) {
+            const dx = (x - shape.cx) / shape.rx;
+            const dy = (y - shape.cy) / shape.ry;
+            return (dx * dx) + (dy * dy) <= 1;
+        }
+        return Array.isArray(shape.ring) && shape.ring.length >= 3
+            && AnnotationAdapter.pointInRing(x, y, shape.ring);
+    }
+
+    static normalizeAnnotationBorderMode(value) {
+        const raw = String(value || "").trim().toLowerCase();
+        if (raw === "include" || raw === "truncate" || raw === "exclude") return raw;
+        return AnnotationAdapter.AI_DEFAULT_ANNOTATION_BORDER_MODE;
+    }
+
+    static nucleusAnnotationRelation(nucleus, shape) {
+        if (!shape) return "outside";
+        const ring = AnnotationAdapter.detectionRing(nucleus);
+        const center = AnnotationAdapter.detectionCentroid(nucleus);
+        const points = ring.length ? ring.slice() : [];
+        if (center) points.push(center);
+        if (!points.length) return "outside";
+        let inside = 0;
+        let outside = 0;
+        for (const pt of points) {
+            if (AnnotationAdapter.pointInAnnotationShape(pt.x, pt.y, shape)) inside += 1;
+            else outside += 1;
+        }
+        if (inside && !outside) return "inside";
+        if (outside && !inside) return "outside";
+        return "intersect";
+    }
+
+    static ringIsConvex(ring) {
+        const pts = Array.isArray(ring) ? ring : [];
+        if (pts.length < 3) return false;
+        let sign = 0;
+        for (let i = 0; i < pts.length; i += 1) {
+            const a = pts[i];
+            const b = pts[(i + 1) % pts.length];
+            const c = pts[(i + 2) % pts.length];
+            const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if (Math.abs(cross) < 1e-9) continue;
+            const next = cross > 0 ? 1 : -1;
+            if (!sign) sign = next;
+            else if (next !== sign) return false;
+        }
+        return true;
+    }
+
+    static lineIntersection(p1, p2, a, b) {
+        const d = (p1.x - p2.x) * (a.y - b.y) - (p1.y - p2.y) * (a.x - b.x);
+        if (Math.abs(d) < 1e-12) return { x: p2.x, y: p2.y };
+        const t = ((p1.x - a.x) * (a.y - b.y) - (p1.y - a.y) * (a.x - b.x)) / d;
+        return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
+    }
+
+    static isInsideClipEdge(point, a, b) {
+        return ((b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)) >= -1e-9;
+    }
+
+    static clipPolygonToConvexRing(subject, clip) {
+        const clipRing = AnnotationAdapter.ensureCcwRing(clip);
+        if (!Array.isArray(subject) || subject.length < 3 || clipRing.length < 3) return [];
+        let output = subject.map(pt => ({ x: Number(pt.x), y: Number(pt.y) }))
+            .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        for (let i = 0; i < clipRing.length; i += 1) {
+            const a = clipRing[i];
+            const b = clipRing[(i + 1) % clipRing.length];
+            const input = output;
+            output = [];
+            if (!input.length) break;
+            let prev = input[input.length - 1];
+            for (const cur of input) {
+                const curIn = AnnotationAdapter.isInsideClipEdge(cur, a, b);
+                const prevIn = AnnotationAdapter.isInsideClipEdge(prev, a, b);
+                if (curIn) {
+                    if (!prevIn) output.push(AnnotationAdapter.lineIntersection(prev, cur, a, b));
+                    output.push(cur);
+                } else if (prevIn) {
+                    output.push(AnnotationAdapter.lineIntersection(prev, cur, a, b));
+                }
+                prev = cur;
+            }
+        }
+        return output.filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+    }
+
+    static clipPolygonToAnnotationShape(subject, shape) {
+        const clip = shape?.ring;
+        if (!Array.isArray(subject) || subject.length < 3 || !clip || clip.length < 3) return [];
+        if (AnnotationAdapter.ringIsConvex(clip)) {
+            return AnnotationAdapter.clipPolygonToConvexRing(subject, clip);
+        }
+        const kept = [];
+        for (let i = 0; i < subject.length; i += 1) {
+            const cur = subject[i];
+            const next = subject[(i + 1) % subject.length];
+            const curIn = AnnotationAdapter.pointInAnnotationShape(cur.x, cur.y, shape);
+            const nextIn = AnnotationAdapter.pointInAnnotationShape(next.x, next.y, shape);
+            if (curIn) kept.push(cur);
+            if (curIn !== nextIn) {
+                for (let c = 0; c < clip.length; c += 1) {
+                    const a = clip[c];
+                    const b = clip[(c + 1) % clip.length];
+                    const hit = AnnotationAdapter.lineIntersection(cur, next, a, b);
+                    if (AnnotationAdapter.pointInAnnotationShape(hit.x, hit.y, shape)
+                        || AnnotationAdapter.pointInRing(hit.x, hit.y, subject)) {
+                        kept.push(hit);
+                    }
+                }
+            }
+        }
+        return kept;
+    }
+
+    static applyRingToNucleus(nucleus, ring) {
+        if (!ring || ring.length < 3) return null;
+        const center = ring.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+        const cx = center.x / ring.length;
+        const cy = center.y / ring.length;
+        const radius = ring.reduce((sum, pt) => sum + Math.hypot(pt.x - cx, pt.y - cy), 0) / ring.length;
+        return {
+            ...nucleus,
+            centerX: cx,
+            centerY: cy,
+            cx,
+            cy,
+            x: cx,
+            y: cy,
+            r: radius,
+            radius,
+            vertices: ring,
+            imageCoordinates: ring.map(pt => [pt.x, pt.y])
+        };
+    }
+
+    static clipNucleiToAnnotationShape(nuclei, shape, mode) {
+        const list = Array.isArray(nuclei) ? nuclei : [];
+        if (!shape?.ring || shape.ring.length < 3) return list;
+        const border = AnnotationAdapter.normalizeAnnotationBorderMode(mode);
+        const out = [];
+        for (const nucleus of list) {
+            const relation = AnnotationAdapter.nucleusAnnotationRelation(nucleus, shape);
+            if (relation === "outside") continue;
+            if (relation === "inside") {
+                out.push(nucleus);
+                continue;
+            }
+            if (border === "include") {
+                out.push(nucleus);
+                continue;
+            }
+            if (border === "exclude") continue;
+            const clipped = AnnotationAdapter.clipPolygonToAnnotationShape(
+                AnnotationAdapter.detectionRing(nucleus),
+                shape
+            );
+            const next = AnnotationAdapter.applyRingToNucleus(nucleus, clipped);
+            if (!next) continue;
+            const cellRing = AnnotationAdapter.nucleusVertexList({
+                vertices: nucleus.cellVertices || nucleus.cellRing
+            });
+            if (cellRing.length >= 3) {
+                const cellClipped = AnnotationAdapter.clipPolygonToAnnotationShape(cellRing, shape);
+                next.cellVertices = cellClipped.length >= 3 ? cellClipped : undefined;
+            }
+            out.push(next);
+        }
+        return out;
+    }
+
+    static applyAnnotationRoiToNuclei(nuclei, options = {}) {
+        const list = Array.isArray(nuclei) ? nuclei : [];
+        const config = AnnotationAdapter.readAiLabConfig(options.root, options);
+        if (String(config.segTarget || "viewport") !== "annotation") return list;
+        const shape = options.shape || AnnotationAdapter.selectedAnnotationShape();
+        if (!shape) return list;
+        return AnnotationAdapter.clipNucleiToAnnotationShape(
+            list,
+            shape,
+            options.annotationBorderMode ?? config.annotationBorderMode
+        );
     }
 
     static detectionInsideAnnotation(detection, annotation) {
@@ -2839,6 +3123,7 @@ class AnnotationAdapter {
         }
         AnnotationAdapter.styleAnnotationByClass(id);
         AnnotationAdapter.refreshAnnotationListPanel();
+        AnnotationAdapter.refreshHierarchyPanel();
         return Boolean(label);
     }
 
@@ -6410,10 +6695,19 @@ class AnnotationAdapter {
         if (typeof window !== "undefined") window.savedAnnotationsArray = next;
         if (typeof globalThis !== "undefined") globalThis.savedAnnotationsArray = next;
         AnnotationAdapter.refreshAnnotationListPanel();
+        AnnotationAdapter.refreshHierarchyPanel();
         return next;
     }
 
-    static ANALYSIS_PANE_VIEWS = ["slides", "image", "annotations"];
+    static ANALYSIS_PANE_VIEWS = ["slides", "image", "annotations", "hierarchy"];
+    static HIERARCHY_CHILD_CAP = 400;
+    static hierarchyExpandedKeys = new Set(["image"]);
+    static hierarchySelection = { kind: "image", annotationId: null, detectionIndex: null };
+    static selectedHierarchyDetectionIndex = null;
+    static hierarchyDetailTab = "measurements";
+    static hierarchyMeasureFilter = "";
+    static hierarchyMeasureSortKey = null;
+    static hierarchyMeasureSortDir = "asc";
 
     static bindAnalysisPaneTabs(root = null) {
         const doc = root || (typeof document !== "undefined" ? document : null);
@@ -6458,6 +6752,10 @@ class AnnotationAdapter {
             if (panel) panel.hidden = name !== next;
         }
         if (next === "annotations") AnnotationAdapter.refreshAnnotationListPanel(doc);
+        if (next === "hierarchy") {
+            AnnotationAdapter.bindHierarchyPanel(doc);
+            AnnotationAdapter.refreshHierarchyPanel(doc);
+        }
         return next;
     }
 
@@ -6569,6 +6867,942 @@ class AnnotationAdapter {
             if (on) item.classList?.add?.("is-selected");
             else item.classList?.remove?.("is-selected");
         });
+        return true;
+    }
+
+    static hierarchyDocument(root = null) {
+        return root || (typeof document !== "undefined" ? document : null);
+    }
+
+    static hierarchyImageName(metadata = AnnotationAdapter.imageMetadata) {
+        const source = metadata || AnnotationAdapter.imageMetadata || {};
+        return String(
+            source.name
+            || source.filename
+            || source.fileName
+            || AnnotationAdapter.rawImageFileName?.(source)
+            || "Image"
+        ).trim() || "Image";
+    }
+
+    static hierarchyEnsureState() {
+        if (!(AnnotationAdapter.hierarchyExpandedKeys instanceof Set)) {
+            AnnotationAdapter.hierarchyExpandedKeys = new Set(["image"]);
+        }
+        if (!AnnotationAdapter.hierarchySelection || typeof AnnotationAdapter.hierarchySelection !== "object") {
+            AnnotationAdapter.hierarchySelection = { kind: "image", annotationId: null, detectionIndex: null };
+        }
+        return AnnotationAdapter.hierarchySelection;
+    }
+
+    static hierarchyNodeKey(kind, id) {
+        if (kind === "image") return "image";
+        if (kind === "annotation") return `annotation:${id}`;
+        if (kind === "detection") return `detection:${id}`;
+        return String(id || "");
+    }
+
+    static parseHierarchyKey(key) {
+        const raw = String(key || "");
+        if (raw === "image") return { kind: "image", annotationId: null, detectionIndex: null };
+        if (raw.startsWith("annotation:")) {
+            return { kind: "annotation", annotationId: raw.slice("annotation:".length), detectionIndex: null };
+        }
+        if (raw.startsWith("detection:")) {
+            const index = Number(raw.slice("detection:".length));
+            return {
+                kind: "detection",
+                annotationId: null,
+                detectionIndex: Number.isInteger(index) ? index : null
+            };
+        }
+        return null;
+    }
+
+    static hierarchyObjectTypeLabel(kind, type) {
+        if (kind === "image") return "Image";
+        if (kind === "detection") return "Cell";
+        const raw = String(type || "annotation").toLowerCase();
+        if (raw === "ellipse" || raw === "circle") return "Annotation";
+        return "Annotation";
+    }
+
+    static hierarchyRoiLabel(kind, type) {
+        if (kind === "image") return "";
+        if (kind === "detection") return "Polygon";
+        switch (String(type || "").toLowerCase()) {
+            case "rectangle": return "Rectangle";
+            case "ellipse":
+            case "circle": return "Ellipse";
+            case "line": return "Line";
+            case "polyline": return "Polyline";
+            case "points": return "Points";
+            case "polygon":
+            case "wand":
+            case "brush": return "Polygon";
+            default: return type ? String(type) : "";
+        }
+    }
+
+    static hierarchyDetectionLabel(detection) {
+        const pathClass = String(detection?.pathClass || "").trim();
+        if (pathClass && pathClass !== "nucleus") return `Cell (${pathClass})`;
+        return "Cell";
+    }
+
+    static hierarchyDetectionPathClass(detection) {
+        const label = String(detection?.pathClass || "").trim();
+        if (label && label !== "nucleus") return label;
+        const classification = String(detection?.classification || "").trim();
+        if (classification && classification !== "nucleus") return classification;
+        return "";
+    }
+
+    static formatHierarchyNumber(value, digits = 5) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "";
+        const text = n.toFixed(digits);
+        return String(Number(text));
+    }
+
+    static hierarchyPixelsToMicrons(px, axis = "x") {
+        const mpp = AnnotationAdapter.micronsPerPixel();
+        if (!mpp) return null;
+        const scale = axis === "y" ? mpp.y : mpp.x;
+        const n = Number(px) * scale;
+        return Number.isFinite(n) ? n : null;
+    }
+
+    static hierarchyAreaToMicrons(areaPx) {
+        const mpp = AnnotationAdapter.micronsPerPixel();
+        if (!mpp) return null;
+        const n = Number(areaPx) * mpp.x * mpp.y;
+        return Number.isFinite(n) ? n : null;
+    }
+
+    static hierarchyLengthToMicrons(px) {
+        const mpp = AnnotationAdapter.micronsPerPixel();
+        if (!mpp) return null;
+        const n = Number(px) * ((mpp.x + mpp.y) / 2);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    static detectionMaxCaliperPixels(detection) {
+        const ring = AnnotationAdapter.detectionRing(detection);
+        if (!ring.length) {
+            const radius = AnnotationAdapter.detectionRadius(detection);
+            return Number.isFinite(radius) ? radius * 2 : 0;
+        }
+        const step = ring.length > 48 ? Math.ceil(ring.length / 48) : 1;
+        let max = 0;
+        for (let i = 0; i < ring.length; i += step) {
+            for (let j = i + step; j < ring.length; j += step) {
+                const d = Math.hypot(ring[j].x - ring[i].x, ring[j].y - ring[i].y);
+                if (d > max) max = d;
+            }
+        }
+        return max;
+    }
+
+    static annotationAreaPixels(annotation) {
+        const ring = AnnotationAdapter.annotationImageRing(annotation);
+        return AnnotationAdapter.polygonAreaPerimeter(ring).area;
+    }
+
+    static hierarchyLeaf(kind, extras = {}) {
+        return {
+            kind,
+            key: extras.key,
+            name: extras.name || "",
+            pathClass: extras.pathClass || "",
+            locked: Boolean(extras.locked),
+            annotationId: extras.annotationId || null,
+            detectionIndex: Number.isInteger(extras.detectionIndex) ? extras.detectionIndex : null,
+            type: extras.type || "",
+            objectCount: extras.objectCount,
+            children: Array.isArray(extras.children) ? extras.children : []
+        };
+    }
+
+    static buildHierarchyModel() {
+        AnnotationAdapter.hierarchyEnsureState();
+        const annotations = (Array.isArray(AnnotationAdapter.savedAnnotationsArray)
+            ? AnnotationAdapter.savedAnnotationsArray
+            : []).filter(item => item && item.id);
+        const detections = AnnotationAdapter.listDetections();
+        const items = annotations.map(annotation => ({
+            annotation,
+            area: AnnotationAdapter.annotationAreaPixels(annotation) || Number.POSITIVE_INFINITY,
+            children: [],
+            detections: []
+        }));
+
+        const containingItem = (item) => {
+            const center = AnnotationAdapter.annotationCentroid(item.annotation);
+            if (!center) return null;
+            let best = null;
+            for (const other of items) {
+                if (other === item || !(other.area > item.area)) continue;
+                const shape = AnnotationAdapter.annotationShapeFromSources(other.annotation, other.annotation);
+                if (shape && AnnotationAdapter.pointInAnnotationShape(center.x, center.y, shape)) {
+                    if (!best || other.area < best.area) best = other;
+                }
+            }
+            return best;
+        };
+        const roots = [];
+        for (const item of items) {
+            const parent = containingItem(item);
+            if (parent) parent.children.push(item);
+            else roots.push(item);
+        }
+
+        const orphans = [];
+        detections.forEach((detection, index) => {
+            let best = null;
+            for (const item of items) {
+                const shape = AnnotationAdapter.annotationShapeFromSources(item.annotation, item.annotation);
+                if (shape && AnnotationAdapter.nucleusAnnotationRelation(detection, shape) !== "outside") {
+                    if (!best || item.area < best.area) best = item;
+                }
+            }
+            const entry = { detection, index };
+            if (best) best.detections.push(entry);
+            else orphans.push(entry);
+        });
+
+        const detectionNode = (entry) => {
+            const pathClass = AnnotationAdapter.hierarchyDetectionPathClass(entry.detection);
+            return AnnotationAdapter.hierarchyLeaf("detection", {
+                key: AnnotationAdapter.hierarchyNodeKey("detection", entry.index),
+                name: AnnotationAdapter.hierarchyDetectionLabel({ ...entry.detection, pathClass }),
+                pathClass,
+                detectionIndex: entry.index,
+                type: "cell"
+            });
+        };
+        const annotationNode = (item) => {
+            const annotation = item.annotation;
+            const pathClass = AnnotationAdapter.annotationPathClass(annotation);
+            const children = [
+                ...item.children.map(annotationNode),
+                ...item.detections.map(detectionNode)
+            ];
+            return AnnotationAdapter.hierarchyLeaf("annotation", {
+                key: AnnotationAdapter.hierarchyNodeKey("annotation", annotation.id),
+                name: AnnotationAdapter.annotationListDisplayName(annotation),
+                pathClass,
+                locked: AnnotationAdapter.isAnnotationLocked(annotation.id),
+                annotationId: annotation.id,
+                type: annotation.type,
+                children
+            });
+        };
+
+        const children = [...roots.map(annotationNode), ...orphans.map(detectionNode)];
+        const total = annotations.length + detections.length;
+        const name = AnnotationAdapter.hierarchyImageName();
+        const allLocked = annotations.length > 0
+            && annotations.every(item => AnnotationAdapter.isAnnotationLocked(item.id));
+        return AnnotationAdapter.hierarchyLeaf("image", {
+            key: "image",
+            name,
+            locked: allLocked,
+            type: "image",
+            children,
+            objectCount: total
+        });
+    }
+
+    static hierarchyVisibleChildCount(node, cap = AnnotationAdapter.HIERARCHY_CHILD_CAP) {
+        const children = Array.isArray(node?.children) ? node.children : [];
+        const shown = Math.min(children.length, Math.max(0, Number(cap) || 0));
+        return { shown, total: children.length, remaining: Math.max(0, children.length - shown) };
+    }
+
+    static hierarchyObjectCountLabel(model) {
+        const total = Number(model?.objectCount);
+        const count = Number.isFinite(total) ? total : (model?.children?.length || 0);
+        return count === 1 ? "1 object" : `${count} objects`;
+    }
+
+    static hierarchyRowLabel(node) {
+        if (node?.kind === "image") {
+            return `${node.name} (${AnnotationAdapter.hierarchyObjectCountLabel(node)})`;
+        }
+        if (node?.kind === "annotation" && node.pathClass) {
+            return `${node.name} (${node.pathClass})`;
+        }
+        return node?.name || "";
+    }
+
+    static collectHierarchyKeys(node, into = []) {
+        if (!node?.key) return into;
+        into.push(node.key);
+        (node.children || []).forEach(child => AnnotationAdapter.collectHierarchyKeys(child, into));
+        return into;
+    }
+
+    static hierarchyPanelIsVisible(doc) {
+        const panel = doc?.getElementById?.("qp-view-hierarchy");
+        return Boolean(panel) && panel.hidden !== true;
+    }
+
+    static refreshHierarchyPanel(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        const model = AnnotationAdapter.buildHierarchyModel();
+        const tree = doc?.getElementById?.("qp-hierarchy-tree");
+        if (!tree || typeof doc.createElement !== "function") return model;
+        if (!AnnotationAdapter.hierarchyPanelIsVisible(doc)) return model;
+        AnnotationAdapter.hierarchyEnsureState();
+        tree.textContent = "";
+        AnnotationAdapter.renderHierarchyNode(doc, tree, model, 0);
+        AnnotationAdapter.syncHierarchySelection(doc);
+        AnnotationAdapter.refreshHierarchyDetails(doc);
+        AnnotationAdapter.syncHierarchyDetectionHighlight(doc);
+        return model;
+    }
+
+    static renderHierarchyNode(doc, host, node, depth) {
+        if (!doc || !host || !node) return;
+        const expanded = AnnotationAdapter.hierarchyExpandedKeys.has(node.key);
+        const hasChildren = (node.children || []).length > 0;
+        const row = doc.createElement("div");
+        row.className = "qp-hierarchy-row";
+        row.setAttribute?.("role", "treeitem");
+        row.setAttribute?.("data-qp-hierarchy-key", node.key);
+        row.setAttribute?.("data-qp-hierarchy-kind", node.kind);
+        if (row.dataset) {
+            row.dataset.qpHierarchyKey = node.key;
+            row.dataset.qpHierarchyKind = node.kind;
+        }
+        if (Number.isInteger(node.detectionIndex) && row.dataset) {
+            row.dataset.qpHierarchyDetectionIndex = String(node.detectionIndex);
+        }
+        if (node.annotationId && row.dataset) row.dataset.qpHierarchyAnnotationId = node.annotationId;
+        if ("tabIndex" in row) row.tabIndex = 0;
+        if (hasChildren) row.setAttribute?.("aria-expanded", expanded ? "true" : "false");
+        if (row.style) row.style.paddingLeft = `${4 + depth * 14}px`;
+
+        const twisty = doc.createElement("button");
+        twisty.type = "button";
+        twisty.className = hasChildren ? "qp-hierarchy-twisty" : "qp-hierarchy-twisty is-empty";
+        twisty.setAttribute?.("data-qp-hierarchy-twisty", node.key);
+        twisty.setAttribute?.("aria-label", expanded ? "Collapse" : "Expand");
+        twisty.textContent = hasChildren ? (expanded ? "▾" : "▸") : "·";
+        twisty.addEventListener?.("click", event => {
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            AnnotationAdapter.toggleHierarchyExpanded(node.key, doc);
+        });
+
+        const icon = doc.createElement("span");
+        icon.className = "qp-hierarchy-icon";
+        icon.setAttribute?.("aria-hidden", "true");
+        const pathClass = node.pathClass;
+        const selectedKey = AnnotationAdapter.hierarchySelectionKey();
+        const isSelected = selectedKey === node.key;
+        if (node.kind === "image") {
+            icon.className += " is-image";
+            icon.textContent = "📎";
+        } else if (node.kind === "annotation") {
+            icon.className += " is-annotation";
+            icon.textContent = AnnotationAdapter.annotationListTypeGlyph(node.type);
+            if (pathClass && icon.style) {
+                icon.style.color = AnnotationAdapter.classifyClassColor(pathClass);
+            }
+        } else {
+            if (pathClass) icon.className += " is-classified";
+            if (isSelected && pathClass) {
+                icon.textContent = "✓";
+                if (icon.style) icon.style.color = AnnotationAdapter.classifyClassColor(pathClass) || "#43a047";
+            } else {
+                icon.textContent = "📎";
+                if (icon.style) {
+                    icon.style.color = pathClass
+                        ? (AnnotationAdapter.classifyClassColor(pathClass) || "#43a047")
+                        : "#e53935";
+                }
+            }
+        }
+
+        const label = doc.createElement("span");
+        label.className = "qp-hierarchy-label";
+        label.textContent = AnnotationAdapter.hierarchyRowLabel(node);
+
+        if (typeof row.append === "function") row.append(twisty, icon, label);
+        else {
+            row.appendChild(twisty);
+            row.appendChild(icon);
+            row.appendChild(label);
+        }
+
+        if (node.kind === "image" || node.kind === "annotation") {
+            const lock = doc.createElement("button");
+            lock.type = "button";
+            lock.className = node.locked ? "qp-hierarchy-lock-btn is-locked" : "qp-hierarchy-lock-btn";
+            lock.setAttribute?.("data-qp-hierarchy-lock", node.key);
+            lock.setAttribute?.("title", node.locked ? "Unlock" : "Lock");
+            lock.setAttribute?.("aria-label", node.locked ? "Unlock" : "Lock");
+            lock.textContent = "🔒";
+            lock.addEventListener?.("click", event => {
+                event.preventDefault?.();
+                event.stopPropagation?.();
+                AnnotationAdapter.toggleHierarchyLock(node.key, doc);
+            });
+            row.appendChild(lock);
+        }
+
+        row.addEventListener?.("click", event => {
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            AnnotationAdapter.selectHierarchyNode(node.key, { additive: Boolean(event.shiftKey) }, doc);
+        });
+        host.appendChild(row);
+
+        if (!hasChildren || !expanded) return;
+        const { shown, remaining } = AnnotationAdapter.hierarchyVisibleChildCount(node);
+        for (let i = 0; i < shown; i += 1) {
+            AnnotationAdapter.renderHierarchyNode(doc, host, node.children[i], depth + 1);
+        }
+        if (remaining > 0) {
+            const more = doc.createElement("div");
+            more.className = "qp-hierarchy-row is-more";
+            more.setAttribute?.("data-qp-hierarchy-key", `more:${node.key}`);
+            if (more.style) more.style.paddingLeft = `${18 + (depth + 1) * 14}px`;
+            more.textContent = `… ${remaining} more objects`;
+            host.appendChild(more);
+        }
+    }
+
+    static hierarchySelectionKey(selection = AnnotationAdapter.hierarchySelection) {
+        const current = selection || AnnotationAdapter.hierarchyEnsureState();
+        if (current.kind === "detection" && Number.isInteger(current.detectionIndex)) {
+            return AnnotationAdapter.hierarchyNodeKey("detection", current.detectionIndex);
+        }
+        if (current.kind === "annotation" && current.annotationId) {
+            return AnnotationAdapter.hierarchyNodeKey("annotation", current.annotationId);
+        }
+        return "image";
+    }
+
+    static syncHierarchyFromAnnotationSelection(root = null) {
+        const id = AnnotationAdapter.selectedNativeAnnotationId;
+        AnnotationAdapter.hierarchySelection = id
+            ? { kind: "annotation", annotationId: id, detectionIndex: null }
+            : { kind: "image", annotationId: null, detectionIndex: null };
+        AnnotationAdapter.selectedHierarchyDetectionIndex = null;
+        AnnotationAdapter.syncHierarchySelection(root);
+        AnnotationAdapter.refreshHierarchyDetails(root);
+        AnnotationAdapter.syncHierarchyDetectionHighlight(root);
+        return AnnotationAdapter.hierarchySelection;
+    }
+
+    static syncHierarchySelection(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        const tree = doc?.getElementById?.("qp-hierarchy-tree");
+        if (!tree) return false;
+        const selectedKey = AnnotationAdapter.hierarchySelectionKey();
+        const rows = tree.querySelectorAll?.(".qp-hierarchy-row") || [];
+        rows.forEach?.(row => {
+            if (row.classList?.contains?.("is-more")) return;
+            const key = row.getAttribute?.("data-qp-hierarchy-key") || row.dataset?.qpHierarchyKey;
+            const on = key === selectedKey;
+            if (typeof row.classList?.toggle === "function") row.classList.toggle("is-selected", on);
+            else if (on) row.classList?.add?.("is-selected");
+            else row.classList?.remove?.("is-selected");
+            row.setAttribute?.("aria-selected", on ? "true" : "false");
+        });
+        return true;
+    }
+
+    static syncHierarchyLockIcons(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        const tree = doc?.getElementById?.("qp-hierarchy-tree");
+        if (!tree || !AnnotationAdapter.hierarchyPanelIsVisible(doc)) return false;
+        const buttons = tree.querySelectorAll?.("[data-qp-hierarchy-lock]") || [];
+        buttons.forEach?.(button => {
+            const key = button.getAttribute?.("data-qp-hierarchy-lock");
+            const parsed = AnnotationAdapter.parseHierarchyKey(key);
+            let locked = false;
+            if (parsed?.kind === "annotation" && parsed.annotationId) {
+                locked = AnnotationAdapter.isAnnotationLocked(parsed.annotationId);
+            } else if (parsed?.kind === "image") {
+                const annotations = (AnnotationAdapter.savedAnnotationsArray || []).filter(item => item?.id);
+                locked = annotations.length > 0
+                    && annotations.every(item => AnnotationAdapter.isAnnotationLocked(item.id));
+            }
+            if (typeof button.classList?.toggle === "function") button.classList.toggle("is-locked", locked);
+            button.setAttribute?.("title", locked ? "Unlock" : "Lock");
+        });
+        return true;
+    }
+
+    static syncHierarchyDetectionHighlight(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        const index = AnnotationAdapter.selectedHierarchyDetectionIndex;
+        const nodes = doc?.querySelectorAll?.("[data-nucleus-index]") || [];
+        nodes.forEach?.(node => {
+            const current = Number(node.getAttribute?.("data-nucleus-index"));
+            const on = Number.isInteger(index) && current === index;
+            if (typeof node.classList?.toggle === "function") node.classList.toggle("is-hierarchy-selected", on);
+        });
+        return true;
+    }
+
+    static selectHierarchyNode(key, options = {}, root = null) {
+        const parsed = AnnotationAdapter.parseHierarchyKey(key);
+        if (!parsed) return false;
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        AnnotationAdapter.hierarchyEnsureState();
+        if (parsed.kind === "annotation" && parsed.annotationId) {
+            return AnnotationAdapter.selectNativeAnnotationShape(parsed.annotationId, {
+                additive: Boolean(options.additive)
+            });
+        }
+        if (parsed.kind === "detection" && Number.isInteger(parsed.detectionIndex)) {
+            if (AnnotationAdapter.selectedNativeAnnotationIds instanceof Set) {
+                AnnotationAdapter.selectedNativeAnnotationIds.clear();
+            }
+            AnnotationAdapter.selectedNativeAnnotationId = null;
+            AnnotationAdapter.clearNativeAnnotationHighlights?.();
+            AnnotationAdapter.refreshExportSelectedAnnotationButtonState?.();
+            AnnotationAdapter.syncAnnotationListSelection(doc);
+            AnnotationAdapter.hierarchySelection = {
+                kind: "detection",
+                annotationId: null,
+                detectionIndex: parsed.detectionIndex
+            };
+            AnnotationAdapter.selectedHierarchyDetectionIndex = parsed.detectionIndex;
+            AnnotationAdapter.syncHierarchySelection(doc);
+            AnnotationAdapter.refreshHierarchyDetails(doc);
+            AnnotationAdapter.syncHierarchyDetectionHighlight(doc);
+            return true;
+        }
+        if (AnnotationAdapter.selectedNativeAnnotationId || AnnotationAdapter.selectedNativeAnnotationIds?.size) {
+            AnnotationAdapter.deselectNativeAnnotationShape();
+        }
+        AnnotationAdapter.hierarchySelection = { kind: "image", annotationId: null, detectionIndex: null };
+        AnnotationAdapter.selectedHierarchyDetectionIndex = null;
+        AnnotationAdapter.syncHierarchySelection(doc);
+        AnnotationAdapter.refreshHierarchyDetails(doc);
+        AnnotationAdapter.syncHierarchyDetectionHighlight(doc);
+        return true;
+    }
+
+    static toggleHierarchyExpanded(key, root = null) {
+        AnnotationAdapter.hierarchyEnsureState();
+        if (AnnotationAdapter.hierarchyExpandedKeys.has(key)) {
+            AnnotationAdapter.hierarchyExpandedKeys.delete(key);
+        } else {
+            AnnotationAdapter.hierarchyExpandedKeys.add(key);
+        }
+        AnnotationAdapter.refreshHierarchyPanel(root);
+        return AnnotationAdapter.hierarchyExpandedKeys.has(key);
+    }
+
+    static toggleHierarchyLock(key, root = null) {
+        const parsed = AnnotationAdapter.parseHierarchyKey(key)
+            || AnnotationAdapter.hierarchySelection;
+        if (parsed?.kind === "annotation" && parsed.annotationId) {
+            AnnotationAdapter.toggleAnnotationLocked(parsed.annotationId);
+            AnnotationAdapter.refreshHierarchyPanel(root);
+            return true;
+        }
+        if (parsed?.kind === "image") {
+            const annotations = (AnnotationAdapter.savedAnnotationsArray || []).filter(item => item?.id);
+            const allLocked = annotations.length > 0
+                && annotations.every(item => AnnotationAdapter.isAnnotationLocked(item.id));
+            annotations.forEach(item => AnnotationAdapter.setAnnotationLocked(item.id, !allLocked));
+            AnnotationAdapter.refreshHierarchyPanel(root);
+            return annotations.length > 0;
+        }
+        return false;
+    }
+
+    static expandHierarchyAll(root = null) {
+        const model = AnnotationAdapter.buildHierarchyModel();
+        AnnotationAdapter.hierarchyExpandedKeys = new Set(AnnotationAdapter.collectHierarchyKeys(model));
+        AnnotationAdapter.refreshHierarchyPanel(root);
+        return AnnotationAdapter.hierarchyExpandedKeys.size;
+    }
+
+    static collapseHierarchyAll(root = null) {
+        AnnotationAdapter.hierarchyExpandedKeys = new Set();
+        AnnotationAdapter.refreshHierarchyPanel(root);
+        return 0;
+    }
+
+    static selectAllHierarchyAnnotations() {
+        const ids = (AnnotationAdapter.savedAnnotationsArray || []).map(item => item?.id).filter(Boolean);
+        ids.forEach((id, index) => {
+            AnnotationAdapter.selectNativeAnnotationShape(id, { additive: index > 0 });
+        });
+        return ids.length;
+    }
+
+    static selectAllHierarchyDetections(root = null) {
+        const detections = AnnotationAdapter.listDetections();
+        if (!detections.length) return 0;
+        return AnnotationAdapter.selectHierarchyNode(
+            AnnotationAdapter.hierarchyNodeKey("detection", 0),
+            {},
+            root
+        ) ? detections.length : 0;
+    }
+
+    static removeHierarchyDetections(indexes) {
+        const drop = new Set((Array.isArray(indexes) ? indexes : [indexes])
+            .map(n => Number(n))
+            .filter(Number.isInteger));
+        if (!drop.size) return 0;
+        const current = AnnotationAdapter.listDetections();
+        const next = current.filter((_, index) => !drop.has(index));
+        AnnotationAdapter.lastNucleiCircles = next;
+        AnnotationAdapter.replaceLocalizedCellObjects(next);
+        try {
+            AnnotationAdapter.paintNucleiCircleOverlays(AnnotationAdapter.viewer, next);
+        } catch (_error) { /* viewer optional */ }
+        return drop.size;
+    }
+
+    static deleteHierarchySelection(root = null) {
+        const selection = AnnotationAdapter.hierarchyEnsureState();
+        if (selection.kind === "annotation" && selection.annotationId) {
+            return AnnotationAdapter.promptDeleteAnnotations(
+                AnnotationAdapter.selectedAnnotationIds?.() || [selection.annotationId]
+            );
+        }
+        if (selection.kind === "detection" && Number.isInteger(selection.detectionIndex)) {
+            const removed = AnnotationAdapter.removeHierarchyDetections([selection.detectionIndex]);
+            AnnotationAdapter.hierarchySelection = { kind: "image", annotationId: null, detectionIndex: null };
+            AnnotationAdapter.selectedHierarchyDetectionIndex = null;
+            AnnotationAdapter.refreshHierarchyPanel(root);
+            return removed;
+        }
+        return 0;
+    }
+
+    static runHierarchyAction(action, root = null) {
+        switch (String(action || "")) {
+            case "expand": return AnnotationAdapter.expandHierarchyAll(root);
+            case "collapse": return AnnotationAdapter.collapseHierarchyAll(root);
+            case "lock": return AnnotationAdapter.toggleHierarchyLock(
+                AnnotationAdapter.hierarchySelectionKey(),
+                root
+            );
+            case "delete": return AnnotationAdapter.deleteHierarchySelection(root);
+            case "select-annotations": return AnnotationAdapter.selectAllHierarchyAnnotations();
+            case "select-detections": return AnnotationAdapter.selectAllHierarchyDetections(root);
+            default: return null;
+        }
+    }
+
+    static hierarchyMeasurementRows(selection = AnnotationAdapter.hierarchySelection) {
+        const current = selection || AnnotationAdapter.hierarchyEnsureState();
+        const imageName = AnnotationAdapter.hierarchyImageName();
+        const rows = [];
+        const push = (key, value, extras = {}) => {
+            rows.push({ key, value: value == null ? "" : String(value), ...extras });
+        };
+
+        if (current.kind === "detection" && Number.isInteger(current.detectionIndex)) {
+            const detection = AnnotationAdapter.listDetections()[current.detectionIndex];
+            if (!detection) return rows;
+            const features = AnnotationAdapter.objectDetectionFeatures(detection);
+            const center = AnnotationAdapter.detectionCentroid(detection);
+            const pathClass = AnnotationAdapter.hierarchyDetectionPathClass(detection);
+            const parent = AnnotationAdapter.hierarchyDetectionParentName(detection);
+            const calibrated = Boolean(AnnotationAdapter.micronsPerPixel());
+            const cx = calibrated ? AnnotationAdapter.hierarchyPixelsToMicrons(center?.x, "x") : center?.x;
+            const cy = calibrated ? AnnotationAdapter.hierarchyPixelsToMicrons(center?.y, "y") : center?.y;
+            const area = calibrated ? AnnotationAdapter.hierarchyAreaToMicrons(features.area) : features.area;
+            const perimeter = calibrated
+                ? AnnotationAdapter.hierarchyLengthToMicrons(features.perimeter)
+                : features.perimeter;
+            const caliper = calibrated
+                ? AnnotationAdapter.hierarchyLengthToMicrons(AnnotationAdapter.detectionMaxCaliperPixels(detection))
+                : AnnotationAdapter.detectionMaxCaliperPixels(detection);
+            const unit = calibrated ? "µm" : "px";
+            push("Image", imageName);
+            push("Object ID", detection.id || `detection-${current.detectionIndex}`, { copyable: true });
+            push("Object type", "Cell");
+            push("Name", detection.name || "");
+            push("Classification", pathClass, {
+                swatch: pathClass ? (AnnotationAdapter.classifyClassColor(pathClass) || "#43a047") : ""
+            });
+            push("Parent", parent);
+            push("ROI", "Polygon");
+            push(`Centroid X ${unit}`, AnnotationAdapter.formatHierarchyNumber(cx));
+            push(`Centroid Y ${unit}`, AnnotationAdapter.formatHierarchyNumber(cy));
+            push("Nucleus: Area", AnnotationAdapter.formatHierarchyNumber(area, 3));
+            push("Nucleus: Perimeter", AnnotationAdapter.formatHierarchyNumber(perimeter, 5));
+            push("Nucleus: Circularity", AnnotationAdapter.formatHierarchyNumber(features.circularity, 5));
+            push("Nucleus: Max caliper", AnnotationAdapter.formatHierarchyNumber(caliper, 5));
+            return rows;
+        }
+
+        if (current.kind === "annotation" && current.annotationId) {
+            const annotation = (AnnotationAdapter.savedAnnotationsArray || [])
+                .find(item => item?.id === current.annotationId);
+            if (!annotation) return rows;
+            const center = AnnotationAdapter.annotationCentroid(annotation);
+            const pathClass = AnnotationAdapter.annotationPathClass(annotation);
+            const calibrated = Boolean(AnnotationAdapter.micronsPerPixel());
+            const cx = calibrated ? AnnotationAdapter.hierarchyPixelsToMicrons(center?.x, "x") : center?.x;
+            const cy = calibrated ? AnnotationAdapter.hierarchyPixelsToMicrons(center?.y, "y") : center?.y;
+            const unit = calibrated ? "µm" : "px";
+            push("Image", imageName);
+            push("Object ID", annotation.id, { copyable: true });
+            push("Object type", "Annotation");
+            push("Name", AnnotationAdapter.annotationListDisplayName(annotation));
+            push("Classification", pathClass, {
+                swatch: pathClass ? (AnnotationAdapter.classifyClassColor(pathClass) || "#43a047") : ""
+            });
+            push("Parent", "Root object (Image)");
+            push("ROI", AnnotationAdapter.hierarchyRoiLabel("annotation", annotation.type));
+            push(`Centroid X ${unit}`, AnnotationAdapter.formatHierarchyNumber(cx));
+            push(`Centroid Y ${unit}`, AnnotationAdapter.formatHierarchyNumber(cy));
+            return rows;
+        }
+
+        const metadata = AnnotationAdapter.imageMetadata || {};
+        const detections = AnnotationAdapter.listDetections();
+        const annotations = (AnnotationAdapter.savedAnnotationsArray || []).filter(item => item?.id);
+        push("Image", imageName);
+        push("Object ID", metadata.id || "", { copyable: Boolean(metadata.id) });
+        push("Object type", "Image");
+        push("Name", imageName);
+        push("Classification", "");
+        push("Parent", "");
+        push("ROI", "");
+        push("Annotations", String(annotations.length));
+        push("Detections", String(detections.length));
+        if (metadata.width && metadata.height) {
+            push("Dimensions", `${metadata.width} × ${metadata.height}`);
+        }
+        return rows;
+    }
+
+    static hierarchyDetectionParentName(detection) {
+        const annotations = (AnnotationAdapter.savedAnnotationsArray || []).filter(item => item?.id);
+        let best = null;
+        let bestArea = Number.POSITIVE_INFINITY;
+        for (const annotation of annotations) {
+            const shape = AnnotationAdapter.annotationShapeFromSources(annotation, annotation);
+            if (shape && AnnotationAdapter.nucleusAnnotationRelation(detection, shape) !== "outside") {
+                const area = AnnotationAdapter.annotationAreaPixels(annotation) || Number.POSITIVE_INFINITY;
+                if (area < bestArea) {
+                    best = annotation;
+                    bestArea = area;
+                }
+            }
+        }
+        if (!best) return "Root object (Image)";
+        const name = AnnotationAdapter.annotationListDisplayName(best);
+        return name === "(unnamed)" ? "Annotation" : name;
+    }
+
+    static hierarchyDescriptionText(selection = AnnotationAdapter.hierarchySelection) {
+        const rows = AnnotationAdapter.hierarchyMeasurementRows(selection);
+        if (!rows.length) return "No object selected.";
+        const wanted = ["Object type", "Name", "Classification", "Parent", "ROI", "Image"];
+        return wanted
+            .map(key => rows.find(row => row.key === key))
+            .filter(row => row && String(row.value || "").trim())
+            .map(row => `${row.key}: ${row.value}`)
+            .join("\n") || "No description.";
+    }
+
+    static hierarchyCrumbText(selection = AnnotationAdapter.hierarchySelection) {
+        const current = selection || AnnotationAdapter.hierarchyEnsureState();
+        if (current.kind === "detection" && Number.isInteger(current.detectionIndex)) {
+            const detection = AnnotationAdapter.listDetections()[current.detectionIndex];
+            return `Image > ${AnnotationAdapter.hierarchyDetectionLabel({
+                ...detection,
+                pathClass: AnnotationAdapter.hierarchyDetectionPathClass(detection)
+            })}`;
+        }
+        if (current.kind === "annotation" && current.annotationId) {
+            const annotation = (AnnotationAdapter.savedAnnotationsArray || [])
+                .find(item => item?.id === current.annotationId);
+            return `Image > ${AnnotationAdapter.annotationListDisplayName(annotation)}`;
+        }
+        return "Image";
+    }
+
+    static refreshHierarchyDetails(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        if (!doc?.getElementById) return [];
+        const rows = AnnotationAdapter.sortedHierarchyMeasurementRows();
+        const crumb = doc.getElementById("qp-hierarchy-crumb");
+        if (crumb) crumb.textContent = AnnotationAdapter.hierarchyCrumbText();
+        const body = doc.getElementById("qp-hierarchy-measurements-body");
+        if (body && typeof doc.createElement === "function") {
+            body.textContent = "";
+            for (const row of rows) {
+                const tr = doc.createElement("tr");
+                tr.setAttribute?.("data-qp-measure-key", String(row.key).toLowerCase());
+                if (tr.dataset) tr.dataset.qpMeasureKey = String(row.key).toLowerCase();
+                const keyCell = doc.createElement("td");
+                keyCell.textContent = row.key;
+                const valueCell = doc.createElement("td");
+                const wrap = doc.createElement("div");
+                wrap.className = "qp-hierarchy-value";
+                const text = doc.createElement("span");
+                text.className = "qp-hierarchy-value-text";
+                text.textContent = row.value;
+                wrap.appendChild(text);
+                if (row.swatch) {
+                    const swatch = doc.createElement("span");
+                    swatch.className = "qp-hierarchy-swatch";
+                    if (swatch.style) swatch.style.background = row.swatch;
+                    wrap.appendChild(swatch);
+                }
+                if (row.copyable && row.value) {
+                    const copy = doc.createElement("button");
+                    copy.type = "button";
+                    copy.className = "qp-hierarchy-copy";
+                    copy.setAttribute?.("data-qp-hierarchy-copy", row.value);
+                    copy.setAttribute?.("title", "Copy");
+                    copy.textContent = "⧉";
+                    copy.addEventListener?.("click", event => {
+                        event.preventDefault?.();
+                        event.stopPropagation?.();
+                        AnnotationAdapter.copyHierarchyText(row.value);
+                    });
+                    wrap.appendChild(copy);
+                }
+                valueCell.appendChild(wrap);
+                tr.appendChild(keyCell);
+                tr.appendChild(valueCell);
+                body.appendChild(tr);
+            }
+        }
+        const description = doc.getElementById("qp-hierarchy-description");
+        if (description) description.textContent = AnnotationAdapter.hierarchyDescriptionText();
+        AnnotationAdapter.applyHierarchyMeasurementFilter(doc);
+        AnnotationAdapter.applyHierarchyDetailTab(doc);
+        return rows;
+    }
+
+    static sortedHierarchyMeasurementRows() {
+        const rows = AnnotationAdapter.hierarchyMeasurementRows();
+        const key = AnnotationAdapter.hierarchyMeasureSortKey;
+        if (key !== "key" && key !== "value") return rows;
+        const dir = AnnotationAdapter.hierarchyMeasureSortDir === "desc" ? -1 : 1;
+        return rows.slice().sort((a, b) => {
+            const left = String(a[key] || "").toLowerCase();
+            const right = String(b[key] || "").toLowerCase();
+            if (left < right) return -1 * dir;
+            if (left > right) return 1 * dir;
+            return 0;
+        });
+    }
+
+    static applyHierarchyMeasurementFilter(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        const body = doc?.getElementById?.("qp-hierarchy-measurements-body");
+        if (!body) return 0;
+        const filter = String(AnnotationAdapter.hierarchyMeasureFilter || "").trim().toLowerCase();
+        const rows = body.querySelectorAll?.("tr") || body.children || [];
+        let visible = 0;
+        Array.from(rows).forEach(row => {
+            const key = String(row.getAttribute?.("data-qp-measure-key") || row.dataset?.qpMeasureKey || "")
+                .toLowerCase();
+            const hide = Boolean(filter) && !key.includes(filter);
+            row.hidden = hide;
+            if (!hide) visible += 1;
+        });
+        return visible;
+    }
+
+    static applyHierarchyDetailTab(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        const tab = AnnotationAdapter.hierarchyDetailTab === "description" ? "description" : "measurements";
+        const measureTab = doc?.getElementById?.("qp-hierarchy-tab-measurements");
+        const descTab = doc?.getElementById?.("qp-hierarchy-tab-description");
+        const tableWrap = doc?.getElementById?.("qp-hierarchy-table-wrap");
+        const description = doc?.getElementById?.("qp-hierarchy-description");
+        measureTab?.setAttribute?.("aria-selected", tab === "measurements" ? "true" : "false");
+        descTab?.setAttribute?.("aria-selected", tab === "description" ? "true" : "false");
+        if (tableWrap) tableWrap.hidden = tab !== "measurements";
+        if (description) description.hidden = tab !== "description";
+        return tab;
+    }
+
+    static setHierarchyDetailTab(tab, root = null) {
+        AnnotationAdapter.hierarchyDetailTab = tab === "description" ? "description" : "measurements";
+        return AnnotationAdapter.applyHierarchyDetailTab(root);
+    }
+
+    static toggleHierarchyMeasureSort(key) {
+        if (AnnotationAdapter.hierarchyMeasureSortKey === key) {
+            AnnotationAdapter.hierarchyMeasureSortDir =
+                AnnotationAdapter.hierarchyMeasureSortDir === "asc" ? "desc" : "asc";
+        } else {
+            AnnotationAdapter.hierarchyMeasureSortKey = key;
+            AnnotationAdapter.hierarchyMeasureSortDir = "asc";
+        }
+        return AnnotationAdapter.hierarchyMeasureSortKey;
+    }
+
+    static copyHierarchyText(text) {
+        const value = String(text || "");
+        if (!value) return false;
+        try {
+            if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+                void navigator.clipboard.writeText(value);
+                return true;
+            }
+        } catch (_error) { /* clipboard optional */ }
+        return false;
+    }
+
+    static bindHierarchyPanel(root = null) {
+        const doc = AnnotationAdapter.hierarchyDocument(root);
+        const panel = doc?.getElementById?.("qp-view-hierarchy");
+        if (!panel || panel.dataset?.qpHierarchyBound === "1") return Boolean(panel);
+        const onAction = event => {
+            const button = event.target?.closest?.("[data-qp-hierarchy-action]") || event.target;
+            const action = button?.getAttribute?.("data-qp-hierarchy-action")
+                || button?.dataset?.qpHierarchyAction;
+            if (!action) return;
+            event.preventDefault?.();
+            AnnotationAdapter.runHierarchyAction(action, doc);
+        };
+        const actionButtons = panel.querySelectorAll?.("[data-qp-hierarchy-action]") || [];
+        if (actionButtons.length) {
+            actionButtons.forEach?.(button => button.addEventListener?.("click", onAction));
+        } else {
+            ["expand", "collapse", "lock", "delete", "select-annotations", "select-detections"].forEach(name => {
+                doc.getElementById?.(`qp-hierarchy-${name}`)?.addEventListener?.("click", onAction);
+            });
+        }
+        const filter = doc.getElementById?.("qp-hierarchy-filter");
+        filter?.addEventListener?.("input", event => {
+            AnnotationAdapter.hierarchyMeasureFilter = event.target?.value || filter.value || "";
+            AnnotationAdapter.applyHierarchyMeasurementFilter(doc);
+        });
+        doc.getElementById?.("qp-hierarchy-tab-measurements")?.addEventListener?.("click", event => {
+            event.preventDefault?.();
+            AnnotationAdapter.setHierarchyDetailTab("measurements", doc);
+        });
+        doc.getElementById?.("qp-hierarchy-tab-description")?.addEventListener?.("click", event => {
+            event.preventDefault?.();
+            AnnotationAdapter.setHierarchyDetailTab("description", doc);
+        });
+        doc.getElementById?.("qp-hierarchy-measurements")?.querySelectorAll?.("[data-qp-hierarchy-sort]")
+            ?.forEach?.(header => {
+                header.addEventListener?.("click", event => {
+                    event.preventDefault?.();
+                    AnnotationAdapter.toggleHierarchyMeasureSort(
+                        header.getAttribute?.("data-qp-hierarchy-sort")
+                    );
+                    AnnotationAdapter.refreshHierarchyDetails(doc);
+                });
+            });
+        if (panel.dataset) panel.dataset.qpHierarchyBound = "1";
         return true;
     }
 
@@ -7943,6 +9177,7 @@ class AnnotationAdapter {
     static setImageMetadata(metadata) {
         AnnotationAdapter.ensureMeasurementDefaults();
         AnnotationAdapter.imageMetadata = metadata || null;
+        AnnotationAdapter.refreshHierarchyPanel();
         if (metadata && (metadata.modality || metadata.engine)) {
             AnnotationAdapter.setActiveSlideContext(metadata);
         } else if (!metadata) {
@@ -8538,12 +9773,101 @@ class AnnotationAdapter {
         return `Delete ${n} selected annotations? This cannot be undone.`;
     }
 
+    static keepDescendantsWarning(count) {
+        const n = Math.max(0, Number(count) || 0);
+        return n === 1 ? "Keep 1 descendant object?" : `Keep ${n} descendant objects?`;
+    }
+
     static confirmDeleteAnnotations(count, ask) {
         const promptFn = typeof ask === "function"
             ? ask
             : (typeof confirm === "function" ? confirm : null);
         if (typeof promptFn !== "function") return false;
         return Boolean(promptFn(AnnotationAdapter.deleteAnnotationsWarning(count)));
+    }
+
+    static annotationCentroid(annotation) {
+        const saved = annotation?.id
+            ? (AnnotationAdapter.savedAnnotationsArray || []).find(item => item?.id === annotation.id)
+            : annotation;
+        const shape = AnnotationAdapter.annotationShapeFromSources(annotation, saved);
+        if (shape?.type === "ellipse") return { x: shape.cx, y: shape.cy };
+        if (shape?.ring?.length) {
+            const sum = shape.ring.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+            return { x: sum.x / shape.ring.length, y: sum.y / shape.ring.length };
+        }
+        const x = Number(annotation?.x ?? saved?.x);
+        const y = Number(annotation?.y ?? saved?.y);
+        const width = Number(annotation?.width ?? saved?.width);
+        const height = Number(annotation?.height ?? saved?.height);
+        if ([x, y, width, height].every(Number.isFinite)) {
+            return { x: x + width / 2, y: y + height / 2 };
+        }
+        return null;
+    }
+
+    static descendantObjectsForAnnotations(ids) {
+        const idSet = new Set((Array.isArray(ids) ? ids : [ids]).filter(Boolean));
+        const parents = (AnnotationAdapter.savedAnnotationsArray || []).filter(item => idSet.has(item?.id));
+        const shapes = parents
+            .map(item => AnnotationAdapter.annotationShapeFromSources(item, item))
+            .filter(shape => shape?.ring?.length >= 3);
+        const detections = [];
+        if (shapes.length) {
+            for (const detection of AnnotationAdapter.listDetections()) {
+                if (shapes.some(shape => AnnotationAdapter.nucleusAnnotationRelation(detection, shape) !== "outside")) {
+                    detections.push(detection);
+                }
+            }
+        }
+        const annotations = [];
+        if (shapes.length) {
+            for (const other of AnnotationAdapter.savedAnnotationsArray || []) {
+                if (!other?.id || idSet.has(other.id)) continue;
+                const center = AnnotationAdapter.annotationCentroid(other);
+                if (center && shapes.some(shape => AnnotationAdapter.pointInAnnotationShape(center.x, center.y, shape))) {
+                    annotations.push(other);
+                }
+            }
+        }
+        return { detections, annotations };
+    }
+
+    static descendantCount(descendants) {
+        return (descendants?.detections?.length || 0) + (descendants?.annotations?.length || 0);
+    }
+
+    static choiceFromDeleteAsk(ask, spec) {
+        if (typeof ask !== "function") return "cancel";
+        const result = ask(spec?.message, spec);
+        if (result === "yes" || result === true) return "yes";
+        if (result === "no") return "no";
+        return "cancel";
+    }
+
+    static removeDescendantDetections(detections) {
+        const drop = new Set(Array.isArray(detections) ? detections : []);
+        if (!drop.size) return 0;
+        const next = AnnotationAdapter.listDetections().filter(item => !drop.has(item));
+        AnnotationAdapter.replaceLocalizedCellObjects(next);
+        AnnotationAdapter.lastNucleiCircles = next;
+        if (next.length) {
+            try { AnnotationAdapter.paintNucleiCircleOverlays(AnnotationAdapter.viewer, next); } catch (_error) { /* optional */ }
+        } else {
+            try { AnnotationAdapter.clearAiNucleiOverlay({ remove: true, viewer: AnnotationAdapter.viewer }); } catch (_error) { /* optional */ }
+        }
+        return drop.size;
+    }
+
+    static finishDeleteAnnotations(ids, descendants, choice) {
+        if (choice === "cancel" || !choice) return 0;
+        if (choice === "no") {
+            AnnotationAdapter.removeDescendantDetections(descendants?.detections);
+            for (const annotation of descendants?.annotations || []) {
+                AnnotationAdapter.removeNativeAnnotation(annotation.id);
+            }
+        }
+        return AnnotationAdapter.deleteNativeAnnotations(ids);
     }
 
     static persistAnnotationCollectionAfterEdit() {
@@ -8582,12 +9906,90 @@ class AnnotationAdapter {
             list.push(id);
         });
         if (!list.length) return 0;
-        if (!AnnotationAdapter.confirmDeleteAnnotations(list.length, ask)) return 0;
-        return AnnotationAdapter.deleteNativeAnnotations(list);
+        const descendants = AnnotationAdapter.descendantObjectsForAnnotations(list);
+        const count = AnnotationAdapter.descendantCount(descendants);
+        if (typeof ask === "function") {
+            if (count > 0) {
+                return AnnotationAdapter.finishDeleteAnnotations(list, descendants, AnnotationAdapter.choiceFromDeleteAsk(ask, {
+                    title: list.length > 1 ? "Delete objects" : "Delete object",
+                    message: AnnotationAdapter.keepDescendantsWarning(count),
+                    descendantCount: count
+                }));
+            }
+            if (!AnnotationAdapter.confirmDeleteAnnotations(list.length, ask)) return 0;
+            return AnnotationAdapter.deleteNativeAnnotations(list);
+        }
+        AnnotationAdapter.openDeleteObjectDialog({ ids: list, descendants });
+        return 0;
     }
 
     static promptDeleteSelectedAnnotations(ask) {
         return AnnotationAdapter.promptDeleteAnnotations(AnnotationAdapter.selectedAnnotationIds(), ask);
+    }
+
+    static bindDeleteObjectDialog(root = null) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const dialog = host && typeof host.getElementById === "function"
+            ? host.getElementById("annotation-delete-dialog")
+            : null;
+        if (!dialog || dialog.dataset?.deleteBound === "1") return Boolean(dialog);
+        const choose = (choice) => {
+            const pending = dialog._pendingDelete;
+            dialog._pendingDelete = null;
+            dialog.hidden = true;
+            dialog.setAttribute("aria-hidden", "true");
+            if (!pending) return;
+            AnnotationAdapter.finishDeleteAnnotations(pending.ids, pending.descendants, choice);
+        };
+        dialog.querySelectorAll("[data-delete-choice]").forEach(button => {
+            button.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                choose(button.getAttribute("data-delete-choice"));
+            });
+        });
+        dialog.addEventListener("click", event => {
+            if (event.target === dialog) choose("cancel");
+        });
+        if (host && typeof host.addEventListener === "function" && host.dataset?.deleteEscapeBound !== "1") {
+            host.addEventListener("keydown", event => {
+                if (event.key !== "Escape") return;
+                const open = host.getElementById?.("annotation-delete-dialog");
+                if (!open || open.hidden) return;
+                event.preventDefault();
+                choose("cancel");
+            });
+            if (host.dataset) host.dataset.deleteEscapeBound = "1";
+        }
+        dialog.dataset.deleteBound = "1";
+        return true;
+    }
+
+    static openDeleteObjectDialog({ ids, descendants, root } = {}) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const dialog = host && typeof host.getElementById === "function"
+            ? host.getElementById("annotation-delete-dialog")
+            : null;
+        if (!dialog) return false;
+        AnnotationAdapter.bindDeleteObjectDialog(host);
+        const list = Array.isArray(ids) ? ids : [];
+        const count = AnnotationAdapter.descendantCount(descendants);
+        const title = dialog.querySelector("#annotation-delete-title");
+        const message = dialog.querySelector("#annotation-delete-message");
+        const noBtn = dialog.querySelector("[data-delete-choice='no']");
+        if (title) title.textContent = list.length > 1 ? "Delete objects" : "Delete object";
+        if (message) {
+            message.textContent = count > 0
+                ? AnnotationAdapter.keepDescendantsWarning(count)
+                : AnnotationAdapter.deleteAnnotationsWarning(list.length);
+        }
+        if (noBtn) noBtn.hidden = count <= 0;
+        dialog._pendingDelete = { ids: list, descendants };
+        dialog.hidden = false;
+        dialog.setAttribute("aria-hidden", "false");
+        const yes = dialog.querySelector("[data-delete-choice='yes']");
+        try { yes?.focus?.(); } catch (_error) { /* optional */ }
+        return true;
     }
 
     /** Remember the active OpenSeadragon viewer for mouse-nav + tracker binding. */
@@ -8682,6 +10084,7 @@ class AnnotationAdapter {
         AnnotationAdapter.bindPrimaryUnifiedToolbar();
         AnnotationAdapter.bindAnnotationContextMenu();
         AnnotationAdapter.bindLayerVisibilityAndSanitizeControls();
+        AnnotationAdapter.bindDeleteObjectDialog();
         AnnotationAdapter.bindQuPathKeyboardShortcuts();
         if (AnnotationAdapter.viewer) {
             const pane = AnnotationAdapter.activeMultiviewPane();
@@ -13696,6 +15099,7 @@ class AnnotationAdapter {
             AnnotationAdapter.selectedNativeAnnotationId = remaining;
             AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
             AnnotationAdapter.syncAnnotationListSelection(doc);
+            AnnotationAdapter.syncHierarchyFromAnnotationSelection(doc);
             return true;
         }
 
@@ -13709,6 +15113,7 @@ class AnnotationAdapter {
             ?.classList?.add?.("is-annotation-selected");
         AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
         AnnotationAdapter.syncAnnotationListSelection(doc);
+        AnnotationAdapter.syncHierarchyFromAnnotationSelection(doc);
         return true;
     }
 
@@ -13723,6 +15128,11 @@ class AnnotationAdapter {
         AnnotationAdapter.selectedNativeAnnotationIds?.clear?.();
         AnnotationAdapter.refreshExportSelectedAnnotationButtonState();
         AnnotationAdapter.syncAnnotationListSelection();
+        AnnotationAdapter.hierarchySelection = { kind: "image", annotationId: null, detectionIndex: null };
+        AnnotationAdapter.selectedHierarchyDetectionIndex = null;
+        AnnotationAdapter.syncHierarchySelection();
+        AnnotationAdapter.refreshHierarchyDetails();
+        AnnotationAdapter.syncHierarchyDetectionHighlight();
         return true;
     }
 
@@ -13765,6 +15175,7 @@ class AnnotationAdapter {
         AnnotationAdapter.ensureLockedAnnotationIdsLoaded();
         if (locked) AnnotationAdapter.lockedAnnotationIds.add(id);
         else AnnotationAdapter.lockedAnnotationIds.delete(id);
+        AnnotationAdapter.syncHierarchyLockIcons();
         AnnotationAdapter.persistLockedAnnotationIds();
         const doc = typeof document !== "undefined" ? document : null;
         const node = doc?.querySelector?.(`.osd-annotation-shape[data-annotation-id="${id}"]`);
@@ -17717,6 +19128,7 @@ class AnnotationAdapter {
     static AI_DEFAULT_CELL_EXPANSION_SCALE = 1.45;
     static AI_DEFAULT_CELL_EXPANSION_PX = 5;
     static AI_DEFAULT_CELL_CONSTRAIN_SCALE = 1.5;
+    static AI_DEFAULT_ANNOTATION_BORDER_MODE = "exclude";
     static AI_HIGH_DENSITY_PROB_DELTA = 0.15;
     static AI_HIGH_DENSITY_NMS_DELTA = 0.15;
     static AI_HIGH_DENSITY_VARIANCE_LIMIT = 0.045;
@@ -17743,6 +19155,7 @@ class AnnotationAdapter {
      *  always shown regardless of this flag. */
     static detectionFillEnabled = false;
     static heatMapActive = false;
+    static lastObjectColorKeys = [];
 
     static get ocrAutoBaseline() { return ocrAutoBaseline; }
     static get localizedCellObjects() { return localizedCellObjects; }
@@ -17808,6 +19221,7 @@ class AnnotationAdapter {
         const nmsEl = get("ai-nms-threshold");
         const overlayEl = get("ai-overlay-visible");
         const targetEl = get("ai-seg-target");
+        const borderEl = get("ai-seg-border");
         const maxNucleusRadiusEl = get("ai-max-nucleus-radius");
         const rayCountEl = get("ai-ray-count");
         const boundaryTightnessEl = get("ai-boundary-tightness");
@@ -17833,6 +19247,9 @@ class AnnotationAdapter {
         const qupathConstrainEl = get("ai-qupath-cell-constrain");
         const channel = options.channel ?? channelEl?.value ?? "default";
         const segTarget = options.segTarget ?? targetEl?.value ?? "viewport";
+        const annotationBorderMode = AnnotationAdapter.normalizeAnnotationBorderMode(
+            options.annotationBorderMode ?? borderEl?.value
+        );
         const probability = AnnotationAdapter.clampAiParam(
             options.probability ?? options.probabilityThreshold ?? probEl?.value,
             AnnotationAdapter.AI_DEFAULT_PROBABILITY
@@ -17955,13 +19372,27 @@ class AnnotationAdapter {
         );
         const overlayVisible = options.overlayVisible ?? (overlayEl ? overlayEl.checked !== false : AnnotationAdapter.aiOverlayVisible);
         return {
-            channel, probability, nms, overlayVisible, segTarget,
+            channel, probability, nms, overlayVisible, segTarget, annotationBorderMode,
             maxNucleusRadius, rayCount, boundaryTightness, modelOverride,
             detector, cellposeModel, diameter, backgroundRadius, sigma, minArea, maxArea,
             cellExpansion, cellExpansionMode, cellConstrainScale,
             channelEl, probEl, nmsEl, overlayEl, targetEl,
             maxNucleusRadiusEl, rayCountEl, boundaryTightnessEl, modelOverrideEl, detectorEl
         };
+    }
+
+    static syncAnnotationBorderControl(root) {
+        const host = root || (typeof document !== "undefined" ? document : null);
+        const target = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-seg-target")
+            : null;
+        const border = host && typeof host.getElementById === "function"
+            ? host.getElementById("ai-seg-border")
+            : null;
+        if (!border) return false;
+        const on = String(target?.value || "viewport") === "annotation";
+        border.disabled = !on;
+        return on;
     }
 
     static normalizeAiDetector(value) {
@@ -18113,6 +19544,13 @@ class AnnotationAdapter {
             if (detectorEl.dataset) detectorEl.dataset.aiBound = "1";
         }
         AnnotationAdapter.syncAiDetectorParamPanels(host);
+        const targetEl = host.getElementById("ai-seg-target");
+        if (targetEl && typeof targetEl.addEventListener === "function"
+            && targetEl.dataset?.aiBorderBound !== "1") {
+            targetEl.addEventListener("change", () => AnnotationAdapter.syncAnnotationBorderControl(host));
+            if (targetEl.dataset) targetEl.dataset.aiBorderBound = "1";
+        }
+        AnnotationAdapter.syncAnnotationBorderControl(host);
         // "ai-model-override" (like "ai-seg-target") is read live via readAiLabConfig()
         // at click time; it needs no dedicated listener/binding of its own.
         const toggle = host.getElementById("ai-overlay-visible");
@@ -19026,6 +20464,7 @@ class AnnotationAdapter {
 
     static replaceLocalizedCellObjects(next) {
         localizedCellObjects = Array.isArray(next) ? next : [];
+        AnnotationAdapter.refreshHierarchyPanel();
         return localizedCellObjects;
     }
 
@@ -19850,11 +21289,12 @@ class AnnotationAdapter {
                     })),
                     config.nms
                 ).slice(0, AnnotationAdapter.NUCLEUS_MAX_COUNT);
-                const outlined = merged.filter((item) => (item.imageCoordinates || []).length >= 3).length;
+                const clipped = AnnotationAdapter.applyAnnotationRoiToNuclei(merged, { root, ...options, ...config });
+                const outlined = clipped.filter((item) => (item.imageCoordinates || []).length >= 3).length;
                 const resNote = plan.fullRes ? "full-res" : "capped";
                 return {
-                    circles: merged,
-                    status: `AI Pipeline: Locked ${merged.length} StarDist DAPI outlines from ${plan.tiles.length} ${resNote} tiles (${outlined} polygons).`
+                    circles: clipped,
+                    status: `AI Pipeline: Locked ${clipped.length} StarDist DAPI outlines from ${plan.tiles.length} ${resNote} tiles (${outlined} polygons).`
                 };
             }
         }
@@ -19871,11 +21311,12 @@ class AnnotationAdapter {
             analysis.captured?.canvas,
             host
         );
-        const outlined = circles.filter((item) => (item.imageCoordinates || []).length >= 3).length;
-        const status = circles.length
-            ? `AI Pipeline: Locked ${circles.length} star-convex DAPI outlines (${outlined} polygons).`
+        const clipped = AnnotationAdapter.applyAnnotationRoiToNuclei(circles, { root, ...options, ...config });
+        const outlined = clipped.filter((item) => (item.imageCoordinates || []).length >= 3).length;
+        const status = clipped.length
+            ? `AI Pipeline: Locked ${clipped.length} star-convex DAPI outlines (${outlined} polygons).`
             : "AI Pipeline: No nuclei detected in the visible field.";
-        return { circles, status };
+        return { circles: clipped, status };
     }
 
     static isNucleusVectorOverlayElement(element) {
@@ -20063,6 +21504,9 @@ class AnnotationAdapter {
         AnnotationAdapter.aiNucleusOverlayParts = polygons;
         AnnotationAdapter.syncNucleiVisibilityButton();
         AnnotationAdapter.applyDetectionClassColors();
+        if (AnnotationAdapter.heatMapActive && (AnnotationAdapter.lastObjectColorKeys || []).length) {
+            AnnotationAdapter.applyObjectRainbowColors(AnnotationAdapter.lastObjectColorKeys);
+        }
         return 1;
     }
 
@@ -20339,16 +21783,32 @@ class AnnotationAdapter {
     static applyNucleusRainbowStyle(overlayElement, computedObjectColor) {
         if (!overlayElement || !computedObjectColor) return false;
         const tag = String(overlayElement.tagName || "").toLowerCase();
-        const fill = computedObjectColor.replace("rgb", "rgba").replace(")", ", 0.25)");
-        if (tag === "polygon") {
+        const fill = computedObjectColor.replace("rgb", "rgba").replace(")", ", 0.35)");
+        if (tag === "polygon" || tag === "circle" || tag === "path" || tag === "ellipse") {
             overlayElement.setAttribute("stroke", computedObjectColor);
             overlayElement.setAttribute("fill", fill);
+            overlayElement.setAttribute("data-color-coded", "1");
+            if (overlayElement.style) {
+                overlayElement.style.stroke = computedObjectColor;
+                overlayElement.style.fill = fill;
+            }
             return true;
         }
         if (!overlayElement.style) return false;
         overlayElement.style.border = `2px solid ${computedObjectColor}`;
-        overlayElement.style.background = `${computedObjectColor.replace('rgb', 'rgba').replace(')', ', 0.25)')}`;
+        overlayElement.style.background = fill;
         return true;
+    }
+
+    static colorNucleusOverlay(index, computedObjectColor) {
+        const nodes = AnnotationAdapter.detectionOverlayNodes(index);
+        const part = AnnotationAdapter.aiNucleusOverlayParts?.[index];
+        if (part && !nodes.includes(part)) nodes.push(part);
+        let touched = 0;
+        for (const node of nodes) {
+            if (AnnotationAdapter.applyNucleusRainbowStyle(node, computedObjectColor)) touched += 1;
+        }
+        return touched;
     }
 
     static ihcRgbFromNormalized(t) {
@@ -20377,17 +21837,20 @@ class AnnotationAdapter {
             if (value > max) max = value;
         }
         const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
+        let colored = 0;
         for (const item of list) {
-            const index = Number(item?.index);
-            if (!Number.isInteger(index) || index < 0 || index >= parts.length) continue;
+            const index = Number(item?.index ?? item?.objectId);
+            if (!Number.isInteger(index) || index < 0) continue;
+            if (parts.length && (index < 0 || index >= parts.length)) continue;
             const computedObjectColor = AnnotationAdapter.ihcColorFromKeys(Number(item.key), min, max);
-            AnnotationAdapter.applyNucleusRainbowStyle(parts[index], computedObjectColor);
+            if (AnnotationAdapter.colorNucleusOverlay(index, computedObjectColor)) colored += 1;
         }
-        return list.length;
+        return colored;
     }
 
     static applyObjectRainbowColors(objects) {
         const list = Array.isArray(objects) ? objects : [];
+        AnnotationAdapter.lastObjectColorKeys = list;
         let min = Infinity;
         let max = -Infinity;
         for (const item of list) {
@@ -20397,23 +21860,37 @@ class AnnotationAdapter {
             if (value > max) max = value;
         }
         const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
+        let colored = 0;
         for (const item of list) {
             const index = Number(item?.index ?? item?.objectId);
-            if (!Number.isInteger(index) || index < 0 || index >= parts.length) continue;
+            if (!Number.isInteger(index) || index < 0) continue;
+            if (parts.length && index >= parts.length) continue;
             const computedObjectColor = AnnotationAdapter.rainbowColorFromKeys(Number(item.key), min, max);
-            AnnotationAdapter.applyNucleusRainbowStyle(parts[index], computedObjectColor);
+            if (AnnotationAdapter.colorNucleusOverlay(index, computedObjectColor)) colored += 1;
         }
-        return list.length;
+        return colored;
     }
 
     static resetNucleusOverlayColors() {
-        const parts = AnnotationAdapter.aiNucleusOverlayParts || [];
+        const nodes = [];
+        const svg = AnnotationAdapter.aiNucleusOverlayElements?.[0];
+        if (svg && typeof svg.querySelectorAll === "function") {
+            nodes.push(...svg.querySelectorAll("[data-nucleus-index]"));
+        }
+        for (const part of AnnotationAdapter.aiNucleusOverlayParts || []) {
+            if (part && !nodes.includes(part)) nodes.push(part);
+        }
         let touched = 0;
-        for (const part of parts) {
+        for (const part of nodes) {
             if (!part) continue;
             if (typeof part.setAttribute === "function") {
                 part.setAttribute("fill", AnnotationAdapter.AI_NUCLEUS_DEFAULT_FILL);
                 part.setAttribute("stroke", AnnotationAdapter.AI_NUCLEUS_DEFAULT_STROKE);
+                part.removeAttribute?.("data-color-coded");
+                if (part.style) {
+                    part.style.stroke = "";
+                    part.style.fill = "";
+                }
                 touched += 1;
             } else if (part.style) {
                 part.style.border = "";
@@ -20421,6 +21898,7 @@ class AnnotationAdapter {
                 touched += 1;
             }
         }
+        AnnotationAdapter.lastObjectColorKeys = [];
         return touched;
     }
 
@@ -20520,6 +21998,8 @@ class AnnotationAdapter {
             }
             const result = await response.json();
             const colored = AnnotationAdapter.applyObjectRainbowColors(result?.objects);
+            AnnotationAdapter.heatMapActive = colored > 0;
+            AnnotationAdapter.syncHeatMapButton(root);
             AnnotationAdapter.setAiStatus(
                 colored
                     ? `AI Pipeline: Object color coding complete (${colored} objects).`
@@ -20673,7 +22153,10 @@ class AnnotationAdapter {
                 throw error;
             }
             const result = await response.json();
-            const polygons = AnnotationAdapter.mapPluginNucleiToOverlays(result);
+            const polygons = AnnotationAdapter.applyAnnotationRoiToNuclei(
+                AnnotationAdapter.mapPluginNucleiToOverlays(result),
+                { root, ...options, ...config }
+            );
             AnnotationAdapter.replaceLocalizedCellObjects(polygons);
             AnnotationAdapter.lastNucleiCircles = polygons;
             if (polygons.length && AnnotationAdapter.aiOverlayVisible !== false) {
@@ -20962,8 +22445,10 @@ AnnotationAdapter.bindFloatingZStackPalette();
 AnnotationAdapter.bindFloatingMeasurementPalette();
 AnnotationAdapter.bindFloatingWandPalette();
 AnnotationAdapter.bindAnalysisPaneTabs();
+AnnotationAdapter.bindHierarchyPanel();
 AnnotationAdapter.installViewerToolAlias();
 AnnotationAdapter.bindGlobalUiTooltip();
+AnnotationAdapter.bindDeleteObjectDialog();
 if (typeof document !== "undefined" && document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
         AnnotationAdapter.bindResetViewportHomeButton();
@@ -20974,9 +22459,11 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
         AnnotationAdapter.bindFloatingMeasurementPalette();
         AnnotationAdapter.bindFloatingWandPalette();
         AnnotationAdapter.bindAnalysisPaneTabs();
+        AnnotationAdapter.bindHierarchyPanel();
         AnnotationAdapter.ensureMeasurementPopupOverlay();
         AnnotationAdapter.ensureAnnotationEditorPopup();
         AnnotationAdapter.bindGlobalUiTooltip();
+        AnnotationAdapter.bindDeleteObjectDialog();
         AnnotationAdapter.refreshAnnotationListPanel();
     });
 } else if (typeof document !== "undefined") {
@@ -20987,8 +22474,10 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
     AnnotationAdapter.bindFloatingMeasurementPalette();
     AnnotationAdapter.bindFloatingWandPalette();
     AnnotationAdapter.bindAnalysisPaneTabs();
+    AnnotationAdapter.bindHierarchyPanel();
     AnnotationAdapter.ensureMeasurementPopupOverlay();
     AnnotationAdapter.ensureAnnotationEditorPopup();
     AnnotationAdapter.bindGlobalUiTooltip();
+    AnnotationAdapter.bindDeleteObjectDialog();
     AnnotationAdapter.refreshAnnotationListPanel();
 }

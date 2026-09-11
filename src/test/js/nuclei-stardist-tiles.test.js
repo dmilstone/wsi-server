@@ -89,6 +89,35 @@ const { AnnotationAdapter } = context;
 }
 
 {
+    const ellipse = AnnotationAdapter.annotationShapeFromSources(
+        { type: "ellipse", target: { selector: { type: "ELLIPSE", geometry: { x: 0, y: 0, w: 100, h: 80 } } } },
+        { type: "ellipse", x: 0, y: 0, width: 100, height: 80 }
+    );
+    assert.equal(ellipse.type, "ellipse");
+    assert.equal(AnnotationAdapter.pointInAnnotationShape(50, 40, ellipse), true,
+        "ellipse center must be inside the annotation outline");
+    assert.equal(AnnotationAdapter.pointInAnnotationShape(2, 2, ellipse), false,
+        "a bounding-box corner must stay outside an elliptical ROI");
+
+    const inside = {
+        cx: 50, cy: 40, vertices: [{ x: 48, y: 38 }, { x: 52, y: 38 }, { x: 50, y: 42 }]
+    };
+    const corner = {
+        cx: 4, cy: 4, vertices: [{ x: 1, y: 1 }, { x: 8, y: 1 }, { x: 4, y: 8 }]
+    };
+    const straddling = {
+        cx: 50, cy: 2, vertices: [{ x: 48, y: -4 }, { x: 52, y: -4 }, { x: 50, y: 8 }]
+    };
+    assert.equal(AnnotationAdapter.clipNucleiToAnnotationShape([inside, corner, straddling], ellipse, "exclude").length, 1);
+    assert.equal(AnnotationAdapter.clipNucleiToAnnotationShape([inside, corner, straddling], ellipse, "include").length, 2);
+    const truncated = AnnotationAdapter.clipNucleiToAnnotationShape([straddling], ellipse, "truncate");
+    assert.equal(truncated.length, 1);
+    assert.ok(truncated[0].vertices.every(pt => AnnotationAdapter.pointInAnnotationShape(pt.x, pt.y, ellipse)
+        || Math.abs(((pt.x - ellipse.cx) / ellipse.rx) ** 2 + ((pt.y - ellipse.cy) / ellipse.ry) ** 2 - 1) < 0.08),
+        "truncated vertices must lie on or inside the ellipse");
+}
+
+{
     const viewer = {
         overlays: [],
         currentOverlays: [],
@@ -173,6 +202,8 @@ assert.match(html, /<option value="quantify-nuclei-pixel">Run Pixel Intensity Pl
 assert.match(html, /<option value="per-object-pixel-quantifier">Quantify Individual Objects \(Color Code\)</);
 assert.match(html, /Nuclear channel \(recommended\)/);
 assert.match(adapterSource, /static nuclearPluginChannel\(/);
+assert.match(html, /Do not pin fill\/stroke here/);
+assert.doesNotMatch(html, /\.nucleus-stardist-layer polygon \{\s*fill:/);
 assert.match(adapterSource, /static isPluginTransportFailure\(/);
 assert.match(html, /<option value="ihc-pixel-quantifier">Run IHC Color Deconvolution Plugin</);
 assert.match(adapterSource, /static async runIhcColorDeconvolution\(/);
@@ -227,11 +258,36 @@ assert.equal(AnnotationAdapter.rainbowRgbFromNormalized(1), "rgb(255, 0, 0)");
         { index: 1, key: 40 }
     ]);
     assert.equal(cold.style.border, "2px solid rgb(0, 0, 255)");
-    assert.equal(cold.style.background, "rgba(0, 0, 255, 0.25)");
+    assert.equal(cold.style.background, "rgba(0, 0, 255, 0.35)");
     assert.equal(hot.style.border, "2px solid rgb(255, 0, 0)");
-    assert.equal(hot.style.background, "rgba(255, 0, 0, 0.25)");
+    assert.equal(hot.style.background, "rgba(255, 0, 0, 0.35)");
     assert.equal(cold.style.innerHTML, undefined);
     assert.equal(hot.textContent, undefined);
+}
+
+{
+    const cold = {
+        tagName: "polygon",
+        attrs: {},
+        style: {},
+        setAttribute(name, value) { this.attrs[name] = String(value); }
+    };
+    const hot = {
+        tagName: "polygon",
+        attrs: {},
+        style: {},
+        setAttribute(name, value) { this.attrs[name] = String(value); }
+    };
+    AnnotationAdapter.aiNucleusOverlayParts = [cold, hot];
+    AnnotationAdapter.aiNucleusOverlayElements = [];
+    assert.equal(AnnotationAdapter.applyObjectRainbowColors([
+        { index: 0, key: 10 },
+        { index: 1, key: 40 }
+    ]), 2);
+    assert.equal(cold.style.stroke, "rgb(0, 0, 255)",
+        "SVG polygons must use inline stroke so CSS cannot pin them to default green");
+    assert.equal(hot.style.stroke, "rgb(255, 0, 0)");
+    assert.equal(cold.attrs["data-color-coded"], "1");
 }
 
 {
@@ -255,6 +311,11 @@ assert.equal(AnnotationAdapter.rainbowRgbFromNormalized(1), "rgb(255, 0, 0)");
 }
 
 assert.match(html, /id="ai-seg-target"/);
+assert.match(html, /id="ai-seg-border"/);
+assert.match(html, /Exclude the entire nucleus/);
+assert.match(html, /Truncate to the annotation outline/);
+assert.match(adapterSource, /static applyAnnotationRoiToNuclei\(/);
+assert.match(adapterSource, /static clipNucleiToAnnotationShape\(/);
 assert.doesNotMatch(html, />Target</);
 assert.doesNotMatch(html, /Display Segmentation Mask Overlays/);
 assert.match(html, /#ai-nuclei-visible\[aria-pressed="true"\]/);

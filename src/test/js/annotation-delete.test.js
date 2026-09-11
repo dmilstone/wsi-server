@@ -35,11 +35,17 @@ const { AnnotationAdapter } = context;
 assert.match(html, /id="delete-selected-annotations-btn"[^>]*>Delete</);
 assert.match(html, /id="annotation-context-menu-delete"/);
 assert.match(html, /<b>Delete \/ Backspace<\/b>/);
-assert.match(html, /Lock\/Unlock Position or Delete the selected annotation\(s\)/);
+assert.match(html, /Lock\/Unlock Position, Delete, or Set class for the selected annotation\(s\)/);
 assert.match(adapterSource, /Delete this annotation\? This cannot be undone\./);
 assert.match(adapterSource, /Delete \$\{n\} selected annotations\? This cannot be undone\./);
 assert.match(adapterSource, /static promptDeleteSelectedAnnotations\(/);
 assert.match(adapterSource, /static promptDeleteAnnotations\(/);
+assert.match(adapterSource, /static keepDescendantsWarning\(/);
+assert.match(html, /id="annotation-delete-dialog"/);
+assert.match(html, /Delete object/);
+assert.match(html, /data-delete-choice="no"/);
+assert.match(html, /data-delete-choice="cancel"/);
+assert.match(html, /data-delete-choice="yes"/);
 assert.match(adapterSource, /case "delete":/);
 assert.match(adapterSource, /case "backspace":/);
 
@@ -172,6 +178,51 @@ function seedShapes() {
     assert.equal(JSON.stringify(asked), JSON.stringify(["a1", "a2"]));
     assert.equal(menu.style.display, "none", "Delete on the context menu must close the menu first");
     AnnotationAdapter.promptDeleteAnnotations = previous;
+}
+
+{
+    assert.equal(AnnotationAdapter.keepDescendantsWarning(1), "Keep 1 descendant object?");
+    assert.equal(AnnotationAdapter.keepDescendantsWarning(61), "Keep 61 descendant objects?");
+    seedShapes();
+    AnnotationAdapter.replaceLocalizedCellObjects([
+        { id: "n1", cx: 15, cy: 15, vertices: [{ x: 14, y: 14 }, { x: 16, y: 14 }, { x: 15, y: 16 }] },
+        { id: "n2", cx: 80, cy: 80, vertices: [{ x: 79, y: 79 }, { x: 81, y: 79 }, { x: 80, y: 81 }] }
+    ]);
+    AnnotationAdapter.lastNucleiCircles = AnnotationAdapter.localizedCellObjects.slice();
+    AnnotationAdapter.setSavedAnnotations([
+        { id: "a1", type: "rectangle", x: 10, y: 10, width: 20, height: 20 },
+        { id: "a2", type: "ellipse", x: 70, y: 70, width: 10, height: 10 }
+    ]);
+    const descendants = AnnotationAdapter.descendantObjectsForAnnotations(["a1"]);
+    assert.equal(descendants.detections.length, 1, "only nuclei inside the deleted annotation are descendants");
+    assert.equal(AnnotationAdapter.choiceFromDeleteAsk(() => "cancel", { message: "Keep 1 descendant object?" }), "cancel");
+    assert.equal(AnnotationAdapter.choiceFromDeleteAsk(() => true, { message: "Keep 1 descendant object?" }), "yes");
+    assert.equal(AnnotationAdapter.choiceFromDeleteAsk(() => "no", { message: "Keep 1 descendant object?" }), "no");
+
+    const persisted = [];
+    AnnotationAdapter.annotationEngine = {
+        adapter: { collectionEdited() { persisted.push("edit"); } },
+        labelLayer: { sync() {} },
+        getCurrentImageId() { return "img-1"; }
+    };
+    const kept = AnnotationAdapter.promptDeleteAnnotations(["a1"], () => "yes");
+    assert.equal(kept, 1);
+    assert.equal(AnnotationAdapter.savedAnnotationsArray.map(item => item.id).join(","), "a2");
+    assert.equal(AnnotationAdapter.listDetections().length, 2, "Yes keeps descendant detections");
+
+    AnnotationAdapter.setSavedAnnotations([
+        { id: "a1", type: "rectangle", x: 10, y: 10, width: 20, height: 20 },
+        { id: "a2", type: "ellipse", x: 70, y: 70, width: 10, height: 10 }
+    ]);
+    AnnotationAdapter.replaceLocalizedCellObjects([
+        { id: "n1", cx: 15, cy: 15, vertices: [{ x: 14, y: 14 }, { x: 16, y: 14 }, { x: 15, y: 16 }] },
+        { id: "n2", cx: 80, cy: 80, vertices: [{ x: 79, y: 79 }, { x: 81, y: 79 }, { x: 80, y: 81 }] }
+    ]);
+    AnnotationAdapter.lastNucleiCircles = AnnotationAdapter.localizedCellObjects.slice();
+    const dropped = AnnotationAdapter.promptDeleteAnnotations(["a1"], () => "no");
+    assert.equal(dropped, 1);
+    assert.equal(AnnotationAdapter.listDetections().length, 1, "No deletes descendant detections");
+    assert.equal(AnnotationAdapter.listDetections()[0].id, "n2");
 }
 
 console.log("annotation-delete.test.js: ok");

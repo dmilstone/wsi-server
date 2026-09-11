@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
     <script src="/annotation-store.js?v=20260825-workstation-scoping"></script>
-    <script src="/annotation-adapter.js?v=20260911-ai-plugins-fix"></script>
+    <script src="/annotation-adapter.js?v=20260911-ai-hierarchy"></script>
     <script src="/annotation-name-editor.js?v=20260821-osd-hotkeys"></script>
     <script src="/annotation-label-layer.js?v=20260908-name-field"></script>
     <style>
@@ -452,17 +452,18 @@
         }
         .qp-analysis-tabs [role="tab"] {
             flex: 1 1 0;
+            min-width: 0;
             min-height: 34px;
             margin: 0;
-            padding: 6px 8px;
+            padding: 6px 4px;
             border: 0;
             border-bottom: 2px solid transparent;
             background: transparent;
             color: var(--text-secondary);
             font: inherit;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 750;
-            letter-spacing: .02em;
+            letter-spacing: .01em;
             cursor: pointer;
         }
         .qp-analysis-tabs [role="tab"]:hover {
@@ -534,6 +535,230 @@
             color: var(--text-muted);
             font-size: 12px;
             font-weight: 600;
+        }
+        .qp-hierarchy-panel {
+            display: flex;
+            flex: 1 1 auto;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .qp-hierarchy-toolbar {
+            display: flex;
+            flex: 0 0 auto;
+            flex-wrap: wrap;
+            gap: 2px;
+            padding: 4px 6px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(17, 24, 33, .96);
+        }
+        .qp-hierarchy-toolbar button {
+            min-width: 28px;
+            min-height: 26px;
+            margin: 0;
+            padding: 2px 6px;
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-secondary);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .qp-hierarchy-toolbar button:hover {
+            color: var(--text);
+            background: rgba(255,255,255,.06);
+        }
+        .qp-hierarchy-tree {
+            flex: 1 1 42%;
+            min-height: 72px;
+            margin: 0;
+            padding: 4px 0;
+            overflow: auto;
+        }
+        .qp-hierarchy-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            min-height: 22px;
+            padding: 1px 8px 1px 4px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+        }
+        .qp-hierarchy-row:hover {
+            color: var(--text);
+            background: rgba(255,255,255,.06);
+        }
+        .qp-hierarchy-row.is-selected {
+            color: #fff;
+            background: #1e6f9c;
+        }
+        .qp-hierarchy-row.is-more {
+            color: var(--text-muted);
+            font-style: italic;
+            cursor: default;
+        }
+        .qp-hierarchy-twisty,
+        .qp-hierarchy-lock-btn,
+        .qp-hierarchy-copy {
+            flex: 0 0 auto;
+            min-width: 16px;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .qp-hierarchy-twisty { width: 14px; opacity: .85; }
+        .qp-hierarchy-twisty.is-empty { visibility: hidden; }
+        .qp-hierarchy-icon {
+            flex: 0 0 auto;
+            width: 14px;
+            color: #e53935;
+            text-align: center;
+        }
+        .qp-hierarchy-icon.is-classified { color: #43a047; }
+        .qp-hierarchy-icon.is-image { color: #8aa0b8; }
+        .qp-hierarchy-icon.is-annotation { color: #f0d14a; }
+        .qp-hierarchy-label {
+            min-width: 0;
+            flex: 1 1 auto;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .qp-hierarchy-lock-btn {
+            opacity: .4;
+            font-size: 11px;
+        }
+        .qp-hierarchy-lock-btn.is-locked { opacity: 1; }
+        .qp-hierarchy-crumb {
+            flex: 0 0 auto;
+            padding: 4px 8px;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 650;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            background: rgba(17, 24, 33, .96);
+        }
+        .qp-hierarchy-detail {
+            display: flex;
+            flex: 1 1 58%;
+            flex-direction: column;
+            min-height: 140px;
+            overflow: hidden;
+        }
+        .qp-hierarchy-table-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+        }
+        .qp-hierarchy-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .qp-hierarchy-table th,
+        .qp-hierarchy-table td {
+            padding: 3px 8px;
+            border-bottom: 1px solid rgba(255,255,255,.06);
+            text-align: left;
+            vertical-align: middle;
+        }
+        .qp-hierarchy-table th {
+            position: sticky;
+            top: 0;
+            background: #111821;
+            color: var(--text-secondary);
+            font-weight: 750;
+            cursor: pointer;
+        }
+        .qp-hierarchy-table td:first-child { color: var(--text-secondary); width: 46%; }
+        .qp-hierarchy-value {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            color: var(--text);
+        }
+        .qp-hierarchy-value-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .qp-hierarchy-swatch {
+            flex: 0 0 auto;
+            width: 8px;
+            height: 8px;
+            border-radius: 1px;
+            background: #43a047;
+        }
+        .qp-hierarchy-description {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+            padding: 8px 10px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+        }
+        .qp-hierarchy-filter {
+            display: block;
+            flex: 0 0 auto;
+            padding: 4px 8px;
+            border-top: 1px solid var(--border);
+        }
+        .qp-hierarchy-filter input {
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 26px;
+            padding: 3px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: #0d141c;
+            color: var(--text);
+            font: inherit;
+            font-size: 12px;
+        }
+        .qp-hierarchy-detail-tabs {
+            display: flex;
+            flex: 0 0 auto;
+            border-top: 1px solid var(--border);
+            background: #0d141c;
+        }
+        .qp-hierarchy-detail-tabs [role="tab"] {
+            flex: 1 1 0;
+            min-height: 28px;
+            margin: 0;
+            padding: 4px 8px;
+            border: 0;
+            border-top: 2px solid transparent;
+            background: transparent;
+            color: var(--text-secondary);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 750;
+            cursor: pointer;
+        }
+        .qp-hierarchy-detail-tabs [role="tab"][aria-selected="true"] {
+            color: var(--text);
+            border-top-color: #7ec8ff;
+            background: rgba(126, 200, 255, .08);
+        }
+        .nucleus-stardist-layer .is-hierarchy-selected {
+            stroke-width: 3.25;
         }
         .image-info > h2 {
             margin: 0;
@@ -1306,6 +1531,68 @@
             transform: scaleX(-1);
         }
         .multiview-accel { color: #cbb6e8; font-size: 12px; }
+        #annotation-delete-dialog {
+            position: fixed;
+            inset: 0;
+            z-index: 100060;
+            display: grid;
+            place-items: center;
+            background: rgba(0, 0, 0, .28);
+        }
+        #annotation-delete-dialog[hidden] { display: none !important; }
+        .annotation-delete-sheet {
+            width: min(420px, calc(100vw - 32px));
+            background: #ececec;
+            color: #111;
+            border: 1px solid #b7b7b7;
+            border-radius: 8px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+            overflow: hidden;
+            font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .annotation-delete-titlebar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 7px 10px;
+            background: linear-gradient(#f6f6f6, #e4e4e4);
+            border-bottom: 1px solid #c8c8c8;
+            font-weight: 650;
+        }
+        .annotation-delete-titlebar button {
+            width: 16px;
+            height: 16px;
+            border: 0;
+            border-radius: 50%;
+            background: #ff5f57;
+            color: transparent;
+            cursor: pointer;
+            padding: 0;
+        }
+        .annotation-delete-body {
+            padding: 22px 20px 16px;
+            font-size: 14px;
+        }
+        .annotation-delete-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 0 16px 14px;
+        }
+        .annotation-delete-actions button {
+            min-width: 4.6rem;
+            padding: 4px 12px;
+            border: 1px solid #8c8c8c;
+            border-radius: 5px;
+            background: linear-gradient(#f8f8f8, #e8e8e8);
+            color: #1a1a1a;
+            cursor: pointer;
+            font-weight: 650;
+        }
+        .annotation-delete-actions button[data-delete-choice="yes"] {
+            border-color: #2f80c8;
+            box-shadow: 0 0 0 2px rgba(47, 128, 200, .28);
+        }
         .classify-dialog {
             position: fixed;
             z-index: 100040;
@@ -2830,10 +3117,12 @@
             background: transparent;
             pointer-events: none;
         }
-        .nucleus-stardist-layer polygon {
-            fill: rgba(0, 255, 0, .15);
-            stroke: #00FF00;
+        /* Do not pin fill/stroke here. CSS beats SVG presentation attributes, so a
+           hardcoded green made Quantify / Heat Map / IHC color-coding invisible. */
+        .nucleus-stardist-layer polygon,
+        .nucleus-stardist-layer circle {
             stroke-width: 2;
+            vector-effect: non-scaling-stroke;
         }
         svg.nucleus-stardist-layer {
             border: 0;
@@ -3690,11 +3979,14 @@
         .floating-channel-cb {
             appearance: none;
             -webkit-appearance: none;
+            accent-color: transparent;
             position: relative;
+            box-sizing: border-box;
             width: 14px;
             height: 14px;
             border: 2px solid var(--channel-color, #fff);
             background-color: transparent;
+            background-image: none;
             border-radius: 2px;
             cursor: pointer;
             display: inline-grid;
@@ -3704,16 +3996,19 @@
             padding: 0;
             flex: 0 0 14px;
         }
-        .floating-channel-cb:checked {
-            background-color: var(--channel-color, #4d94d8);
-            border-color: var(--channel-color, #4d94d8);
+        .floating-channel-cb:checked,
+        .floating-channel-cb:indeterminate {
+            background-color: transparent;
+            background-image: none;
+            border-color: var(--channel-color, #fff);
         }
-        .floating-channel-cb:not(:checked)::after {
+        .floating-channel-cb:checked::after {
             content: "\00d7";
             color: var(--channel-color, #fff);
             font-size: 11px;
             font-weight: 800;
             line-height: 1;
+            pointer-events: none;
         }
         .fcp-show-all-cb {
             --channel-color: #e8e8e8;
@@ -4727,6 +5022,8 @@
                     aria-controls="qp-view-image" aria-selected="false">Image</button>
             <button type="button" role="tab" id="qp-tab-annotations" data-qp-view="annotations"
                     aria-controls="qp-view-annotations" aria-selected="false">Annotations</button>
+            <button type="button" role="tab" id="qp-tab-hierarchy" data-qp-view="hierarchy"
+                    aria-controls="qp-view-hierarchy" aria-selected="false">Hierarchy</button>
         </div>
         <div id="qp-view-slides" class="qp-analysis-view" role="tabpanel" data-qp-view="slides"
              aria-labelledby="qp-tab-slides">
@@ -4755,6 +5052,51 @@
                     <span id="qp-annotation-list-title">Annotation list (0)</span>
                 </div>
                 <ul id="qp-annotation-list" class="qp-annotation-list" aria-label="Annotation list"></ul>
+            </div>
+        </div>
+        <div id="qp-view-hierarchy" class="qp-analysis-view" role="tabpanel" data-qp-view="hierarchy"
+             aria-labelledby="qp-tab-hierarchy" hidden>
+            <div class="qp-hierarchy-panel">
+                <div class="qp-hierarchy-toolbar" role="toolbar" aria-label="Hierarchy actions">
+                    <button type="button" id="qp-hierarchy-expand" data-qp-hierarchy-action="expand"
+                            title="Expand all">▾</button>
+                    <button type="button" id="qp-hierarchy-collapse" data-qp-hierarchy-action="collapse"
+                            title="Collapse all">▸</button>
+                    <button type="button" id="qp-hierarchy-lock" data-qp-hierarchy-action="lock"
+                            title="Lock selected">🔒</button>
+                    <button type="button" id="qp-hierarchy-delete" data-qp-hierarchy-action="delete"
+                            title="Delete selected">⌫</button>
+                    <button type="button" id="qp-hierarchy-select-annotations" data-qp-hierarchy-action="select-annotations"
+                            title="Select all annotations">▭</button>
+                    <button type="button" id="qp-hierarchy-select-detections" data-qp-hierarchy-action="select-detections"
+                            title="Select all detections">📎</button>
+                </div>
+                <div id="qp-hierarchy-tree" class="qp-hierarchy-tree" role="tree" aria-label="Object hierarchy"></div>
+                <div id="qp-hierarchy-crumb" class="qp-hierarchy-crumb">Image</div>
+                <div class="qp-hierarchy-detail">
+                    <div id="qp-hierarchy-table-wrap" class="qp-hierarchy-table-wrap">
+                        <table class="qp-hierarchy-table" id="qp-hierarchy-measurements">
+                            <thead>
+                                <tr>
+                                    <th scope="col" data-qp-hierarchy-sort="key">Key</th>
+                                    <th scope="col" data-qp-hierarchy-sort="value">Value</th>
+                                </tr>
+                            </thead>
+                            <tbody id="qp-hierarchy-measurements-body"></tbody>
+                        </table>
+                    </div>
+                    <div id="qp-hierarchy-description" class="qp-hierarchy-description" hidden></div>
+                    <label class="qp-hierarchy-filter" for="qp-hierarchy-filter">
+                        <input id="qp-hierarchy-filter" type="search" placeholder="Filter measurements by key"
+                               autocomplete="off" spellcheck="false">
+                    </label>
+                    <div class="qp-hierarchy-detail-tabs" role="tablist" aria-label="Hierarchy details">
+                        <button type="button" role="tab" id="qp-hierarchy-tab-measurements"
+                                data-qp-hierarchy-detail="measurements" aria-selected="true">Measurements</button>
+                        <button type="button" role="tab" id="qp-hierarchy-tab-description"
+                                data-qp-hierarchy-detail="description" aria-selected="false">Description</button>
+                    </div>
+                </div>
             </div>
         </div>
     </aside>
@@ -5064,6 +5406,14 @@
                         </select>
                     </label>
                 </div>
+                <label class="ai-lab-field" for="ai-seg-border">
+                    <span>Nuclei crossing the annotation outline</span>
+                    <select id="ai-seg-border" aria-label="How to treat nuclei that cross the annotation outline">
+                        <option value="exclude" selected>Exclude the entire nucleus</option>
+                        <option value="include">Include the entire nucleus</option>
+                        <option value="truncate">Truncate to the annotation outline</option>
+                    </select>
+                </label>
                 <div id="ai-plugin-stats" class="ai-plugin-stats" hidden></div>
                 <button id="ai-extract-br-features" class="action" type="button">2. Extract Breast Tissue Features (BR)</button>
                 <div id="ai-status-stack" class="ai-status-stack">
@@ -5371,7 +5721,7 @@
             <tr><td><b>D</b></td><td>Show/Hide All Automated Cell Detections</td></tr>
             <tr><td><b>F</b></td><td>Toggle Detection (Nuclei) Interior Fill Color</td></tr>
             <tr><td><b>Shift+F</b></td><td>Toggle Annotation Interior Fill Color</td></tr>
-            <tr><td><b>H</b></td><td>Show/Hide Left Image Browser</td></tr>
+            <tr><td><b>H</b></td><td>Show/Hide Left Image Browser (Slides, Image, Annotations, Hierarchy)</td></tr>
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Tools</td></tr>
             <tr><td><b>M</b></td><td>Activate Default Move / Navigation Pan Tool</td></tr>
             <tr><td><b>S</b></td><td>Selection Mode (Drag shapes, input name labels)</td></tr>
@@ -5388,18 +5738,27 @@
             <tr><td><b>- / _</b></td><td>Image Browser Tool</td></tr>
             <tr><td><b>Enter</b></td><td>Seal an in-progress polygon, polyline, or wand</td></tr>
             <tr><td><b>Escape</b></td><td>Cancel an unfinished drawing or close a menu</td></tr>
-            <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s) — cannot be undone</td></tr>
+            <tr><td><b>Delete / Backspace</b></td><td>Delete selected annotation(s). If it has cells or nested objects: Yes keeps them, No deletes them too, Cancel leaves everything. Cannot be undone.</td></tr>
+            <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Left pane and Hierarchy</td></tr>
+            <tr><td>Slides / Image / Annotations / Hierarchy</td><td>Left-pane tabs. Hierarchy is the image → annotation → cell tree with measurements.</td></tr>
+            <tr><td>Hierarchy tree</td><td>Click a row to select that object. Twisties expand or collapse. Lock toggles the image or an annotation. Toolbar: expand all, collapse all, lock, delete, select all annotations, select all detections.</td></tr>
+            <tr><td>Hierarchy Measurements / Description</td><td>Key/Value table for the selected object; filter by key; Description is a short text view. Click Key or Value to sort. Copy copies Object ID.</td></tr>
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">Classify</td></tr>
             <tr><td><b>Classify</b> menu</td><td>Object classification (train/load/save/apply to detections); Pixel classification (train/load/thresholder on annotations); Training images</td></tr>
             <tr><td><b>Ctrl+Shift+D</b> / <b>⌘⇧D</b></td><td>Train object classifier</td></tr>
             <tr><td><b>Ctrl+Shift+P</b> / <b>⌘⇧P</b></td><td>Train pixel classifier</td></tr>
             <tr style="background:#1a1a1a;"><td colspan="2" style="padding:6px 0; color:#9ad; font-weight:700;">View, channels, and Z</td></tr>
-            <tr><td><b>View</b> menu / right-click image</td><td>Multi-view; Cell display; Display (Show analysis, Brightness/Contrast, overlay 400%–1%); Set tool</td></tr>
+            <tr><td><b>View</b> menu / right-click image</td><td>Multi-view; Cell display; Display (Show analysis, Brightness/Contrast, overlay 400%–1%); Set tool; Open Z-stack controller</td></tr>
             <tr><td><b>Ctrl+Shift+S</b> / <b>⌘⇧S</b> / <b>Ctrl+Alt+S</b></td><td>Synchronize multi-view pan and zoom (on by default once two panes have images)</td></tr>
             <tr><td>Right-click image</td><td>Open View menu: Multi-view, Cell display, Display, Set tool (not when the pointer is on an annotation)</td></tr>
             <tr><td>Drag locked annotation</td><td>Pan the image; annotations and detections stay in register</td></tr>
             <tr><td>Drag channel histogram</td><td>Grab the min or max line to set Brightness &amp; Contrast window</td></tr>
-            <tr><td>Right-click annotation</td><td>Lock/Unlock Position or Delete the selected annotation(s)</td></tr>
+            <tr><td>Right-click annotation</td><td>Lock/Unlock Position, Delete, or Set class for the selected annotation(s)</td></tr>
+            <tr><td>View ▸ Cell display</td><td>Nuclei &amp; cell boundaries; nuclei only; cell boundaries only; cell centroids only</td></tr>
+            <tr><td>View ▸ Open Z-stack controller</td><td>Reopen the focal-plane window</td></tr>
+            <tr><td>B&amp;C channel checkbox</td><td>Empty colored outline = hidden; × inside the outline = shown (never a solid channel-color fill)</td></tr>
+            <tr><td>AI Labs / Selected annotation</td><td>Limit detections to the annotation outline (not the bounding box). Border: exclude, include, or truncate</td></tr>
+            <tr><td>Heat Map</td><td>Show Quantify / color-coding on detections after a successful run</td></tr>
             <tr><td>Right-click channel viewer</td><td>Sync to cursor/center/off; Zoom relative to the main window; Show all channels; names; cursor</td></tr>
             <tr><td>Drag slide onto a pane</td><td>Open that slide in the target Multi-view pane</td></tr>
             <tr><td><b>Alt+Wheel</b> or <b>↑ / ↓</b></td><td>Change Z-stack focal plane</td></tr>
@@ -5461,6 +5820,20 @@
     </div>
     <div id="classify-dialog-body" class="classify-dialog-body"></div>
     <div id="classify-dialog-status" class="classify-dialog-status"></div>
+</div>
+<div id="annotation-delete-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="annotation-delete-title">
+    <div class="annotation-delete-sheet">
+        <div class="annotation-delete-titlebar">
+            <span id="annotation-delete-title">Delete object</span>
+            <button type="button" id="annotation-delete-close" data-delete-choice="cancel" aria-label="Cancel delete">×</button>
+        </div>
+        <div class="annotation-delete-body" id="annotation-delete-message">Keep descendant objects?</div>
+        <div class="annotation-delete-actions">
+            <button type="button" data-delete-choice="no">No</button>
+            <button type="button" data-delete-choice="cancel">Cancel</button>
+            <button type="button" data-delete-choice="yes">Yes</button>
+        </div>
+    </div>
 </div>
 <div id="multiview-menu" class="multiview-menu" hidden role="menu" aria-label="View">
     <div class="multiview-item" data-mv-submenu="multi-view">

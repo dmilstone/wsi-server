@@ -49,7 +49,7 @@ assert.match(html, /id="classify-dialog"/);
 assert.match(html, /id="annotation-context-menu-set-class"/);
 assert.match(html, /Ctrl\+Shift\+D/);
 assert.match(html, /Ctrl\+Shift\+P/);
-assert.match(html, /annotation-adapter\.js\?v=20260911-ai-plugins-fix/);
+assert.match(html, /annotation-adapter\.js\?v=20260911-ai-hierarchy/);
 assert.match(html, /#classify-menu \.multiview-submenu \{\s*position:\s*static/);
 assert.match(adapterSource, /static layoutClassifyMenu\(/);
 

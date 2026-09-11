@@ -135,6 +135,14 @@ const LegacyRightPanelLayout = {
                         </select>
                     </label>
                 </div>
+                <label class="ai-lab-field" for="ai-seg-border">
+                    <span>Nuclei crossing the annotation outline</span>
+                    <select id="ai-seg-border" aria-label="How to treat nuclei that cross the annotation outline">
+                        <option value="exclude" selected>Exclude the entire nucleus</option>
+                        <option value="include">Include the entire nucleus</option>
+                        <option value="truncate">Truncate to the annotation outline</option>
+                    </select>
+                </label>
                 <div id="ai-plugin-stats" class="ai-plugin-stats" hidden></div>
                 <button id="ai-extract-br-features" class="action" type="button">2. Extract Breast Tissue Features (BR)</button>
                 <div id="ai-status-stack" class="ai-status-stack">
