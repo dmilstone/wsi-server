@@ -108,7 +108,7 @@ final class UserAdministrationGuideContent {
                                 new Bullet("AI Labs",
                                         "Selected annotation clips detections to the real outline, not the bounding box. Choose whether nuclei that cross the border are excluded, included, or truncated. Prefer Nuclear channel for fluorescence StarDist. Heat Map shows Quantify colors after a successful run."),
                                 new Bullet("Brightness & Contrast",
-                                        "Double-click Channel min or max to type a value. Drag the histogram min/max lines. An empty colored checkbox outline means the channel is off; a × means it is on."),
+                                        "Double-click Channel min or max to type a value. Drag the histogram min/max lines. An empty checkbox outline means the channel is off; a × means it is on. Channel color appears only in the small rectangle."),
                                 new Bullet("Keyboard shortcuts",
                                         "A/N/D visibility; F and Shift+F fills; H left browser (Slides/Image/Annotations/Hierarchy); M/S/R/O/L/P/V/B/W/./Z/C tools; Enter seals a polygon; Delete removes selected annotations (with the descendant prompt when needed). Full list is on the ? legend.")
                         ),

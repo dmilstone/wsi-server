@@ -19,9 +19,9 @@ Click **?** in the viewer for the live keyboard shortcuts legend. Shift-click
 Press **C** or open **Brightness & Contrast**. Channel controls change
 presentation only; they do not modify the source image.
 
-- Use each channel checkbox to show or hide that channel. An empty colored
-  outline means the channel is off; a × inside the outline means it is on. The
-  box is never filled with the channel color.
+- Use each channel checkbox to show or hide that channel. An empty outline
+  means the channel is off; a × inside the outline means it is on. Channel
+  color appears only in the small rectangle next to the name.
 - Select a LUT color and adjust min/max, gamma, and opacity as needed.
 - Drag the white min/max lines on the histogram, or the Channel min/max
   sliders. Double-click **Channel min** or **Channel max** to type a value.

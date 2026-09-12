@@ -4062,6 +4062,7 @@
             white-space: nowrap;
             min-width: 0;
             font-weight: 650;
+            color: inherit;
         }
         .bc-channel-epitope {
             color: #c8c8c8;
@@ -4099,7 +4100,7 @@
             box-sizing: border-box;
             width: 14px;
             height: 14px;
-            border: 2px solid var(--channel-color, #fff);
+            border: 2px solid #e8e8e8;
             background-color: transparent;
             background-image: none;
             border-radius: 2px;
@@ -4115,18 +4116,15 @@
         .floating-channel-cb:indeterminate {
             background-color: transparent;
             background-image: none;
-            border-color: var(--channel-color, #fff);
+            border-color: #e8e8e8;
         }
         .floating-channel-cb:checked::after {
             content: "\00d7";
-            color: var(--channel-color, #fff);
+            color: #e8e8e8;
             font-size: 11px;
             font-weight: 800;
             line-height: 1;
             pointer-events: none;
-        }
-        .fcp-show-all-cb {
-            --channel-color: #e8e8e8;
         }
         .fcp-swatch {
             display: inline-block;
@@ -5881,7 +5879,7 @@
             <tr><td>Double-click cell</td><td>On the image: select that detection in Hierarchy. In Hierarchy: go to and select that cell</td></tr>
             <tr><td>View ▸ Cell display</td><td>Nuclei &amp; cell boundaries; nuclei only; cell boundaries only; cell centroids only</td></tr>
             <tr><td>View ▸ Open Z-stack controller</td><td>Reopen the focal-plane window</td></tr>
-            <tr><td>B&amp;C channel checkbox</td><td>Empty colored outline = hidden; × inside the outline = shown (never a solid channel-color fill)</td></tr>
+            <tr><td>B&amp;C channel checkbox</td><td>Empty outline = hidden; × inside the outline = shown. Channel color is only the small rectangle</td></tr>
             <tr><td>AI Labs / Selected annotation</td><td>Limit detections to the annotation outline (not the bounding box). Border: exclude, include, or truncate</td></tr>
             <tr><td>Heat Map</td><td>Show Quantify / color-coding on detections after a successful run</td></tr>
             <tr><td>Right-click channel viewer</td><td>Sync to cursor/center/off; Zoom relative to the main window; Show all channels; names; cursor</td></tr>

@@ -33,9 +33,10 @@ assert.match(adapterSource, /static formatChannelPaletteLabel\(/);
 assert.match(adapterSource, /static applyChannelPaletteLayout\(/);
 assert.match(adapterSource, /static bindChannelListSplitter\(/);
 assert.match(html, /\.floating-channel-cb\s*\{/);
-assert.match(html, /border:\s*2px solid var\(--channel-color, #fff\)/);
+assert.match(html, /border:\s*2px solid #e8e8e8/);
 assert.match(html, /\.floating-channel-cb:checked::after/);
 assert.match(html, /content:\s*"\\00d7"/);
+assert.doesNotMatch(html, /\.floating-channel-cb[\s\S]{0,400}var\(--channel-color/);
 assert.doesNotMatch(html, /\.floating-channel-cb:checked\s*\{[^}]*background-color:\s*var\(--channel-color/);
 assert.doesNotMatch(html, /\.floating-channel-cb:not\(:checked\)::after/);
 assert.match(html, /id="fcp-show-all"/);
@@ -65,6 +66,9 @@ assert.match(html, /data-edge="se"/);
 assert.match(adapterSource, /static bindFloatingPaletteEdgeResize\(/);
 assert.match(adapterSource, /class="floating-channel-cb"/);
 assert.match(adapterSource, /bc-channel-cell/);
+assert.match(adapterSource, /class="bc-channel-name" data-fcp-name>/);
+assert.doesNotMatch(adapterSource, /bc-channel-name" data-fcp-name style="color:/);
+assert.doesNotMatch(adapterSource, /floating-channel-cb[^>]*--channel-color/);
 assert.match(adapterSource, /minWidth: "340px"/);
 assert.match(adapterSource, /minHeight: "400px"/);
 assert.match(html, /id="fcp-min"/);
@@ -1416,7 +1420,9 @@ assert.doesNotMatch(html, /id="floating-channel-palette"[\s\S]{0,400}id="fcp-gam
     assert.doesNotMatch(cells[4].innerHTML, /checked/);
     assert.match(cells[0].innerHTML, /data-fcp-swatch/);
     assert.match(cells[0].innerHTML, /data-fcp-name/);
-    assert.match(cells[0].innerHTML, /--channel-color:/);
+    assert.match(cells[0].innerHTML, /style="background:/);
+    assert.doesNotMatch(cells[0].innerHTML, /--channel-color:/);
+    assert.doesNotMatch(cells[0].innerHTML, /bc-channel-name[^>]*style="color:/);
 }
 
 {
@@ -1654,6 +1660,17 @@ assert.equal(AnnotationAdapter.startScreenWideColorPick(0), false);
         }
     };
     assert.equal(AnnotationAdapter.sampleUiColorFromNode(swatch), "#12ab34");
+    const channelName = {
+        className: "bc-channel-name",
+        dataset: {},
+        style: { color: "#12ab34" },
+        closest(sel) {
+            return String(sel).includes(".bc-channel-name") || String(sel).includes("[data-fcp-name]")
+                ? this
+                : null;
+        }
+    };
+    assert.equal(AnnotationAdapter.sampleUiColorFromNode(channelName), null);
     const chrome = {
         closest(sel) {
             return String(sel).includes("#floating-channel-palette") ? this : null;

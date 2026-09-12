@@ -12177,14 +12177,13 @@ class AnnotationAdapter {
                     : "bc-channel-cell";
                 row.dataset.channelIndex = String(channel.index ?? index);
                 const color = AnnotationAdapter.channelPaletteColor(channel);
-                row.style?.setProperty?.("--channel-color", color);
                 const name = AnnotationAdapter.escapePaletteHtml(
                     AnnotationAdapter.formatChannelPaletteLabel(channel)
                 );
                 row.innerHTML = `
                     <span class="fcp-swatch" data-fcp-swatch data-color="${color}" style="background:${color}" title="Channel color" role="button" tabindex="0"></span>
-                    <span class="bc-channel-name" data-fcp-name style="color:${color}">${name}</span>
-                    <input type="checkbox" class="floating-channel-cb" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}" style="--channel-color:${color}">
+                    <span class="bc-channel-name" data-fcp-name>${name}</span>
+                    <input type="checkbox" class="floating-channel-cb" data-fcp-visible ${channel.visible !== false ? "checked" : ""} aria-label="Toggle ${name}">
                     <span class="bc-channel-range">${AnnotationAdapter.formatChannelLevel(channel.black)} – ${AnnotationAdapter.formatChannelLevel(channel.white)}</span>
                 `;
                 row.addEventListener("click", event => {
@@ -12513,7 +12512,7 @@ class AnnotationAdapter {
 
     static sampleUiColorFromNode(node) {
         if (!node?.closest) return null;
-        const painted = node.closest(".fcp-swatch, [data-fcp-swatch], .qp-color-swatch, [data-fcp-name], .bc-channel-name");
+        const painted = node.closest(".fcp-swatch, [data-fcp-swatch], .qp-color-swatch");
         if (!painted) return null;
         if (painted.closest?.("#qp-color-chooser, #qp-custom-colors")) return null;
         return AnnotationAdapter.cssColorToHex(painted);
