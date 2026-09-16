@@ -5954,6 +5954,220 @@ class AnnotationAdapter {
 
     static FLUORESCENT_CHANNEL_NAMES = ["DAPI", "FITC", "TRITC"];
     static BASELINE_PYRAMID_LEVEL = 4;
+    static firstDapiEnabled = false;
+    static firstDapiInitScheduled = false;
+    static LEGACY_LOW_PERCENTILE = 0.01;
+    static SUBMEDIAN_PERCENTILE = 0.25;
+    static HIGH_CONTRAST_FLOOR_OFFSET = 300;
+    static statisticalClippingEnabled = false;
+
+    static isDapiViewingChannel(channel) {
+        try {
+            if (channel == null) return false;
+            if (typeof channel === "string") return /dapi/i.test(channel);
+            const name = String(channel.name || channel.nameOverride || "").trim();
+            return /dapi/i.test(name);
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    static isFirstDapiEnabled(root = null) {
+        try {
+            const doc = AnnotationAdapter._documentFromRoot(root);
+            const box = doc?.getElementById?.("first-dapi-checkbox");
+            if (box && typeof box.checked === "boolean") {
+                AnnotationAdapter.firstDapiEnabled = Boolean(box.checked);
+                return AnnotationAdapter.firstDapiEnabled;
+            }
+        } catch (_error) {
+            // Checkbox may not be in the document yet.
+        }
+        return Boolean(AnnotationAdapter.firstDapiEnabled);
+    }
+
+    /**
+     * First-view default: empty checkbox hides DAPI; checked (×) shows DAPI.
+     * Safe on missing/non-object channel entries.
+     */
+    static applyFirstDapiChannelDefault(channels, options = {}) {
+        const list = Array.isArray(channels) ? channels : [];
+        if (!list.length) return list;
+        let enabled = false;
+        try {
+            enabled = AnnotationAdapter.isFirstDapiEnabled(options.root);
+        } catch (_error) {
+            enabled = Boolean(AnnotationAdapter.firstDapiEnabled);
+        }
+        for (const channel of list) {
+            if (!channel || typeof channel !== "object") continue;
+            if (!AnnotationAdapter.isDapiViewingChannel(channel)) continue;
+            channel.visible = enabled;
+        }
+        return list;
+    }
+
+    static applyLiveFirstDapiDefault(root = null) {
+        const channels = AnnotationAdapter.displayController?.getDisplay?.()?.channels;
+        if (!Array.isArray(channels) || !channels.length) return [];
+        AnnotationAdapter.applyFirstDapiChannelDefault(channels, { root });
+        const viewer = AnnotationAdapter.displayController?.getViewer?.()
+            || AnnotationAdapter.viewer;
+        if (viewer) {
+            const z = AnnotationAdapter.displayController?.getCurrentZ?.()
+                ?? AnnotationAdapter.zStackActiveIndex;
+            AnnotationAdapter.applyChannelLayerOpacities(viewer, channels, z);
+        }
+        try { AnnotationAdapter.displayController?.syncChannelControls?.(); } catch (_error) { /* ignore */ }
+        try { AnnotationAdapter.syncFloatingChannelPalette(); } catch (_error) { /* ignore */ }
+        return channels;
+    }
+
+    static bindFirstDapiToggle(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        const box = doc?.getElementById?.("first-dapi-checkbox");
+        if (!box) return false;
+        if (box.dataset?.firstDapiBound === "1") {
+            AnnotationAdapter.firstDapiEnabled = Boolean(box.checked);
+            return true;
+        }
+        box.addEventListener("change", () => {
+            AnnotationAdapter.firstDapiEnabled = Boolean(box.checked);
+            AnnotationAdapter.applyLiveFirstDapiDefault(doc);
+        });
+        if (box.dataset) box.dataset.firstDapiBound = "1";
+        AnnotationAdapter.firstDapiEnabled = Boolean(box.checked);
+        return true;
+    }
+
+    /**
+     * Bind and apply after toolbar nodes are live. Immediate plus rAF/timeout
+     * retries avoid null-pointer races during first paint.
+     */
+    static scheduleFirstDapiInitialization(root = null) {
+        const run = () => {
+            try {
+                AnnotationAdapter.bindFirstDapiToggle(root);
+                AnnotationAdapter.bindStatisticalClippingToggle(root);
+                AnnotationAdapter.applyLiveFirstDapiDefault(root);
+            } catch (_error) {
+                // DOM nodes or display state may not be live yet.
+            }
+        };
+        if (AnnotationAdapter.firstDapiInitScheduled) {
+            try { AnnotationAdapter.bindFirstDapiToggle(root); } catch (_error) { /* ignore */ }
+            try { AnnotationAdapter.bindStatisticalClippingToggle(root); } catch (_error) { /* ignore */ }
+            return true;
+        }
+        AnnotationAdapter.firstDapiInitScheduled = true;
+        run();
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(() => {
+                run();
+                requestAnimationFrame(run);
+            });
+        }
+        if (typeof setTimeout === "function") {
+            setTimeout(run, 50);
+            setTimeout(run, 200);
+        }
+        return true;
+    }
+
+    static isStatisticalClippingEnabled(root = null) {
+        try {
+            const doc = AnnotationAdapter._documentFromRoot(root);
+            const box = doc?.getElementById?.("statistical-clipping-checkbox");
+            if (box && typeof box.checked === "boolean") {
+                AnnotationAdapter.statisticalClippingEnabled = Boolean(box.checked);
+                return AnnotationAdapter.statisticalClippingEnabled;
+            }
+        } catch (_error) {
+            // Checkbox may not be in the document yet.
+        }
+        return Boolean(AnnotationAdapter.statisticalClippingEnabled);
+    }
+
+    static statisticalClippingQuery(root = null) {
+        return AnnotationAdapter.isStatisticalClippingEnabled(root)
+            ? "&statisticalClipping=true"
+            : "";
+    }
+
+    /**
+     * Low-end display black from an intensity-indexed histogram.
+     * Default first view: submedian plus a ~300 high-contrast offset.
+     * Legacy Auto Clip: 1st percentile. Channel min 0 still shows the raw tail.
+     */
+    static histogramPercentileFromCounts(histogram, percentile) {
+        const bins = Array.isArray(histogram) ? histogram : [];
+        if (!bins.length) return 0;
+        let total = 0;
+        for (let i = 0; i < bins.length; i += 1) {
+            total += Math.max(0, Number(bins[i]) || 0);
+        }
+        if (total <= 0) return 0;
+        const fraction = Number.isFinite(Number(percentile)) ? Number(percentile) : 0;
+        if (fraction <= 0) return 0;
+        const target = Math.max(1, Math.ceil(total * Math.min(1, fraction)));
+        let cumulative = 0;
+        for (let value = 0; value < bins.length; value += 1) {
+            cumulative += Math.max(0, Number(bins[value]) || 0);
+            if (cumulative >= target) return value;
+        }
+        return bins.length - 1;
+    }
+
+    static submedianFloorBlackFromHistogram(histogram) {
+        const bins = Array.isArray(histogram) ? histogram : [];
+        if (!bins.length) return 0;
+        const submedian = AnnotationAdapter.histogramPercentileFromCounts(
+            bins,
+            AnnotationAdapter.SUBMEDIAN_PERCENTILE
+        );
+        const floor = submedian + AnnotationAdapter.HIGH_CONTRAST_FLOOR_OFFSET;
+        return Math.max(0, Math.min(bins.length - 1, floor));
+    }
+
+    static lowEndBlackFromHistogram(histogram, statisticalClipping = false) {
+        const bins = Array.isArray(histogram) ? histogram : [];
+        if (!bins.length) return 0;
+        if (statisticalClipping) {
+            return AnnotationAdapter.histogramPercentileFromCounts(
+                bins,
+                AnnotationAdapter.LEGACY_LOW_PERCENTILE
+            );
+        }
+        return AnnotationAdapter.submedianFloorBlackFromHistogram(bins);
+    }
+
+    static applyDisplayResetChannelState(channels, options = {}) {
+        return AnnotationAdapter.applyFirstDapiChannelDefault(channels, options);
+    }
+
+    static bindStatisticalClippingToggle(root = null) {
+        const doc = AnnotationAdapter._documentFromRoot(root);
+        const box = doc?.getElementById?.("statistical-clipping-checkbox");
+        if (!box) return false;
+        if (box.dataset?.statisticalClippingBound === "1") {
+            AnnotationAdapter.statisticalClippingEnabled = Boolean(box.checked);
+            return true;
+        }
+        box.addEventListener("change", () => {
+            AnnotationAdapter.statisticalClippingEnabled = Boolean(box.checked);
+            try {
+                const controller = AnnotationAdapter.displayController;
+                if (typeof controller?.recomputeAuto === "function"
+                    && typeof controller?.getSelectedImage === "function"
+                    && controller.getSelectedImage()?.id) {
+                    controller.recomputeAuto();
+                }
+            } catch (_error) { /* image may not be open */ }
+        });
+        if (box.dataset) box.dataset.statisticalClippingBound = "1";
+        AnnotationAdapter.statisticalClippingEnabled = Boolean(box.checked);
+        return true;
+    }
 
     static fluorescentChannelAssets(options = {}) {
         const names = AnnotationAdapter.FLUORESCENT_CHANNEL_NAMES;
@@ -6353,7 +6567,13 @@ class AnnotationAdapter {
         AnnotationAdapter.zStackPlaneCount = planeCount;
         AnnotationAdapter.zStackActiveIndex = activeZ;
         AnnotationAdapter.setCurrentZ(activeZ);
-        AnnotationAdapter.rememberChannelLayerState(options.channels || []);
+        const viewChannels = Array.isArray(options.channels) ? options.channels : [];
+        if (!options.preserveViewport && viewChannels.length) {
+            AnnotationAdapter.applyFirstDapiChannelDefault(viewChannels);
+            try { AnnotationAdapter.displayController?.syncChannelControls?.(); } catch (_error) { /* ignore */ }
+            try { AnnotationAdapter.syncFloatingChannelPalette(); } catch (_error) { /* ignore */ }
+        }
+        AnnotationAdapter.rememberChannelLayerState(viewChannels);
 
         const stamped = AnnotationAdapter.buildZStackLayerSpecs({
             planeCount,
@@ -6934,6 +7154,7 @@ class AnnotationAdapter {
 
     static bindAnalysisPaneTabs(root = null) {
         const doc = root || (typeof document !== "undefined" ? document : null);
+        try { AnnotationAdapter.bindStatisticalClippingToggle(doc); } catch (_error) { /* ignore */ }
         const tablist = doc?.getElementById?.("qp-analysis-tabs");
         if (!tablist || tablist.dataset?.qpAnalysisTabsBound === "1") return Boolean(tablist);
         const activate = view => AnnotationAdapter.setAnalysisPaneView(view, doc);
@@ -14554,6 +14775,7 @@ class AnnotationAdapter {
 
         AnnotationAdapter.bindGlobalUiTooltip(doc);
         AnnotationAdapter.bindExportOverviewProxyButtons(doc);
+        AnnotationAdapter.scheduleFirstDapiInitialization(doc);
         return true;
     }
 
@@ -23443,6 +23665,7 @@ if (typeof document !== "undefined" && document.readyState === "loading") {
         AnnotationAdapter.bindGlobalUiTooltip();
         AnnotationAdapter.bindDeleteObjectDialog();
         AnnotationAdapter.refreshAnnotationListPanel();
+        AnnotationAdapter.scheduleFirstDapiInitialization();
     });
 } else if (typeof document !== "undefined") {
     AnnotationAdapter.bindAdvancedChannelPalette();

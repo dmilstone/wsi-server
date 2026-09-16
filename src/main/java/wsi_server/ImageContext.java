@@ -3,6 +3,7 @@ package wsi_server;
 import loci.formats.FormatTools;
 import loci.formats.IFormatReader;
 import loci.formats.meta.MetadataRetrieve;
+import wsi_server.display.LinearWindowPixelMapper;
 import wsi_server.model.DisplayModel;
 import wsi_server.model.DisplayWindow;
 import wsi_server.model.LutType;
@@ -46,6 +47,7 @@ final class ImageContext implements AutoCloseable {
     private final boolean packedRgbFluorescence;
     private final String[] channelLabels;
     private volatile DisplayWindow[] automaticWindows;
+    private volatile boolean statisticalClipping;
 
     ImageContext(ImageRegistry.ImageEntry entry, DiagnosticTiming timing, int series,
                  BioFormatsReaderPool readerPool) throws Exception {
@@ -287,6 +289,22 @@ final class ImageContext implements AutoCloseable {
         automaticWindows = withReader(this::computeAutomaticWindows);
     }
 
+    boolean statisticalClipping() {
+        return statisticalClipping;
+    }
+
+    void setStatisticalClipping(boolean enabled) {
+        this.statisticalClipping = enabled;
+    }
+
+    synchronized void applyStatisticalClipping(boolean enabled) throws Exception {
+        if (this.statisticalClipping == enabled) {
+            return;
+        }
+        this.statisticalClipping = enabled;
+        recomputeAutomaticWindows();
+    }
+
     private DisplayWindow[] computeAutomaticWindows(IFormatReader reader) throws Exception {
         reader.setSeries(series);
         reader.setResolution(reader.getResolutionCount() - 1);
@@ -317,8 +335,11 @@ final class ImageContext implements AutoCloseable {
         if (signalCount >= MIN_SIGNAL_PIXELS) {
             white = percentileFrom(histogram, signalThreshold + 1, signalCount, SIGNAL_HIGH_PERCENTILE);
         } else {
-            black = percentileFrom(histogram, 0, total, 0.01);
+            black = LinearWindowPixelMapper.statisticalClipBlack(histogram);
             white = percentileFrom(histogram, 0, total, FALLBACK_HIGH_PERCENTILE);
+        }
+        if (!statisticalClipping) {
+            black = LinearWindowPixelMapper.submedianFloorBlack(histogram);
         }
 
         if (white <= black + 16) {

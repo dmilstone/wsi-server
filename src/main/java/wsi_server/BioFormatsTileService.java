@@ -391,8 +391,10 @@ public class BioFormatsTileService {
         return scaled;
     }
 
-    public DisplayResponse getDisplay(String imageId, int series, HttpSession session) throws Exception {
+    public DisplayResponse getDisplay(String imageId, int series, HttpSession session,
+                                      boolean statisticalClipping) throws Exception {
         ImageContext context = context(imageId, series);
+        context.applyStatisticalClipping(statisticalClipping);
         SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) { return toDisplayResponse(state, context); }
     }
@@ -458,8 +460,10 @@ public class BioFormatsTileService {
         });
     }
 
-    public DisplayResponse resetDisplay(String imageId, int series, HttpSession session) throws Exception {
+    public DisplayResponse resetDisplay(String imageId, int series, HttpSession session,
+                                        boolean statisticalClipping) throws Exception {
         ImageContext context = context(imageId, series);
+        context.applyStatisticalClipping(statisticalClipping);
         SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) {
             state.reset(context.newDefaultDisplayModel());
@@ -467,9 +471,11 @@ public class BioFormatsTileService {
         }
     }
 
-    public DisplayResponse recomputeAutomaticDisplay(String imageId, int series, HttpSession session)
+    public DisplayResponse recomputeAutomaticDisplay(String imageId, int series, HttpSession session,
+                                                     boolean statisticalClipping)
             throws Exception {
         ImageContext context = context(imageId, series);
+        context.setStatisticalClipping(statisticalClipping);
         context.recomputeAutomaticWindows();
         SessionDisplayState state = sessionState(session, imageId, series, context);
         synchronized (state) {

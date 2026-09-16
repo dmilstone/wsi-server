@@ -2336,6 +2336,25 @@
             padding-left: 8px;
             border-left: 0;
         }
+        .first-dapi-toggle,
+        .auto-clip-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+            padding: 0.4em 0.8em;
+            color: #f2f5f8;
+            font-size: 0.9rem;
+            font-weight: 700;
+            line-height: 1;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+        .first-dapi-toggle .floating-channel-cb,
+        .auto-clip-toggle .floating-channel-cb {
+            flex: 0 0 14px;
+        }
         #primary-unified-toolbar.toolbar-ops-row {
             justify-content: flex-start;
             gap: 6px;
@@ -4972,6 +4991,16 @@
             </div>
         <div class="toolbar-ops-spacer" aria-hidden="true"></div>
         <div class="toolbar-group primary-right-group ops-display-group" role="group" aria-label="Utilities">
+            <label class="first-dapi-toggle" for="first-dapi-checkbox"
+                   data-tooltip="1st DAPI: when off, the DAPI viewing layer starts hidden on first view">
+                <input id="first-dapi-checkbox" type="checkbox" class="floating-channel-cb">
+                1st DAPI
+            </label>
+            <label class="auto-clip-toggle" for="statistical-clipping-checkbox"
+                   data-tooltip="Auto Clip: when checked, clip the bottom 1% of intensities. When unchecked, map the actual minimum pixel intensity down to raw 0.">
+                <input id="statistical-clipping-checkbox" type="checkbox" class="floating-channel-cb">
+                Auto Clip
+            </label>
             <button id="classify-menu-button" class="toolbar-chip" type="button"
                     aria-haspopup="true" aria-expanded="false" aria-controls="classify-menu"
                     data-tooltip="Classify ▸ Object, pixel, and training-image classifiers"
@@ -6674,7 +6703,11 @@
     function imageApiPath(imageId, suffix = "") {
         const base = `/api/images/${encodeURIComponent(imageId)}${suffix}`;
         const joiner = base.includes("?") ? "&" : "?";
-        return `${base}${joiner}series=${currentSeries || 0}`;
+        let path = `${base}${joiner}series=${currentSeries || 0}`;
+        if (String(suffix || "").includes("/display")) {
+            path += AnnotationAdapter.statisticalClippingQuery();
+        }
+        return path;
     }
 
     function chooseDefaultSeries(profiles) {
@@ -7743,6 +7776,7 @@
     resetButton.addEventListener("click", async () => {
         try {
             display = await request(imageApiPath(selectedImage.id, "/display/reset"), {method: "POST"});
+            AnnotationAdapter.applyDisplayResetChannelState(display?.channels);
             saveLocalDisplay(selectedImage.id, display, currentSeries);
             renderChannels();
             openViewer(true);
@@ -7756,6 +7790,7 @@
             recomputeAutoButton.disabled = true;
             statusElement.textContent = "Recomputing background-aware automatic contrast…";
             display = await request(imageApiPath(selectedImage.id, "/display/recompute-auto"), {method: "POST"});
+            AnnotationAdapter.applyDisplayResetChannelState(display?.channels);
             saveLocalDisplay(selectedImage.id, display, currentSeries);
             renderChannels();
             openViewer(true);

@@ -12,6 +12,16 @@ import java.util.Objects;
 public final class LinearWindowPixelMapper
         implements PixelMapper {
 
+    /** Legacy low-end histogram truncation (bottom 1% of samples). */
+    public static final double LEGACY_LOW_PERCENTILE = 0.01;
+    /** Median of the lower half of the intensity distribution. */
+    public static final double SUBMEDIAN_PERCENTILE = 0.25;
+    /**
+     * Added to the submedian so a typical 16-bit IF background near 0
+     * opens at the high-contrast floor seen in visual review (~300).
+     */
+    public static final int HIGH_CONTRAST_FLOOR_OFFSET = 300;
+
     private final int black;
     private final int white;
     private final int range;
@@ -97,6 +107,84 @@ public final class LinearWindowPixelMapper
                 lut,
                 "LUT cannot be null."
         );
+    }
+
+    /**
+     * Actual minimum occupied intensity. Preserves smooth gradients down to
+     * raw 0 when any sample sits in the lowest bin.
+     */
+    public static int nonDestructiveBlack(long[] histogram) {
+        if (histogram == null || histogram.length == 0) {
+            return 0;
+        }
+        for (int value = 0; value < histogram.length; value++) {
+            if (histogram[value] > 0) {
+                return value;
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Default first-view black: submedian (lower-half median) plus a
+     * calibrated offset. Maps the faint tail out of the visible register
+     * without touching source pixels; Channel min 0 still shows that tail.
+     */
+    public static int submedianFloorBlack(long[] histogram) {
+        if (histogram == null || histogram.length == 0) {
+            return 0;
+        }
+        int submedian = percentile(histogram, SUBMEDIAN_PERCENTILE);
+        int floor = submedian + HIGH_CONTRAST_FLOOR_OFFSET;
+        int occupiedMin = nonDestructiveBlack(histogram);
+        int ceiling = Math.max(occupiedMin, histogram.length - 1);
+        return Math.max(occupiedMin, Math.min(ceiling, floor));
+    }
+
+    /**
+     * Legacy automated statistical clip: the low-end percentile of occupied
+     * samples, which discards dim signal below that floor.
+     */
+    public static int statisticalClipBlack(long[] histogram) {
+        return percentile(histogram, LEGACY_LOW_PERCENTILE);
+    }
+
+    public static int lowEndBlack(long[] histogram, boolean statisticalClipping) {
+        return statisticalClipping
+                ? statisticalClipBlack(histogram)
+                : submedianFloorBlack(histogram);
+    }
+
+    static int percentile(long[] histogram, double percentile) {
+        if (histogram == null || histogram.length == 0) {
+            return 0;
+        }
+        long total = 0;
+        for (long count : histogram) {
+            if (count > 0) {
+                total += count;
+            }
+        }
+        if (total <= 0) {
+            return 0;
+        }
+        double bounded = Double.isFinite(percentile) ? percentile : LEGACY_LOW_PERCENTILE;
+        if (bounded <= 0.0) {
+            return nonDestructiveBlack(histogram);
+        }
+        long target = Math.max(1, (long) Math.ceil(total * Math.min(1.0, bounded)));
+        long cumulative = 0;
+        for (int value = 0; value < histogram.length; value++) {
+            long count = histogram[value];
+            if (count <= 0) {
+                continue;
+            }
+            cumulative += count;
+            if (cumulative >= target) {
+                return value;
+            }
+        }
+        return histogram.length - 1;
     }
 
     @Override

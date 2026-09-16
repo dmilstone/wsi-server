@@ -65,8 +65,9 @@ public class ImageApiController {
     @GetMapping("/{imageId}/display")
     public DisplayResponse display(@PathVariable String imageId,
                                    @RequestParam(defaultValue = "0") int series,
+                                   @RequestParam(defaultValue = "false") boolean statisticalClipping,
                                    HttpSession session) throws Exception {
-        return service.getDisplay(imageId, series, session);
+        return service.getDisplay(imageId, series, session, statisticalClipping);
     }
     @GetMapping("/{imageId}/pixel")
     public PixelSampleResponse pixel(@PathVariable String imageId,
@@ -86,14 +87,16 @@ public class ImageApiController {
     @PostMapping("/{imageId}/display/reset")
     public DisplayResponse resetDisplay(@PathVariable String imageId,
                                         @RequestParam(defaultValue = "0") int series,
+                                        @RequestParam(defaultValue = "false") boolean statisticalClipping,
                                         HttpSession session) throws Exception {
-        return service.resetDisplay(imageId, series, session);
+        return service.resetDisplay(imageId, series, session, statisticalClipping);
     }
     @PostMapping("/{imageId}/display/recompute-auto")
     public DisplayResponse recomputeAutomaticDisplay(@PathVariable String imageId,
                                                      @RequestParam(defaultValue = "0") int series,
+                                                     @RequestParam(defaultValue = "false") boolean statisticalClipping,
                                                      HttpSession session) throws Exception {
-        return service.recomputeAutomaticDisplay(imageId, series, session);
+        return service.recomputeAutomaticDisplay(imageId, series, session, statisticalClipping);
     }
     @PutMapping("/{imageId}/display")
     public DisplayResponse updateDisplay(@PathVariable String imageId,
