@@ -90,6 +90,16 @@ assert.match(adapterSource, /static pickHistogramHandle\(/);
 assert.match(adapterSource, /static openDisplayRangeDialog\(/);
 assert.match(html, /Drag to set channel min or max/);
 assert.match(html, /id="fcp-gamma"/);
+assert.match(html, /id="fcp-gamma"[^>]*min="0.10"[^>]*max="3.00"/);
+assert.match(html, /id="fcp-gamma-value"[^>]*title="Double-click to type a value"/);
+assert.match(html, /\.fcp-gamma-input\s*\{[^}]*background-color:\s*#222/);
+assert.match(html, /\.fcp-gamma-input\s*\{[^}]*color:\s*#e8e8e8/);
+assert.match(html, /\.fcp-gamma-input\s*\{[^}]*border:\s*1px solid #555/);
+assert.doesNotMatch(html, /\.fcp-gamma-input\s*\{[^}]*color:\s*inherit/);
+assert.match(adapterSource, /static beginViewerGammaEdit\(/);
+assert.match(adapterSource, /static setViewerGamma\(/);
+assert.match(adapterSource, /static parseViewerGamma\(/);
+assert.match(adapterSource, /gammaValue\?\.addEventListener\?\.\("dblclick"/);
 assert.match(html, /id="fcp-auto"/);
 assert.match(html, /id="fcp-reset"/);
 assert.match(html, /id="show-advanced-channel-palette"/);
@@ -1865,6 +1875,111 @@ assert.equal(AnnotationAdapter.startScreenWideColorPick(0), false);
     const minApplied = AnnotationAdapter.setChannelDisplayMin("44528.8", doc);
     assert.equal(Math.round(minApplied.min), 44529);
     assert.ok(channels[0].black < channels[0].white);
+    AnnotationAdapter.displayController = previousController;
+    AnnotationAdapter.channelDisplayRangeCeiling = previousCeiling;
+}
+
+{
+    assert.equal(AnnotationAdapter.parseViewerGamma("nope"), null);
+    assert.equal(AnnotationAdapter.parseViewerGamma("1.25"), 1.25);
+    assert.equal(AnnotationAdapter.parseViewerGamma("0.1"), 0.1);
+    assert.equal(AnnotationAdapter.parseViewerGamma("3.0"), 3);
+    assert.equal(AnnotationAdapter.parseViewerGamma("0"), 0.1);
+    assert.equal(AnnotationAdapter.parseViewerGamma("9"), 3);
+    assert.equal(AnnotationAdapter.clampViewerGamma(0.85), 0.85);
+
+    const min = { value: "120", max: "65535" };
+    const max = { value: "4800", max: "65535" };
+    const gamma = { value: "1" };
+    const minOut = { textContent: "120" };
+    const maxOut = { textContent: "4,800" };
+    const gammaOut = { textContent: "1.00", classList: { contains() { return false; } } };
+    const channels = [{ index: 0, name: "C5", black: 120, white: 4800, gamma: 1, visible: true }];
+    let redraws = 0;
+    const previousController = AnnotationAdapter.displayController;
+    const previousCeiling = AnnotationAdapter.channelDisplayRangeCeiling;
+    AnnotationAdapter.displayController = {
+        getDisplay() { return { channels }; },
+        getMetadata() { return { rgb: false, modality: "FLUORESCENCE" }; },
+        getCurrentSeries() { return 0; },
+        getViewer() { return { drawer: { canvas: { style: {} } }, forceRedraw() { redraws += 1; } }; },
+        scheduleDisplayUpdate() {}
+    };
+    AnnotationAdapter.channelDisplayRangeCeiling = 0;
+    const doc = {
+        getElementById(id) {
+            if (id === "fcp-min") return min;
+            if (id === "fcp-max") return max;
+            if (id === "fcp-gamma") return gamma;
+            if (id === "fcp-min-value") return minOut;
+            if (id === "fcp-max-value") return maxOut;
+            if (id === "fcp-gamma-value") return gammaOut;
+            return null;
+        }
+    };
+    const applied = AnnotationAdapter.setViewerGamma("1.50", doc);
+    assert.equal(applied.gamma, 1.5);
+    assert.equal(gamma.value, "1.5");
+    assert.equal(gammaOut.textContent, "1.50");
+    assert.equal(min.value, "120");
+    assert.equal(max.value, "4800");
+    assert.equal(channels[0].black, 120);
+    assert.equal(channels[0].white, 4800);
+    assert.equal(channels[0].gamma, 1.5);
+    assert.ok(redraws > 0);
+    assert.equal(AnnotationAdapter.setViewerGamma("abc", doc), false);
+    assert.equal(min.value, "120");
+    assert.equal(max.value, "4800");
+
+    const listeners = {};
+    let created = null;
+    const output = {
+        textContent: "1.50",
+        classList: {
+            editing: false,
+            contains(name) { return name === "is-editing" && this.editing; },
+            add(name) { if (name === "is-editing") this.editing = true; },
+            remove(name) { if (name === "is-editing") this.editing = false; }
+        },
+        appendChild(node) { this.child = node; },
+        ownerDocument: {
+            createElement() {
+                created = {
+                    type: "",
+                    inputMode: "",
+                    className: "",
+                    value: "",
+                    focus() {},
+                    select() {},
+                    setAttribute() {},
+                    addEventListener(type, fn) { listeners[type] = fn; }
+                };
+                return created;
+            }
+        }
+    };
+    assert.equal(AnnotationAdapter.beginViewerGammaEdit(output, doc), true);
+    assert.equal(output.classList.contains("is-editing"), true);
+    assert.equal(created.className, "fcp-gamma-input");
+    created.value = "0.10";
+    listeners.keydown({ key: "Enter", preventDefault() {} });
+    assert.equal(Number(gamma.value), 0.1);
+    assert.equal(channels[0].gamma, 0.1);
+    assert.equal(min.value, "120");
+    assert.equal(max.value, "4800");
+    assert.equal(output.classList.contains("is-editing"), false);
+
+    created.value = "2.2";
+    output.textContent = "0.10";
+    output.classList.editing = false;
+    assert.equal(AnnotationAdapter.beginViewerGammaEdit(output, doc), true);
+    created.value = "2.2";
+    listeners.blur();
+    assert.equal(Number(gamma.value), 2.2);
+    assert.equal(channels[0].gamma, 2.2);
+    assert.equal(min.value, "120");
+    assert.equal(max.value, "4800");
+
     AnnotationAdapter.displayController = previousController;
     AnnotationAdapter.channelDisplayRangeCeiling = previousCeiling;
 }

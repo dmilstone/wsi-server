@@ -31,6 +31,7 @@ assert.match(index, /max-height:\s*calc\(100vh - 24px\)/);
 assert.match(index, /get\("admin"\) === "1"/);
 assert.match(index, /Multi-view; Cell display; Display \(Show analysis, Brightness\/Contrast, overlay 400%–1%\); Set tool; Open Z-stack controller/);
 assert.match(index, /Double-click channel max/);
+assert.match(index, /Double-click viewer gamma/);
 assert.match(index, /Drag locked annotation/);
 assert.match(index, /Drag channel histogram/);
 assert.match(index, /id="classify-menu-button"/);

@@ -4556,6 +4556,27 @@
             text-align: right;
             font-variant-numeric: tabular-nums;
         }
+        .fcp-slider output.is-editing {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+        }
+        .fcp-gamma-input {
+            width: 4.6ch;
+            min-width: 0;
+            box-sizing: border-box;
+            background-color: #222;
+            color: #e8e8e8;
+            caret-color: #e8e8e8;
+            border: 1px solid #555;
+            border-radius: 0.2em;
+            outline: none;
+            margin: 0;
+            padding: 0.15em 0.35em;
+            font: inherit;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+        }
         .fcp-actions {
             display: flex;
             justify-content: flex-end;
@@ -5326,8 +5347,8 @@
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-gamma">Viewer gamma</label>
-                    <input id="fcp-gamma" type="range" min="0.20" max="4.00" step="0.05" value="1.00" aria-label="Viewer gamma">
-                    <output id="fcp-gamma-value" for="fcp-gamma">1.00</output>
+                    <input id="fcp-gamma" type="range" min="0.10" max="3.00" step="0.05" value="1.00" aria-label="Viewer gamma">
+                    <output id="fcp-gamma-value" for="fcp-gamma" title="Double-click to type a value">1.00</output>
                 </div>
                 <div class="fcp-actions">
                     <button id="fcp-reset" type="button">Reset</button>
@@ -5917,6 +5938,7 @@
             <tr><td>Double-click magnification</td><td>Type an exact magnification (for example 10) and press Enter</td></tr>
             <tr><td>Double-click channel max</td><td>Type a display-range maximum in Brightness &amp; Contrast and press Enter</td></tr>
             <tr><td>Double-click channel min</td><td>Type a display-range minimum in Brightness &amp; Contrast and press Enter</td></tr>
+            <tr><td>Double-click viewer gamma</td><td>Type a gamma in Brightness &amp; Contrast (0.1–3.0) and press Enter</td></tr>
             <tr style="border-top: 1px solid #333; background: #1a1a1a;"><td><b style="color:#FFCC00;">Ctrl+Shift+T</b></td><td><b>Toggle Developer Sandbox Staging Toolbars</b></td></tr>
             <tr><td>Vis</td><td>Export Visible Region (native-resolution image download)</td></tr>
             <tr><td>Ant</td><td>Export Selected Annotation (native-resolution crop; select an annotation first)</td></tr>

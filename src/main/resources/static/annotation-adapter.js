@@ -10799,6 +10799,8 @@ class AnnotationAdapter {
     static channelDisplayRangeCeiling = 0;
     static tiledChannelWindows = null;
     static DISPLAY_RANGE_MAX_CAP = 100000000;
+    static VIEWER_GAMMA_MIN = 0.1;
+    static VIEWER_GAMMA_MAX = 3;
 
     static setDisplayController(controller) {
         AnnotationAdapter.displayController = controller && typeof controller === "object"
@@ -11358,6 +11360,16 @@ class AnnotationAdapter {
         min?.addEventListener?.("dblclick", openDisplayRange("min"));
         minValue?.addEventListener?.("dblclick", openDisplayRange("min"));
         minLabel?.addEventListener?.("dblclick", openDisplayRange("min"));
+        const gammaValue = palette.querySelector?.("#fcp-gamma-value") || doc?.getElementById?.("fcp-gamma-value");
+        const gammaLabel = palette.querySelector?.("label[for='fcp-gamma']")
+            || doc?.querySelector?.("label[for='fcp-gamma']");
+        const openGammaEdit = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            AnnotationAdapter.beginViewerGammaEdit(gammaValue, doc);
+        };
+        gammaValue?.addEventListener?.("dblclick", openGammaEdit);
+        gammaLabel?.addEventListener?.("dblclick", openGammaEdit);
         AnnotationAdapter.bindDisplayRangeDialog(doc);
         AnnotationAdapter.bindChannelHistogramDrag(doc);
         layoutSelect?.addEventListener?.("change", event => {
@@ -12474,7 +12486,9 @@ class AnnotationAdapter {
             if (gamma) gamma.value = String(Number(selected.gamma) || 1);
             if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min?.value || selected.black);
             if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max?.value || selected.white);
-            if (gammaOut) gammaOut.textContent = Number(gamma?.value || selected.gamma || 1).toFixed(2);
+            if (gammaOut && !gammaOut.classList?.contains?.("is-editing")) {
+                gammaOut.textContent = Number(gamma?.value || selected.gamma || 1).toFixed(2);
+            }
             const scaleMinLabel = palette.querySelector?.("#fcp-scale-min") || doc?.getElementById?.("fcp-scale-min");
             const scaleMaxLabel = palette.querySelector?.("#fcp-scale-max") || doc?.getElementById?.("fcp-scale-max");
             if (scaleMinLabel) scaleMinLabel.textContent = "0";
@@ -13766,7 +13780,7 @@ class AnnotationAdapter {
                 AnnotationAdapter.channelLevelScale()
             );
         }
-        const gamma = Math.max(0.2, Math.min(4, Number(channel?.gamma) || 1));
+        const gamma = AnnotationAdapter.clampViewerGamma(channel?.gamma);
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const palette = AnnotationAdapter.resolvePaletteNode(doc);
         const sliderCeiling = AnnotationAdapter.displayRangeCeiling(channel);
@@ -13806,6 +13820,71 @@ class AnnotationAdapter {
         const parsed = AnnotationAdapter.parseDisplayRangeValue(value, { which: "min" });
         if (parsed == null) return false;
         return AnnotationAdapter.applyChannelHistogramBound("min", parsed, root, options);
+    }
+
+    static clampViewerGamma(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return 1;
+        return Math.max(
+            AnnotationAdapter.VIEWER_GAMMA_MIN,
+            Math.min(AnnotationAdapter.VIEWER_GAMMA_MAX, parsed)
+        );
+    }
+
+    static parseViewerGamma(value) {
+        const parsed = parseFloat(String(value ?? "").replace(/,/g, "").trim());
+        if (!Number.isFinite(parsed)) return null;
+        return AnnotationAdapter.clampViewerGamma(parsed);
+    }
+
+    static setViewerGamma(value, root = null) {
+        const gamma = AnnotationAdapter.parseViewerGamma(value);
+        if (gamma == null) return false;
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        const slider = palette?.querySelector?.("#fcp-gamma") || doc?.getElementById?.("fcp-gamma");
+        if (slider) slider.value = String(gamma);
+        const channel = AnnotationAdapter.paletteSelectedChannel();
+        if (channel) channel.gamma = gamma;
+        const applied = AnnotationAdapter.applyChannelPaletteWindowFromSliders(doc);
+        if (applied) AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: true });
+        return applied;
+    }
+
+    static beginViewerGammaEdit(output, root = null) {
+        if (!output || output.classList?.contains?.("is-editing")) return false;
+        const host = output.ownerDocument
+            || AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (typeof host?.createElement !== "function") return false;
+        const currentText = String(output.textContent || "").trim();
+        output.classList.add("is-editing");
+        output.textContent = "";
+        const input = host.createElement("input");
+        input.type = "text";
+        input.inputMode = "decimal";
+        input.className = "fcp-gamma-input";
+        input.setAttribute("aria-label", "Viewer gamma");
+        input.value = currentText;
+        output.appendChild(input);
+        try { input.focus(); input.select(); } catch (_error) { /* ignore */ }
+        let settled = false;
+        const finish = commit => {
+            if (settled) return;
+            settled = true;
+            output.classList.remove("is-editing");
+            if (commit) {
+                const applied = AnnotationAdapter.setViewerGamma(input.value, root || host);
+                if (applied) return;
+            }
+            output.textContent = currentText || "1.00";
+        };
+        input.addEventListener("keydown", event => {
+            if (event.key === "Enter") { event.preventDefault(); finish(true); }
+            else if (event.key === "Escape") { event.preventDefault(); finish(false); }
+        });
+        input.addEventListener("blur", () => finish(true));
+        return true;
     }
 
     static histogramDisplayScale(channel = null) {
@@ -13922,7 +14001,7 @@ class AnnotationAdapter {
         if (!Number.isFinite(gamma) || gamma <= 0) gamma = 1;
         min = Math.max(0, Math.min(scaleMax - 1, min));
         max = Math.max(min + (1 / Math.max(scaleMax, 1)), Math.min(scaleMax, max));
-        gamma = Math.max(0.2, Math.min(4, gamma));
+        gamma = AnnotationAdapter.clampViewerGamma(gamma);
         return { min, max, gamma };
     }
 
@@ -13941,7 +14020,9 @@ class AnnotationAdapter {
         const gammaOut = palette?.querySelector?.("#fcp-gamma-value") || doc?.getElementById?.("fcp-gamma-value");
         if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min);
         if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max);
-        if (gammaOut) gammaOut.textContent = Number(gamma).toFixed(2);
+        if (gammaOut && !gammaOut.classList?.contains?.("is-editing")) {
+            gammaOut.textContent = Number(gamma).toFixed(2);
+        }
         const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
         AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma);
         if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
@@ -13975,7 +14056,7 @@ class AnnotationAdapter {
         if (!Number.isFinite(hi) || hi <= lo) hi = lo + (1 / Math.max(resolved, 1));
         const slope = 1 / (hi - lo);
         const intercept = -lo * slope;
-        const exponent = Math.max(0.2, Math.min(4, parseFloat(gamma) || 1));
+        const exponent = AnnotationAdapter.clampViewerGamma(gamma);
         return { lo, hi, slope, intercept, exponent, scale: resolved };
     }
 
@@ -13992,7 +14073,7 @@ class AnnotationAdapter {
                 lut: String(channel?.lut || "GRAY"),
                 black,
                 white: Math.max(black + 1, Number(channel?.white) || scale),
-                gamma: Math.max(0.2, Math.min(4, Number(channel?.gamma) || 1)),
+                gamma: AnnotationAdapter.clampViewerGamma(channel?.gamma),
                 visible: channel?.visible !== false
             };
         });
@@ -14028,12 +14109,12 @@ class AnnotationAdapter {
         const scale = AnnotationAdapter.BIT16_INTENSITY_SCALE;
         const draftBlack = Math.max(0, Number(draft?.black) || 0);
         const draftWhite = Math.max(draftBlack + 1, Number(draft?.white) || scale);
-        const draftGamma = Math.max(0.2, Math.min(4, Number(draft?.gamma) || 1));
+        const draftGamma = AnnotationAdapter.clampViewerGamma(draft?.gamma);
         const hasTiled = tiled && Number.isFinite(Number(tiled.black)) && Number.isFinite(Number(tiled.white));
         const tiledBlack = hasTiled ? Math.max(0, Number(tiled.black) || 0) : draftBlack;
         const tiledWhite = hasTiled ? Math.max(tiledBlack + 1, Number(tiled.white) || scale) : draftWhite;
         const tiledGamma = hasTiled
-            ? Math.max(0.2, Math.min(4, Number(tiled.gamma) || 1))
+            ? AnnotationAdapter.clampViewerGamma(tiled.gamma)
             : 1;
         return {
             tiledBlack,
@@ -14152,7 +14233,7 @@ class AnnotationAdapter {
                 visible: true,
                 lo: Math.min(scale, black),
                 range: Math.max(1, Math.min(scale, white) - black),
-                exponent: Math.max(0.2, Math.min(4, Number(channel?.gamma) || 1))
+                exponent: AnnotationAdapter.clampViewerGamma(channel?.gamma)
             };
         });
     }
@@ -14294,7 +14375,7 @@ class AnnotationAdapter {
             target.black = Number(min);
             target.white = Math.max(Number(min) + 1, Number(max));
             if (Number.isFinite(Number(gamma)) && Number(gamma) > 0) {
-                target.gamma = Math.max(0.2, Math.min(4, Number(gamma)));
+                target.gamma = AnnotationAdapter.clampViewerGamma(gamma);
             }
         }
         return drafts.map(draft => {
