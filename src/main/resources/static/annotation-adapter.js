@@ -10801,6 +10801,9 @@ class AnnotationAdapter {
     static DISPLAY_RANGE_MAX_CAP = 100000000;
     static VIEWER_GAMMA_MIN = 0.1;
     static VIEWER_GAMMA_MAX = 3;
+    static CHANNEL_SLIDER_SELECTOR = ".fcp-channel-slider";
+    static CHANNEL_SLIDER_TILE_DEBOUNCE_MS = 150;
+    static channelSliderTileSyncTimer = null;
 
     static setDisplayController(controller) {
         AnnotationAdapter.displayController = controller && typeof controller === "object"
@@ -11315,23 +11318,217 @@ class AnnotationAdapter {
         return AnnotationAdapter.bindLiberatedPaletteDrag(handle, palette);
     }
 
-    static bindChannelPaletteControls(root = null) {
+    static channelSliderTimeoutFns() {
+        const later = (typeof setTimeout === "function")
+            ? setTimeout
+            : (typeof window !== "undefined" && typeof window.setTimeout === "function")
+                ? window.setTimeout.bind(window)
+                : null;
+        const cancel = (typeof clearTimeout === "function")
+            ? clearTimeout
+            : (typeof window !== "undefined" && typeof window.clearTimeout === "function")
+                ? window.clearTimeout.bind(window)
+                : null;
+        return { later, cancel };
+    }
+
+    static resolveChannelSliderTarget(target) {
+        if (!target) return null;
+        if (typeof target.closest === "function") {
+            return target.closest(AnnotationAdapter.CHANNEL_SLIDER_SELECTOR);
+        }
+        const className = String(target.className || target.getAttribute?.("class") || "");
+        return /\bfcp-channel-slider\b/.test(className) ? target : null;
+    }
+
+    static isSharedChannelPaletteSlider(slider) {
+        const id = String(slider?.id || slider?.getAttribute?.("id") || "");
+        return id === "fcp-min" || id === "fcp-max" || id === "fcp-gamma";
+    }
+
+    static stampChannelSliderElement(input, field, channelId) {
+        if (!input) return false;
+        const current = String(input.className || input.getAttribute?.("class") || "");
+        if (!/\bfcp-channel-slider\b/.test(current)) {
+            const next = current ? `${current} fcp-channel-slider` : "fcp-channel-slider";
+            input.className = next;
+            input.setAttribute?.("class", next);
+        }
+        const id = String(channelId ?? "0");
+        if (input.dataset) {
+            input.dataset.channelId = id;
+            if (field) input.dataset.channelField = String(field);
+        }
+        input.setAttribute?.("data-channel-id", id);
+        if (field) input.setAttribute?.("data-channel-field", String(field));
+        return true;
+    }
+
+    static stampChannelPaletteSliders(root = null) {
         const doc = AnnotationAdapter.resolvePaletteRoot(root);
         const palette = AnnotationAdapter.resolvePaletteNode(doc);
-        if (!palette || palette.dataset?.fcpControlsBound === "1") return false;
+        const selected = AnnotationAdapter.paletteSelectedChannel();
+        const channelId = Number.isFinite(Number(selected?.index))
+            ? String(selected.index)
+            : String(AnnotationAdapter.channelPaletteSelectedIndex || 0);
+        const min = palette?.querySelector?.("#fcp-min") || doc?.getElementById?.("fcp-min");
+        const max = palette?.querySelector?.("#fcp-max") || doc?.getElementById?.("fcp-max");
+        const gamma = palette?.querySelector?.("#fcp-gamma") || doc?.getElementById?.("fcp-gamma");
+        AnnotationAdapter.stampChannelSliderElement(min, "min", channelId);
+        AnnotationAdapter.stampChannelSliderElement(max, "max", channelId);
+        AnnotationAdapter.stampChannelSliderElement(gamma, "gamma", channelId);
+        return true;
+    }
+
+    static channelFromSlider(slider) {
+        const channels = AnnotationAdapter.paletteChannelList();
+        const raw = slider?.dataset?.channelId ?? slider?.getAttribute?.("data-channel-id");
+        if (raw == null || raw === "") return AnnotationAdapter.paletteSelectedChannel();
+        const id = Number(raw);
+        if (!Number.isFinite(id)) return AnnotationAdapter.paletteSelectedChannel();
+        const foundIndex = channels.findIndex(channel => Number(channel?.index) === id);
+        if (foundIndex >= 0) {
+            AnnotationAdapter.channelPaletteSelectedIndex = foundIndex;
+            return channels[foundIndex];
+        }
+        if (channels[id]) {
+            AnnotationAdapter.channelPaletteSelectedIndex = id;
+            return channels[id];
+        }
+        return AnnotationAdapter.paletteSelectedChannel();
+    }
+
+    static applyChannelSliderField(channel, field, value) {
+        if (!channel) return false;
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return false;
+        const name = String(field || "");
+        if (name === "min" || name === "black") {
+            const white = Math.max(Number(channel.white) || parsed + 1, parsed + 1e-6);
+            channel.black = Math.max(0, Math.min(white - 1e-6, parsed));
+            return true;
+        }
+        if (name === "max" || name === "white") {
+            const black = Math.max(0, Number(channel.black) || 0);
+            channel.white = Math.max(black + 1e-6, parsed);
+            return true;
+        }
+        if (name === "gamma") {
+            channel.gamma = AnnotationAdapter.clampViewerGamma(parsed);
+            return true;
+        }
+        if (name === "opacity") {
+            channel.opacity = Math.max(0, Math.min(1, parsed));
+            return true;
+        }
+        return false;
+    }
+
+    static applyLiveChannelWindow(channel, root = null, options = {}) {
+        const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+        const min = Math.max(0, Number(channel?.black) || 0);
+        const max = Math.max(min + 1e-6, Number(channel?.white) || AnnotationAdapter.displayRangeCeiling(channel));
+        const gamma = AnnotationAdapter.clampViewerGamma(channel?.gamma);
+        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma, options);
+        if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
+        if (options.live) AnnotationAdapter.displayController?.syncChannelControls?.();
+        return { min, max, gamma };
+    }
+
+    static clearChannelSliderTileSyncTimer() {
+        const id = AnnotationAdapter.channelSliderTileSyncTimer;
+        if (id == null) return false;
+        const { cancel } = AnnotationAdapter.channelSliderTimeoutFns();
+        if (typeof cancel === "function") cancel(id);
+        AnnotationAdapter.channelSliderTileSyncTimer = null;
+        return true;
+    }
+
+    static scheduleChannelSliderTileSync(root = null) {
+        const delay = AnnotationAdapter.CHANNEL_SLIDER_TILE_DEBOUNCE_MS;
+        const { later } = AnnotationAdapter.channelSliderTimeoutFns();
+        AnnotationAdapter.clearChannelSliderTileSyncTimer();
+        if (typeof later !== "function") {
+            return AnnotationAdapter.commitChannelPaletteWindow(root);
+        }
+        AnnotationAdapter.channelSliderTileSyncTimer = later(() => {
+            AnnotationAdapter.channelSliderTileSyncTimer = null;
+            AnnotationAdapter.commitChannelPaletteWindow(root);
+        }, delay);
+        return true;
+    }
+
+    static flushChannelSliderTileSync(root = null) {
+        AnnotationAdapter.clearChannelSliderTileSyncTimer();
+        return AnnotationAdapter.commitChannelPaletteWindow(root);
+    }
+
+    static handleChannelSliderInput(slider, root = null, options = {}) {
+        if (!slider) return false;
+        const channel = AnnotationAdapter.channelFromSlider(slider);
+        const field = slider.dataset?.channelField
+            || slider.getAttribute?.("data-channel-field");
+        const shared = AnnotationAdapter.isSharedChannelPaletteSlider(slider);
+        if (!shared && channel && field) {
+            AnnotationAdapter.applyChannelSliderField(channel, field, slider.value);
+        }
+        const live = options.commit === "now" ? false : options.live !== false;
+        let applied = false;
+        if (shared) {
+            applied = AnnotationAdapter.applyChannelPaletteWindowFromSliders(root, { live });
+        } else if (channel) {
+            applied = AnnotationAdapter.applyLiveChannelWindow(channel, root, { live });
+            if (field === "opacity") {
+                const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
+                AnnotationAdapter.applyChannelLayerOpacities(
+                    viewer,
+                    AnnotationAdapter.paletteChannelList(),
+                    AnnotationAdapter.displayController?.getCurrentZ?.()
+                );
+            }
+        } else {
+            applied = AnnotationAdapter.applyChannelPaletteWindowFromSliders(root, { live });
+        }
+        if (options.commit === "now") AnnotationAdapter.flushChannelSliderTileSync(root);
+        else AnnotationAdapter.scheduleChannelSliderTileSync(root);
+        return applied;
+    }
+
+    static onChannelSliderDomEvent(event, root = null) {
+        const slider = AnnotationAdapter.resolveChannelSliderTarget(event?.target);
+        if (!slider) return false;
+        const type = String(event?.type || "input");
+        return AnnotationAdapter.handleChannelSliderInput(slider, root, {
+            live: type !== "change",
+            commit: type === "change" ? "now" : "debounce"
+        });
+    }
+
+    static bindChannelSliderDelegation(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root)
+            || (typeof document !== "undefined" ? document : null);
+        if (!doc?.addEventListener) return false;
+        if (doc._wsiChannelSliderDelegationBound === "1") return true;
+        const onEvent = event => AnnotationAdapter.onChannelSliderDomEvent(event, doc);
+        doc.addEventListener("input", onEvent);
+        doc.addEventListener("change", onEvent);
+        doc._wsiChannelSliderDelegationBound = "1";
+        return true;
+    }
+
+    static bindChannelPaletteControls(root = null) {
+        const doc = AnnotationAdapter.resolvePaletteRoot(root);
+        AnnotationAdapter.bindChannelSliderDelegation(doc);
+        const palette = AnnotationAdapter.resolvePaletteNode(doc);
+        if (!palette) return false;
+        AnnotationAdapter.stampChannelPaletteSliders(doc);
+        if (palette.dataset?.fcpControlsBound === "1") return true;
         const min = palette.querySelector?.("#fcp-min") || doc?.getElementById?.("fcp-min");
         const max = palette.querySelector?.("#fcp-max") || doc?.getElementById?.("fcp-max");
         const gamma = palette.querySelector?.("#fcp-gamma") || doc?.getElementById?.("fcp-gamma");
         const autoBtn = palette.querySelector?.("#fcp-auto") || doc?.getElementById?.("fcp-auto");
         const resetBtn = palette.querySelector?.("#fcp-reset") || doc?.getElementById?.("fcp-reset");
         const layoutSelect = palette.querySelector?.("#fcp-layout-select") || doc?.getElementById?.("fcp-layout-select");
-        const onSlide = () => {
-            AnnotationAdapter.applyChannelPaletteWindowFromSliders(doc, { live: true });
-        };
-        for (const input of [min, max, gamma]) {
-            if (!input?.addEventListener) continue;
-            input.addEventListener("input", onSlide);
-        }
         autoBtn?.addEventListener?.("click", event => {
             event.preventDefault();
             const controller = AnnotationAdapter.displayController;
@@ -12489,6 +12686,7 @@ class AnnotationAdapter {
             if (gammaOut && !gammaOut.classList?.contains?.("is-editing")) {
                 gammaOut.textContent = Number(gamma?.value || selected.gamma || 1).toFixed(2);
             }
+            AnnotationAdapter.stampChannelPaletteSliders(doc);
             const scaleMinLabel = palette.querySelector?.("#fcp-scale-min") || doc?.getElementById?.("fcp-scale-min");
             const scaleMaxLabel = palette.querySelector?.("#fcp-scale-max") || doc?.getElementById?.("fcp-scale-max");
             if (scaleMinLabel) scaleMinLabel.textContent = "0";
@@ -13799,7 +13997,7 @@ class AnnotationAdapter {
         if (minOut) minOut.textContent = AnnotationAdapter.formatChannelLevel(min);
         if (maxOut) maxOut.textContent = AnnotationAdapter.formatChannelLevel(max);
         const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
-        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma);
+        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma, options);
         if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
         if (!options.live) {
             AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: true });
@@ -14024,7 +14222,7 @@ class AnnotationAdapter {
             gammaOut.textContent = Number(gamma).toFixed(2);
         }
         const viewer = AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
-        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma);
+        AnnotationAdapter.applyViewportChannelDisplayFilter(viewer, min, max, gamma, options);
         if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
         if (!options.live) {
             AnnotationAdapter.drawChannelPaletteHistogram(doc);
@@ -14036,8 +14234,14 @@ class AnnotationAdapter {
     }
 
     static commitChannelPaletteWindow(root = null) {
-        AnnotationAdapter.applyChannelPaletteWindowFromSliders(root);
-        AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: true });
+        const selected = AnnotationAdapter.paletteSelectedChannel();
+        if (selected) {
+            AnnotationAdapter.applyLiveChannelWindow(selected, root, { live: false });
+            AnnotationAdapter.drawChannelPaletteHistogram(root);
+        } else {
+            AnnotationAdapter.applyChannelPaletteWindowFromSliders(root);
+        }
+        AnnotationAdapter.displayController?.scheduleDisplayUpdate?.({ reopen: true, immediate: true });
         return true;
     }
 
@@ -14288,13 +14492,13 @@ class AnnotationAdapter {
      * RGB composite: window and show/hide each color independently.
      * Fluorescence: keep the selected-channel window as a viewport preview.
      */
-    static applyViewportChannelDisplayFilter(viewer, min, max, gamma) {
+    static applyViewportChannelDisplayFilter(viewer, min, max, gamma, options = {}) {
         const host = viewer || AnnotationAdapter.displayController?.getViewer?.() || AnnotationAdapter.viewer;
         const metadata = AnnotationAdapter.displayController?.getMetadata?.() || AnnotationAdapter.imageMetadata;
         const series = AnnotationAdapter.displayController?.getCurrentSeries?.()
             ?? AnnotationAdapter.currentSeries;
         if (AnnotationAdapter.isRgbSeriesView(metadata, series)) {
-            return AnnotationAdapter.applyViewportRgbChannelFilter(host);
+            return AnnotationAdapter.applyViewportRgbChannelFilter(host, options);
         }
         let lo = min;
         let hi = max;
@@ -14305,10 +14509,10 @@ class AnnotationAdapter {
             hi = sliders.max;
             exp = sliders.gamma;
         }
-        return AnnotationAdapter.applyViewportTileContrastFilter(host, lo, hi, exp);
+        return AnnotationAdapter.applyViewportTileContrastFilter(host, lo, hi, exp, options);
     }
 
-    static applyViewportRgbChannelFilter(viewer) {
+    static applyViewportRgbChannelFilter(viewer, options = {}) {
         const canvas = viewer?.drawer?.canvas || viewer?.canvas?.querySelector?.("canvas") || viewer?.canvas;
         if (!canvas?.style) return false;
         const maps = AnnotationAdapter.rgbCompositeChannelMaps(AnnotationAdapter.paletteChannelList());
@@ -14347,6 +14551,9 @@ class AnnotationAdapter {
             if (typeof viewer?.setFilterOptions === "function") {
                 viewer.setFilterOptions({ filters: { processors: [] } });
             }
+        } else if (options.live) {
+            // GPU SVG component-transfer while dragging; skip per-tile processors.
+            canvas.style.filter = "url(#fcp-gamma-filter)";
         } else if (typeof viewer?.setFilterOptions === "function") {
             viewer.setFilterOptions({
                 loadMode: "sync",
@@ -14388,7 +14595,7 @@ class AnnotationAdapter {
         });
     }
 
-    static applyViewportTileContrastFilter(viewer, min, max, gamma) {
+    static applyViewportTileContrastFilter(viewer, min, max, gamma, options = {}) {
         const canvas = viewer?.drawer?.canvas || viewer?.canvas?.querySelector?.("canvas") || viewer?.canvas;
         if (!canvas?.style) return false;
         const maps = AnnotationAdapter.fluorescencePreviewMaps(min, max, gamma);
@@ -14398,6 +14605,11 @@ class AnnotationAdapter {
         AnnotationAdapter.writeRelativeWindowSvgFilter(owner, selectedMap);
         if (AnnotationAdapter.relativeChannelMapsAreIdentity(maps)) {
             return AnnotationAdapter.clearViewportTileContrastFilter(viewer);
+        }
+        if (options.live) {
+            canvas.style.filter = "url(#fcp-gamma-filter)";
+            if (typeof viewer?.forceRedraw === "function") viewer.forceRedraw();
+            return true;
         }
         if (typeof viewer?.setFilterOptions === "function") {
             const count = viewer.world?.getItemCount?.() || 0;

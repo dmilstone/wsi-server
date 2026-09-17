@@ -5337,17 +5337,17 @@
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-min">Channel min</label>
-                    <input id="fcp-min" type="range" min="0" max="65535" step="1" value="0" aria-label="Channel min">
+                    <input id="fcp-min" class="fcp-channel-slider" data-channel-id="0" data-channel-field="min" type="range" min="0" max="65535" step="1" value="0" aria-label="Channel min">
                     <output id="fcp-min-value" for="fcp-min" title="Double-click to type a value">0</output>
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-max">Channel max</label>
-                    <input id="fcp-max" type="range" min="0" max="65535" step="1" value="65535" aria-label="Channel max">
+                    <input id="fcp-max" class="fcp-channel-slider" data-channel-id="0" data-channel-field="max" type="range" min="0" max="65535" step="1" value="65535" aria-label="Channel max">
                     <output id="fcp-max-value" for="fcp-max" title="Double-click to type a value">65,535</output>
                 </div>
                 <div class="fcp-slider">
                     <label for="fcp-gamma">Viewer gamma</label>
-                    <input id="fcp-gamma" type="range" min="0.10" max="3.00" step="0.05" value="1.00" aria-label="Viewer gamma">
+                    <input id="fcp-gamma" class="fcp-channel-slider" data-channel-id="0" data-channel-field="gamma" type="range" min="0.10" max="3.00" step="0.05" value="1.00" aria-label="Viewer gamma">
                     <output id="fcp-gamma-value" for="fcp-gamma" title="Double-click to type a value">1.00</output>
                 </div>
                 <div class="fcp-actions">
@@ -7711,7 +7711,7 @@
             const reopen = pendingDisplayReopen;
             pendingDisplayReopen = false;
             updateDisplay({ reopen });
-        }, options.immediate ? 0 : 180);
+        }, options.immediate ? 0 : 150);
     }
 
     async function updateDisplay(options = {}) {

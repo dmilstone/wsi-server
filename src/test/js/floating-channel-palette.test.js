@@ -380,8 +380,23 @@ assert.match(adapterSource, /static applyChannelPaletteVisibility\(/);
 assert.match(adapterSource, /static applyViewportTileContrastFilter\(/);
 assert.match(adapterSource, /static applyViewportRgbChannelFilter\(/);
 assert.match(adapterSource, /static rgbCompositeChannelMaps\(/);
-assert.match(adapterSource, /input\.addEventListener\("input", onSlide\)/);
-assert.doesNotMatch(adapterSource, /input\.addEventListener\("change", onSlide\)/);
+assert.match(adapterSource, /static bindChannelSliderDelegation\(/);
+assert.match(adapterSource, /static handleChannelSliderInput\(/);
+assert.match(adapterSource, /static scheduleChannelSliderTileSync\(/);
+assert.match(adapterSource, /CHANNEL_SLIDER_SELECTOR = "\.fcp-channel-slider"/);
+assert.match(adapterSource, /CHANNEL_SLIDER_TILE_DEBOUNCE_MS = 150/);
+assert.match(adapterSource, /data-channel-id/);
+assert.match(adapterSource, /addEventListener\("input", onEvent\)/);
+assert.match(adapterSource, /addEventListener\("change", onEvent\)/);
+assert.doesNotMatch(adapterSource, /input\.addEventListener\("input", onSlide\)/);
+assert.match(html, /id="fcp-min"[^>]*class="fcp-channel-slider"/);
+assert.match(html, /id="fcp-max"[^>]*class="fcp-channel-slider"/);
+assert.match(html, /id="fcp-gamma"[^>]*class="fcp-channel-slider"/);
+assert.match(html, /data-channel-field="min"/);
+assert.match(html, /data-channel-field="max"/);
+assert.match(html, /data-channel-field="gamma"/);
+assert.match(html, /options\.immediate \? 0 : 150/);
+assert.doesNotMatch(html, /options\.immediate \? 0 : 180/);
 assert.match(adapterSource, /viewer\.forceRedraw\(\)/);
 assert.match(adapterSource, /static persistMeasurementPopup\(/);
 assert.match(adapterSource, /measurement-popup-close/);
@@ -2000,6 +2015,128 @@ assert.equal(AnnotationAdapter.startScreenWideColorPick(0), false);
     assert.equal(palette.style.minHeight, "0");
     context.window.innerWidth = previousInner.w;
     context.window.innerHeight = previousInner.h;
+}
+
+{
+    const canvas = { style: { filter: "" } };
+    let filterCalls = 0;
+    const viewer = {
+        drawer: { canvas },
+        setFilterOptions() { filterCalls += 1; },
+        forceRedraw() {}
+    };
+    const live = AnnotationAdapter.applyViewportTileContrastFilter(
+        viewer,
+        1000,
+        20000,
+        1.25,
+        { live: true }
+    );
+    assert.equal(live, true);
+    assert.equal(filterCalls, 0);
+    assert.match(canvas.style.filter, /url\(#fcp-gamma-filter\)/);
+}
+
+{
+    const queued = [];
+    const previousTimeout = context.window.setTimeout;
+    const previousClear = context.window.clearTimeout;
+    context.window.setTimeout = (fn, ms) => {
+        const id = queued.length + 1;
+        queued.push({ id, fn, ms, cleared: false });
+        return id;
+    };
+    context.window.clearTimeout = id => {
+        const item = queued.find(entry => entry.id === id);
+        if (item) item.cleared = true;
+    };
+
+    const channels = Array.from({ length: 21 }, (_, index) => ({
+        index,
+        name: `C${index}`,
+        lut: "GRAY",
+        visible: true,
+        black: 0,
+        white: 65535,
+        gamma: 1,
+        opacity: 1
+    }));
+    let scheduled = [];
+    const previousController = AnnotationAdapter.displayController;
+    const previousSelected = AnnotationAdapter.channelPaletteSelectedIndex;
+    const previousTimer = AnnotationAdapter.channelSliderTileSyncTimer;
+    AnnotationAdapter.channelSliderTileSyncTimer = null;
+    AnnotationAdapter.channelPaletteSelectedIndex = 0;
+    AnnotationAdapter.displayController = {
+        getDisplay() { return { channels }; },
+        getMetadata() { return { rgb: false, modality: "FLUORESCENCE" }; },
+        getCurrentSeries() { return 0; },
+        getViewer() {
+            return { drawer: { canvas: { style: {} } }, forceRedraw() {} };
+        },
+        syncChannelControls() {},
+        scheduleDisplayUpdate(options) { scheduled.push(options || {}); }
+    };
+
+    const listeners = [];
+    const doc = {
+        _wsiChannelSliderDelegationBound: undefined,
+        addEventListener(type, fn) { listeners.push([type, fn]); },
+        getElementById() { return null; }
+    };
+    assert.equal(AnnotationAdapter.bindChannelSliderDelegation(doc), true);
+    assert.equal(AnnotationAdapter.bindChannelSliderDelegation(doc), true);
+    assert.equal(listeners.filter(([type]) => type === "input").length, 1);
+    assert.equal(listeners.filter(([type]) => type === "change").length, 1);
+
+    const futureSlider = {
+        className: "fcp-channel-slider",
+        dataset: { channelId: "20", channelField: "min" },
+        value: "4200",
+        closest(sel) {
+            return String(sel).includes("fcp-channel-slider") ? this : null;
+        },
+        getAttribute(name) {
+            if (name === "data-channel-id") return "20";
+            if (name === "data-channel-field") return "min";
+            return "";
+        }
+    };
+    const inputHandler = listeners.find(([type]) => type === "input")[1];
+    const changeHandler = listeners.find(([type]) => type === "change")[1];
+    assert.ok(inputHandler({ type: "input", target: futureSlider }));
+    assert.equal(channels[20].black, 4200);
+    assert.equal(AnnotationAdapter.channelPaletteSelectedIndex, 20);
+    assert.equal(scheduled.length, 0);
+    const pending = queued.filter(entry => !entry.cleared && entry.ms === 150);
+    assert.equal(pending.length, 1);
+
+    futureSlider.value = "4300";
+    assert.ok(inputHandler({ type: "input", target: futureSlider }));
+    assert.equal(channels[20].black, 4300);
+    assert.equal(queued.filter(entry => !entry.cleared && entry.ms === 150).length, 1);
+
+    queued.filter(entry => !entry.cleared && entry.ms === 150).at(-1).fn();
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].immediate, true);
+    assert.equal(scheduled[0].reopen, true);
+
+    scheduled = [];
+    futureSlider.value = "4400";
+    assert.ok(changeHandler({ type: "change", target: futureSlider }));
+    assert.equal(channels[20].black, 4400);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].immediate, true);
+
+    const ignored = { className: "other", closest() { return null; } };
+    assert.equal(inputHandler({ type: "input", target: ignored }), false);
+
+    AnnotationAdapter.clearChannelSliderTileSyncTimer();
+    AnnotationAdapter.channelSliderTileSyncTimer = previousTimer;
+    AnnotationAdapter.displayController = previousController;
+    AnnotationAdapter.channelPaletteSelectedIndex = previousSelected;
+    context.window.setTimeout = previousTimeout;
+    context.window.clearTimeout = previousClear;
 }
 
 console.log("floating-channel-palette.test.js: ok");
