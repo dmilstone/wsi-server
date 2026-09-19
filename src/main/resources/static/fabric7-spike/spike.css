@@ -1,0 +1,13 @@
+:root { color-scheme: dark; font: 14px system-ui, sans-serif; background: #080b0f; color: #edf3f8; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; }
+body { display: grid; grid-template-rows: 48px 1fr; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 0 18px; background: #572510; border-bottom: 2px solid #ff9a4a; letter-spacing: .04em; }
+main { display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+aside { display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow: auto; background: #121923; border-right: 1px solid #344355; }
+label { display: flex; flex-direction: column; gap: 6px; }
+label:has(input[type=checkbox]) { flex-direction: row; }
+select, input, button, textarea { font: inherit; color: inherit; background: #1b2734; border: 1px solid #52677d; border-radius: 4px; padding: 8px; }
+button { cursor: pointer; } .buttons { display: flex; gap: 8px; } textarea { min-height: 170px; resize: vertical; }
+#fabric7-viewer { min-width: 0; min-height: 0; background: #000; }
+h2 { margin: 8px 0 0; font-size: 14px; } dl { display: grid; grid-template-columns: 1fr auto; margin: 0; gap: 4px 12px; } dt, dd { margin: 0; font-family: monospace; }

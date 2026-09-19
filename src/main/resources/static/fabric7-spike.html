@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Maintained Fabric Overlay Spike</title>
+  <link rel="stylesheet" href="/fabric7-spike/spike.css">
+</head>
+<body>
+  <header><strong>MAINTAINED FABRIC OVERLAY SPIKE — NOT PERSISTED</strong><span id="status" role="status">Browser memory only</span></header>
+  <main>
+    <aside>
+      <label>WSI image <select id="image-select" aria-label="WSI image"></select></label>
+      <div class="buttons"><button id="add-rectangle">Add rectangle</button><button id="delete-rectangle">Delete selected</button></div>
+      <label>Name <input id="annotation-name" type="text" autocomplete="off"></label>
+      <label><input id="show-geometry" type="checkbox" checked> Show geometry</label>
+      <label><input id="show-names" type="checkbox" checked> Show names</label>
+      <div class="buttons"><button id="export-json">Export JSON</button><button id="import-json">Import JSON</button></div>
+      <textarea id="json-data" aria-label="In-memory annotation JSON" spellcheck="false"></textarea>
+      <h2>Nonclinical lifecycle counters</h2>
+      <dl>
+        <dt>object:moving</dt><dd id="count-object-moving">0</dd><dt>object:scaling</dt><dd id="count-object-scaling">0</dd>
+        <dt>object:modified</dt><dd id="count-object-modified">0</dd><dt>selection:created</dt><dd id="count-selection-created">0</dd>
+        <dt>selection:updated</dt><dd id="count-selection-updated">0</dd><dt>selection:cleared</dt><dd id="count-selection-cleared">0</dd>
+        <dt>object:added</dt><dd id="count-object-added">0</dd><dt>object:removed</dt><dd id="count-object-removed">0</dd>
+        <dt>logical:commit</dt><dd id="count-logical-commit">0</dd>
+      </dl>
+    </aside>
+    <section id="fabric7-viewer" aria-label="Whole-slide image viewer"></section>
+  </main>
+  <script src="/fabric7-spike/spike.bundle.js" onerror="document.getElementById('status').textContent='Spike unavailable: generated browser bundle is missing. Run the documented npm build.'"></script>
+</body>
+</html>
